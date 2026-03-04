@@ -18,11 +18,24 @@ session_id=$(python3 -c "import sys,json; print(json.load(sys.stdin).get('sessio
 # $PPID is the Claude process that spawned this hook
 echo "$session_id" > "$SESSION_DIR/$PPID"
 
-# Clean up stale entries (PIDs that no longer exist)
+# Clean up stale entries and deduplicate same-UUID mappings
 for f in "$SESSION_DIR"/*; do
     [ -f "$f" ] || continue
     pid=$(basename "$f")
-    kill -0 "$pid" 2>/dev/null || rm -f "$f"
+    # Remove dead PIDs
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$f"
+        continue
+    fi
+    # Remove older alive duplicates mapping to the same session UUID
+    [ "$pid" = "$PPID" ] && continue
+    other_sid=$(cat "$f" 2>/dev/null) || continue
+    if [ "$other_sid" = "$session_id" ]; then
+        # Keep the newer file (ours); remove the older one
+        if [ "$f" -ot "$SESSION_DIR/$PPID" ]; then
+            rm -f "$f"
+        fi
+    fi
 done
 
 exit 0

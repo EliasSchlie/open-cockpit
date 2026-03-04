@@ -290,6 +290,31 @@ function getSessions() {
     }
   }
 
+  // Deduplicate: if multiple PIDs map to the same sessionId, keep the newest
+  const bySessionId = new Map();
+  for (const s of sessions) {
+    const existing = bySessionId.get(s.sessionId);
+    if (!existing) {
+      bySessionId.set(s.sessionId, s);
+    } else {
+      // Prefer alive over dead, then highest PID (most recent process)
+      const dominated =
+        s.alive && !existing.alive
+          ? existing
+          : !s.alive && existing.alive
+            ? s
+            : Number(s.pid) > Number(existing.pid)
+              ? existing
+              : s;
+      bySessionId.set(s.sessionId, dominated === existing ? s : existing);
+      // Clean up the dominated PID file
+      try {
+        fs.unlinkSync(path.join(SESSION_PIDS_DIR, dominated.pid));
+      } catch {}
+    }
+  }
+  const dedupedSessions = [...bySessionId.values()];
+
   // Tag sessions as pool vs external
   const pool = readPool();
   const poolSessionIds = new Set();
@@ -298,20 +323,20 @@ function getSessions() {
       if (slot.sessionId) poolSessionIds.add(slot.sessionId);
     }
   }
-  for (const s of sessions) {
+  for (const s of dedupedSessions) {
     s.isPool = poolSessionIds.has(s.sessionId);
   }
 
   // Add offloaded sessions (always pool, skip if live session exists)
-  const liveIds = new Set(sessions.map((s) => s.sessionId));
+  const liveIds = new Set(dedupedSessions.map((s) => s.sessionId));
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       offloaded.isPool = true;
-      sessions.push(offloaded);
+      dedupedSessions.push(offloaded);
     }
   }
 
-  return sortSessions(sessions);
+  return sortSessions(dedupedSessions);
 }
 
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
@@ -448,13 +473,33 @@ function writePool(pool) {
   writePoolFile(POOL_FILE, pool);
 }
 
+// Resolve the claude binary path. Tries `which claude` first, then common locations.
+function resolveClaudePath() {
+  try {
+    return execFileSync("which", ["claude"], { encoding: "utf-8" }).trim();
+  } catch {}
+
+  const candidates = [
+    path.join(os.homedir(), ".claude", "local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    path.join(os.homedir(), ".local", "bin", "claude"),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error(
+    "Claude binary not found. Install Claude Code or ensure it is on your PATH.",
+  );
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
+  const claudePath = resolveClaudePath();
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
-    cmd: "/bin/zsh",
-    args: ["-ic", "exec c"],
+    cmd: claudePath,
+    args: ["--dangerously-skip-permissions"],
   });
   return createSlot(index, resp.termId, resp.pid);
 }
@@ -626,7 +671,12 @@ async function reconcilePool() {
     if (fs.existsSync(pidFile)) {
       const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
       if (sessionId && sessionId !== slot.sessionId) {
+        // Session UUID changed — /clear was run externally. Offload the old session.
+        if (slot.sessionId) {
+          saveExternalClearOffload(slot.sessionId, slot.pid);
+        }
         slot.sessionId = sessionId;
+        slot.status = "fresh";
         changed = true;
       }
     }
@@ -798,7 +848,7 @@ function startDaemon() {
       detached: true,
       stdio: "ignore",
       cwd: os.homedir(), // Don't inherit app cwd — prevents kill-by-cwd from hitting daemon
-      env: { ...process.env },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     });
     child.unref();
 
