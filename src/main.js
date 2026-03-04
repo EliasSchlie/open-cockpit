@@ -60,6 +60,14 @@ function createWindow() {
         input.key === "ArrowUp" ? "prev-session" : "next-session",
       );
     }
+    // Alt+Left / Alt+Right — toggle focus between terminal and editor
+    if (
+      input.alt &&
+      (input.key === "ArrowLeft" || input.key === "ArrowRight")
+    ) {
+      event.preventDefault();
+      mainWindow.webContents.send("toggle-pane-focus");
+    }
     // Escape — focus terminal (only when not in command palette)
     if (input.key === "Escape" && !input.meta && !input.control && !input.alt) {
       mainWindow.webContents.send("focus-terminal");
@@ -564,6 +572,11 @@ app.whenReady().then(async () => {
           label: "Toggle Sidebar",
           accelerator: "CmdOrCtrl+\\",
           click: () => send("toggle-sidebar"),
+        },
+        {
+          label: "Toggle Pane Focus",
+          accelerator: "Alt+Left",
+          click: () => send("toggle-pane-focus"),
         },
         {
           label: "Focus Editor",

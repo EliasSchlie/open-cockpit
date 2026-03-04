@@ -18,6 +18,7 @@ const channels = [
   "focus-editor",
   "focus-terminal",
   "toggle-command-palette",
+  "toggle-pane-focus",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
@@ -74,4 +75,6 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("focus-terminal", () => callback()),
   onToggleCommandPalette: (callback) =>
     ipcRenderer.on("toggle-command-palette", () => callback()),
+  onTogglePaneFocus: (callback) =>
+    ipcRenderer.on("toggle-pane-focus", () => callback()),
 });

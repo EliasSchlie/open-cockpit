@@ -967,6 +967,18 @@ const COMMANDS = [
     action: focusTerminal,
   },
   {
+    id: "toggle-pane-focus",
+    label: "Toggle Pane Focus",
+    shortcut: "Alt+←/→",
+    action: () => {
+      if (editorMount.contains(document.activeElement)) {
+        focusTerminal();
+      } else {
+        focusEditor();
+      }
+    },
+  },
+  {
     id: "refresh",
     label: "Refresh Sessions",
     shortcut: "",
@@ -1136,6 +1148,14 @@ window.api.onFocusTerminal(() => {
   if (!commandPalette.classList.contains("visible")) focusTerminal();
 });
 window.api.onToggleCommandPalette(toggleCommandPalette);
+window.api.onTogglePaneFocus(() => {
+  // If editor is focused, go to terminal; otherwise go to editor
+  if (editorMount.contains(document.activeElement)) {
+    focusTerminal();
+  } else {
+    focusEditor();
+  }
+});
 
 // Reconnect a single PTY from daemon (after app restart or reload)
 async function reconnectTerminal(ptyInfo) {
