@@ -673,18 +673,12 @@ window.api.onPtyExit((termId) => {
   if (entry) entry.term.write("\r\n[Process exited]\r\n");
 });
 
-const STATUS_LABELS = {
-  idle: "Ready for input",
-  processing: "Processing",
-  fresh: "Fresh",
-  dead: "Inactive",
-};
-
 const STATUS_CLASSES = {
   idle: "idle",
   processing: "processing",
   fresh: "fresh",
   dead: "dead",
+  offloaded: "offloaded",
 };
 
 async function loadSessions() {
@@ -693,47 +687,249 @@ async function loadSessions() {
   cleanupStaleTerminals(sessions);
   sessionList.innerHTML = "";
 
-  if (sessions.length === 0) {
+  // Split into sections — pool and external mixed together
+  const recent = sessions.filter(
+    (s) => s.status === "idle" || s.status === "offloaded",
+  );
+  const processing = sessions.filter((s) => s.status === "processing");
+
+  if (recent.length === 0 && processing.length === 0) {
     sessionList.innerHTML =
       '<li style="padding: 12px; color: var(--text-dim); font-size: 13px;">No sessions found</li>';
     return;
   }
 
-  // Sessions arrive pre-sorted in group order from main process
-  let currentGroup = null;
-  for (const s of sessions) {
-    // Insert section header when group changes
-    if (s.status !== currentGroup) {
-      currentGroup = s.status;
-      const count = sessions.filter((x) => x.status === s.status).length;
-      const header = document.createElement("li");
-      header.className = "session-section-header";
-      header.textContent = `${STATUS_LABELS[s.status] || s.status} (${count})`;
-      sessionList.appendChild(header);
+  function addSection(label, items) {
+    if (items.length === 0) return;
+    const header = document.createElement("li");
+    header.className = "session-section-header";
+    header.textContent = `${label} (${items.length})`;
+    sessionList.appendChild(header);
+    for (const s of items) {
+      sessionList.appendChild(createSessionItem(s));
     }
-
-    const li = document.createElement("li");
-    li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}`;
-    li.dataset.sessionId = s.sessionId;
-    const heading = s.intentionHeading || "No intention yet";
-    const displayPath = s.cwd ? s.cwd.replace(s.home, "~") : "~";
-    const dirColor = getDirColor(s);
-    const indicatorStyle = dirColor
-      ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
-      : "background: transparent";
-    li.innerHTML = `
-      <div class="session-dir-indicator" style="${indicatorStyle}"></div>
-      <div class="session-item-content">
-        <div class="session-project">
-          <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
-          ${heading}
-        </div>
-        <div class="session-cwd">${displayPath}</div>
-      </div>
-    `;
-    li.addEventListener("click", () => selectSession(s));
-    sessionList.appendChild(li);
   }
+
+  addSection("Recent", recent);
+  addSection("Processing", processing);
+}
+
+function createSessionItem(s) {
+  const li = document.createElement("li");
+  li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === "offloaded" ? " offloaded" : ""}`;
+  li.dataset.sessionId = s.sessionId;
+  const heading = s.intentionHeading || "No intention yet";
+  const displayPath = s.cwd ? s.cwd.replace(s.home, "~") : "~";
+  const dirColor = getDirColor(s);
+  const indicatorStyle = dirColor
+    ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
+    : "background: transparent";
+  const extTag = s.isPool ? "" : '<span class="session-ext-tag">ext</span>';
+  li.innerHTML = `
+    <div class="session-dir-indicator" style="${indicatorStyle}"></div>
+    <div class="session-item-content">
+      <div class="session-project">
+        <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
+        ${heading}
+        ${extTag}
+      </div>
+      <div class="session-cwd">${displayPath}</div>
+    </div>
+  `;
+  li.addEventListener("click", () => handleSessionClick(s));
+  return li;
+}
+
+// Handle click differently for offloaded vs loaded sessions
+async function handleSessionClick(session) {
+  if (session.status === "offloaded") {
+    showOffloadMenu(session);
+  } else {
+    selectSession(session);
+  }
+}
+
+// Show menu for offloaded session: Load | View Snapshot | Cancel
+async function showOffloadMenu(session) {
+  // Remove any existing menu
+  const existing = document.getElementById("offload-menu");
+  if (existing) existing.remove();
+
+  const menu = document.createElement("div");
+  menu.id = "offload-menu";
+  menu.className = "offload-menu-overlay";
+  menu.innerHTML = `
+    <div class="offload-menu-dialog">
+      <div class="offload-menu-title">${session.intentionHeading || "Offloaded Session"}</div>
+      <div class="offload-menu-subtitle">${session.cwd ? session.cwd.replace(session.home, "~") : "~"}</div>
+      <div class="offload-menu-actions">
+        <button class="offload-menu-btn offload-menu-load">Load Session</button>
+        <button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>
+        <button class="offload-menu-btn offload-menu-cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(menu);
+
+  // Close on overlay click
+  menu.addEventListener("click", (e) => {
+    if (e.target === menu) menu.remove();
+  });
+
+  menu.querySelector(".offload-menu-cancel").addEventListener("click", () => {
+    menu.remove();
+  });
+
+  menu
+    .querySelector(".offload-menu-snapshot")
+    .addEventListener("click", async () => {
+      menu.remove();
+      const snapshot = await window.api.readOffloadSnapshot(session.sessionId);
+      showSnapshotViewer(session, snapshot);
+    });
+
+  menu
+    .querySelector(".offload-menu-load")
+    .addEventListener("click", async () => {
+      menu.remove();
+      await resumeOffloadedSession(session);
+    });
+}
+
+// Show read-only snapshot viewer
+function showSnapshotViewer(session, snapshotText) {
+  const existing = document.getElementById("snapshot-viewer");
+  if (existing) existing.remove();
+
+  const viewer = document.createElement("div");
+  viewer.id = "snapshot-viewer";
+  viewer.className = "offload-menu-overlay";
+  viewer.innerHTML = `
+    <div class="snapshot-dialog">
+      <div class="snapshot-header">
+        <span>${session.intentionHeading || "Snapshot"}</span>
+        <button class="snapshot-close">\u2715</button>
+      </div>
+      <pre class="snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
+    </div>
+  `;
+
+  document.body.appendChild(viewer);
+  viewer.addEventListener("click", (e) => {
+    if (e.target === viewer) viewer.remove();
+  });
+  viewer.querySelector(".snapshot-close").addEventListener("click", () => {
+    viewer.remove();
+  });
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Resume an offloaded session: find a fresh slot or offload LRU idle, then /resume
+// Acquire a fresh slot: prefer existing fresh, else offload LRU idle.
+// Returns the fresh session object or null if pool is fully busy.
+async function acquireFreshSlot() {
+  let sessions = await window.api.getSessions();
+
+  // 1. Prefer an existing fresh slot
+  const freshSession = sessions.find((s) => s.status === "fresh");
+  if (freshSession) return freshSession;
+
+  // 2. Offload the longest-unused idle session (LRU)
+  const idleSessions = sessions
+    .filter((s) => s.status === "idle" && s.sessionId !== currentSessionId)
+    .sort((a, b) => a.idleTs - b.idleTs);
+
+  if (idleSessions.length === 0) return null; // All slots busy — can't acquire
+
+  const victim = idleSessions[0];
+
+  // Find the victim's terminal (from pool, not from renderer cache)
+  const pool = await window.api.poolRead();
+  const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
+  if (!victimSlot) return null;
+
+  await window.api.offloadSession(
+    victim.sessionId,
+    victimSlot.termId,
+    victim.sessionId,
+  );
+
+  // Poll until the slot becomes fresh (idle signal changes)
+  const fresh = await pollForFreshSlot(15000);
+  if (fresh) {
+    destroySessionTerminals(victim.sessionId);
+  }
+  return fresh;
+}
+
+// Poll getSessions() until a fresh slot appears
+async function pollForFreshSlot(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 500));
+    const sessions = await window.api.getSessions();
+    const fresh = sessions.find((s) => s.status === "fresh");
+    if (fresh) return fresh;
+  }
+  return null;
+}
+
+// Resume an offloaded session into a fresh slot
+async function resumeOffloadedSession(session) {
+  const meta = await window.api.readOffloadMeta(session.sessionId);
+  if (!meta || !meta.claudeSessionId) {
+    showNotification("Cannot resume: no session ID stored");
+    return;
+  }
+
+  const freshSlot = await acquireFreshSlot();
+  if (!freshSlot) {
+    showNotification("All pool slots are busy — cannot resume");
+    return;
+  }
+
+  // Find the terminal for this fresh slot
+  const pool = await window.api.poolRead();
+  const slot = pool?.slots.find((s) => s.sessionId === freshSlot.sessionId);
+  if (!slot) {
+    showNotification("Could not find pool terminal for fresh slot");
+    return;
+  }
+
+  // Send /resume to the fresh slot's terminal
+  await window.api.ptyWrite(slot.termId, `/resume ${meta.claudeSessionId}\n`);
+
+  // Remove offload data
+  await window.api.removeOffloadData(session.sessionId);
+
+  // Poll until the session appears in getSessions
+  const started = Date.now();
+  while (Date.now() - started < 10000) {
+    await new Promise((r) => setTimeout(r, 500));
+    const sessions = await window.api.getSessions();
+    const resumed = sessions.find(
+      (s) => s.sessionId === session.sessionId && s.status !== "offloaded",
+    );
+    if (resumed) {
+      await loadSessions();
+      await selectSession(resumed);
+      return;
+    }
+  }
+
+  // Fallback: just refresh
+  await loadSessions();
+}
+
+function showNotification(msg) {
+  saveStatus.textContent = msg;
+  setTimeout(() => {
+    if (saveStatus.textContent === msg) saveStatus.textContent = "";
+  }, 3000);
 }
 
 async function selectSession(session) {
@@ -817,63 +1013,23 @@ async function selectSession(session) {
   await window.api.watchIntention(session.sessionId);
 }
 
-// "+" in sidebar: new Claude session
+// "+" in sidebar: acquire a fresh slot from the pool (or offload LRU idle)
 newSessionBtn.addEventListener("click", async () => {
-  // Snapshot current session IDs to detect the new one
-  const beforeSessions = await window.api.getSessions();
-  const beforeIds = new Set(beforeSessions.map((s) => s.sessionId));
+  // Check pool is initialized
+  const pool = await window.api.poolRead();
+  if (!pool) {
+    showNotification("Pool not initialized — open pool settings");
+    return;
+  }
 
-  // Save current session's terminals before switching
-  hideCurrentTerminals();
+  const freshSlot = await acquireFreshSlot();
+  if (!freshSlot) {
+    showNotification("All pool slots are busy");
+    return;
+  }
 
-  currentSessionId = null;
-  currentSessionCwd = null;
-  const gen = ++sessionGeneration;
-
-  document
-    .querySelectorAll(".session-item")
-    .forEach((el) => el.classList.remove("active"));
-
-  emptyState.classList.add("hidden");
-  sessionView.classList.remove("hidden");
-  editorPane.classList.add("hidden"); // hide editor until session detected
-
-  // Spawn Claude via interactive shell (resolves `c` alias)
-  await spawnTerminal(null, "/bin/zsh", ["-ic", "c"]);
-  if (gen !== sessionGeneration) return;
-
-  // Poll for a new session to appear
-  let attempts = 0;
-  const detectSession = async () => {
-    if (gen !== sessionGeneration) return; // user switched away
-    const sessions = await window.api.getSessions();
-    const newSession = sessions.find((s) => !beforeIds.has(s.sessionId));
-    if (newSession) {
-      if (gen !== sessionGeneration) return;
-      currentSessionId = newSession.sessionId;
-      currentSessionCwd = newSession.cwd;
-      // Update main process PTY metadata with the new session ID
-      for (const t of terminals) {
-        window.api.ptySetSession(t.termId, newSession.sessionId);
-      }
-      syncSessionCache();
-
-      editorPane.classList.remove("hidden");
-      editorProject.textContent = newSession.project
-        ? `${newSession.project} — ${newSession.cwd.replace(newSession.home, "~")}`
-        : "New session";
-
-      const content = await window.api.readIntention(newSession.sessionId);
-      if (gen !== sessionGeneration) return;
-      createEditor(content);
-      saveStatus.textContent = "";
-      await window.api.watchIntention(newSession.sessionId);
-      await loadSessions();
-    } else if (++attempts < 30) {
-      setTimeout(detectSession, 1000);
-    }
-  };
-  setTimeout(detectSession, 2000); // give Claude a moment to start
+  await selectSession(freshSlot);
+  await loadSessions();
 });
 
 // "+" in terminal tab bar: new terminal at current session's CWD
@@ -913,8 +1069,12 @@ window.api.onIntentionChanged((content) => {
 
 // --- Session switching ---
 function switchSession(direction) {
-  if (cachedSessions.length === 0) return;
-  const currentIndex = cachedSessions.findIndex(
+  // Navigate between loaded sessions (idle + processing, pool + external), skip offloaded/fresh/dead
+  const navigable = cachedSessions.filter(
+    (s) => s.alive && (s.status === "idle" || s.status === "processing"),
+  );
+  if (navigable.length === 0) return;
+  const currentIndex = navigable.findIndex(
     (s) => s.sessionId === currentSessionId,
   );
   let nextIndex;
@@ -922,10 +1082,9 @@ function switchSession(direction) {
     nextIndex = 0;
   } else {
     nextIndex =
-      (currentIndex + direction + cachedSessions.length) %
-      cachedSessions.length;
+      (currentIndex + direction + navigable.length) % navigable.length;
   }
-  selectSession(cachedSessions[nextIndex]);
+  selectSession(navigable[nextIndex]);
 }
 
 // --- Sidebar toggle ---
@@ -1330,6 +1489,161 @@ refreshBtn.addEventListener("click", async () => {
   await loadDirColors();
   loadSessions();
 });
+
+// --- Pool Settings Panel ---
+const poolSettingsBtn = document.getElementById("pool-settings-btn");
+
+poolSettingsBtn.addEventListener("click", () => showPoolSettings());
+
+async function showPoolSettings() {
+  const existing = document.getElementById("pool-settings");
+  if (existing) existing.remove();
+
+  const health = await window.api.poolHealth();
+
+  const overlay = document.createElement("div");
+  overlay.id = "pool-settings";
+  overlay.className = "offload-menu-overlay";
+
+  const statusDot = (status) => {
+    const cls = STATUS_CLASSES[status] || "dead";
+    return `<span class="session-status ${cls}" style="display:inline-block;vertical-align:middle;margin-right:6px;"></span>`;
+  };
+
+  let slotsHtml = "";
+  if (health.initialized) {
+    slotsHtml = health.slots
+      .map((slot) => {
+        const status = slot.healthStatus || slot.status;
+        const label =
+          slot.intentionHeading ||
+          slot.sessionId?.slice(0, 8) ||
+          `slot-${slot.index}`;
+        const cwdDisplay = slot.cwd || "";
+        return `<div class="pool-slot-row">
+          ${statusDot(status)}
+          <span class="pool-slot-label">${label}</span>
+          <span class="pool-slot-status">${status}</span>
+        </div>`;
+      })
+      .join("");
+  }
+
+  const countsHtml = health.initialized
+    ? Object.entries(health.counts)
+        .map(([k, v]) => `${statusDot(k)} ${k}: ${v}`)
+        .join("&nbsp;&nbsp;&nbsp;")
+    : "Pool not initialized";
+
+  overlay.innerHTML = `
+    <div class="pool-settings-dialog">
+      <div class="pool-settings-header">
+        <span>Pool Settings</span>
+        <button class="snapshot-close pool-close">\u2715</button>
+      </div>
+      <div class="pool-settings-body">
+        <div class="pool-health-summary">${countsHtml}</div>
+        ${
+          health.initialized
+            ? `
+          <div class="pool-slots-list">${slotsHtml}</div>
+          <div class="pool-controls">
+            <label class="pool-size-label">
+              Pool size:
+              <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
+            </label>
+            <button class="offload-menu-btn pool-resize-btn">Resize</button>
+            <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
+          </div>
+        `
+            : `
+          <div class="pool-controls">
+            <label class="pool-size-label">
+              Pool size:
+              <input type="number" class="pool-size-input" value="5" min="1" max="20">
+            </label>
+            <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
+          </div>
+        `
+        }
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  overlay
+    .querySelector(".pool-close")
+    .addEventListener("click", () => overlay.remove());
+
+  // Init button
+  const initBtn = overlay.querySelector(".pool-init-btn");
+  if (initBtn) {
+    initBtn.addEventListener("click", async () => {
+      const size = parseInt(
+        overlay.querySelector(".pool-size-input").value,
+        10,
+      );
+      initBtn.textContent = "Initializing...";
+      initBtn.disabled = true;
+      try {
+        await window.api.poolInit(size);
+        overlay.remove();
+        showNotification(`Pool initialized (${size} slots)`);
+        await loadSessions();
+      } catch (err) {
+        initBtn.textContent = "Initialize Pool";
+        initBtn.disabled = false;
+        showNotification(`Error: ${err.message}`);
+      }
+    });
+  }
+
+  // Resize button
+  const resizeBtn = overlay.querySelector(".pool-resize-btn");
+  if (resizeBtn) {
+    resizeBtn.addEventListener("click", async () => {
+      const newSize = parseInt(
+        overlay.querySelector(".pool-size-input").value,
+        10,
+      );
+      resizeBtn.textContent = "Resizing...";
+      resizeBtn.disabled = true;
+      try {
+        await window.api.poolResize(newSize);
+        overlay.remove();
+        showNotification(`Pool resized to ${newSize} slots`);
+        await loadSessions();
+      } catch (err) {
+        resizeBtn.textContent = "Resize";
+        resizeBtn.disabled = false;
+        showNotification(`Error: ${err.message}`);
+      }
+    });
+  }
+
+  // Reload button
+  const reloadBtn = overlay.querySelector(".pool-reload-btn");
+  if (reloadBtn) {
+    reloadBtn.addEventListener("click", async () => {
+      overlay.remove();
+      await loadDirColors();
+      await loadSessions();
+      showNotification("Sessions reloaded");
+    });
+  }
+}
+
+// Add pool settings to command palette
+COMMANDS.push({
+  id: "pool-settings",
+  label: "Pool Settings",
+  shortcut: "",
+  action: () => showPoolSettings(),
+});
+
 loadDirColors().then(async () => {
   await reconnectAllPtys();
   setInterval(loadSessions, 10000);
