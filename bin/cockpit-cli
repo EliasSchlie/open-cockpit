@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOCKET="$HOME/.open-cockpit/api.sock"
+CMD="${1:-ping}"
+shift 2>/dev/null || true
+
+# Build JSON from command + args
+case "$CMD" in
+  pool-init)    json="{\"type\":\"pool-init\",\"id\":1,\"size\":${1:-5}}" ;;
+  pool-resize)  json="{\"type\":\"pool-resize\",\"id\":1,\"size\":${1:?size required}}" ;;
+  pool-health)  json="{\"type\":\"pool-health\",\"id\":1}" ;;
+  pool-read)    json="{\"type\":\"pool-read\",\"id\":1}" ;;
+  pool-destroy) json="{\"type\":\"pool-destroy\",\"id\":1}" ;;
+  get-sessions) json="{\"type\":\"get-sessions\",\"id\":1}" ;;
+  read-intention)  json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\"}" ;;
+  write-intention) json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\",\"content\":$(printf '%s' "${2:?content required}" | jq -Rs .)}" ;;
+  pty-list)     json="{\"type\":\"pty-list\",\"id\":1}" ;;
+  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%s' "${2:?data required}" | jq -Rs .)}" ;;
+  pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":${1:?termId required}}" ;;
+  pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":\"${1:?cwd required}\",\"cmd\":\"${2:?cmd required}\",\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}" ;;
+  pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}" ;;
+  ping)         json="{\"type\":\"ping\",\"id\":1}" ;;
+  *)            echo "Unknown command: $CMD" >&2
+                echo "Usage: cockpit-cli <command> [args...]" >&2
+                echo "" >&2
+                echo "Commands:" >&2
+                echo "  ping                         Health check" >&2
+                echo "  get-sessions                 List all sessions" >&2
+                echo "  pool-init [size]             Initialize pool (default: 5)" >&2
+                echo "  pool-resize <size>           Resize pool" >&2
+                echo "  pool-health                  Pool health report" >&2
+                echo "  pool-read                    Read pool.json" >&2
+                echo "  pool-destroy                 Destroy pool" >&2
+                echo "  read-intention <sessionId>   Read intention file" >&2
+                echo "  write-intention <id> <text>  Write intention file" >&2
+                echo "  pty-list                     List terminals" >&2
+                echo "  pty-write <termId> <data>    Write to terminal" >&2
+                echo "  pty-read <termId>            Read terminal buffer" >&2
+                echo "  pty-spawn <cwd> <cmd> [args] Spawn terminal" >&2
+                echo "  pty-kill <termId>            Kill terminal" >&2
+                exit 1 ;;
+esac
+
+# Send via socat (or node if socat unavailable)
+if command -v socat &>/dev/null; then
+  echo "$json" | socat -t5 - UNIX-CONNECT:"$SOCKET"
+else
+  node -e "
+    const net = require('net');
+    const sock = net.createConnection('$SOCKET');
+    sock.on('connect', () => { sock.write(JSON.stringify($json) + '\n'); });
+    sock.on('data', (d) => { process.stdout.write(d); sock.destroy(); });
+    sock.on('error', (e) => { console.error(e.message); process.exit(1); });
+    setTimeout(() => { console.error('timeout'); process.exit(1); }, 5000);
+  "
+fi

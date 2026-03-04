@@ -5,6 +5,7 @@ Electron app + Claude Code plugin for session intention tracking.
 ## Architecture
 
 - `src/pty-daemon.js` — **PTY daemon**: standalone process managing all terminals ([docs/pty-daemon.md](docs/pty-daemon.md))
+- `src/api-server.js` — **API server**: Unix socket API for external process control ([docs/api.md](docs/api.md))
 - `src/main.js` — Main process: window, IPC, daemon client, session discovery
 - `src/preload.js` — Context bridge (`api` object)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
@@ -19,6 +20,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created by app on first open)
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
+- `~/.open-cockpit/api.sock` — Programmatic API Unix socket
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
 
@@ -82,6 +84,7 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - [docs/pty-daemon.md](docs/pty-daemon.md) — PTY daemon architecture, protocol, debugging
 - [docs/theme.md](docs/theme.md) — Color scheme, directory color coding, user overrides
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
+- [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI helper)
 
 ## Conventions
 
