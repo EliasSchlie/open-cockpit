@@ -14,7 +14,7 @@ Electron app + Claude Code plugin for session intention tracking.
 ## Key paths
 
 - `~/.claude/session-pids/<PID>` — Session ID (written by plugin hook)
-- `~/.intentions/<session_id>.md` — Intention files (created by app on first open)
+- `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created by app on first open)
 
 ## Dev
 
@@ -22,6 +22,20 @@ Electron app + Claude Code plugin for session intention tracking.
 npm start       # Build + run
 npm run build   # Bundle renderer only (esbuild)
 ```
+
+## Dev vs production
+
+- `npm start` — production instance (user's daily driver, don't touch during dev)
+- `npm run dev` — dev instance with separate user data dir + "DEV" in title, safe to restart freely
+- Both can run simultaneously
+
+## Reloading after changes
+
+- **Renderer changes** (`renderer.js`, `styles.css`, `index.html`): `npm run build`, then Cmd+R in the dev window.
+- **Main process changes** (`main.js`, `preload.js`): restart the dev instance:
+  ```bash
+  osascript -e 'quit app "Electron"' 2>/dev/null; sleep 1; npm run dev
+  ```
 
 ## Conventions
 

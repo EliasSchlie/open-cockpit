@@ -3,7 +3,8 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-const INTENTIONS_DIR = path.join(os.homedir(), ".intentions");
+const IS_DEV = process.argv.includes("--dev");
+const INTENTIONS_DIR = path.join(os.homedir(), ".open-cockpit", "intentions");
 const SESSION_PIDS_DIR = path.join(os.homedir(), ".claude", "session-pids");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 
@@ -12,9 +13,14 @@ const fileWatchers = new Map();
 let mainWindow = null;
 
 function createWindow() {
+  if (IS_DEV) {
+    app.setPath("userData", path.join(app.getPath("userData"), "-dev"));
+  }
+
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
+    title: IS_DEV ? "Open Cockpit (DEV)" : "Open Cockpit",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -117,6 +123,7 @@ function getSessions() {
       sessionId,
       alive,
       cwd,
+      home: os.homedir(),
       project: cwd ? path.basename(cwd) : null,
       hasIntention,
       intentionHeading,

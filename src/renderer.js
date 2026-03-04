@@ -338,7 +338,7 @@ async function loadSessions() {
     li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}`;
     li.dataset.sessionId = s.sessionId;
     const heading = s.intentionHeading || "No intention yet";
-    const displayPath = s.cwd || "~";
+    const displayPath = s.cwd ? s.cwd.replace(s.home, "~") : "~";
     li.innerHTML = `
       <div class="session-project">
         <span class="session-status ${s.alive ? "alive" : "dead"}"></span>
@@ -361,7 +361,7 @@ async function selectSession(session) {
   emptyState.classList.add("hidden");
   editorContainer.classList.remove("hidden");
   editorProject.textContent = session.project
-    ? `${session.project} — ${session.cwd}`
+    ? `${session.project} — ${session.cwd.replace(session.home, "~")}`
     : session.sessionId;
 
   const content = await window.api.readIntention(session.sessionId);
