@@ -320,6 +320,94 @@ function watchIntention(sessionId) {
 
 const pendingPolls = new Set();
 
+// Try to focus the external terminal (iTerm or Cursor) where a Claude session is running.
+// Returns { focused: true, app: "iTerm"/"Cursor" } or { focused: false }.
+function focusExternalTerminal(pid) {
+  if (!/^\d+$/.test(String(pid))) return { focused: false };
+
+  const { execFileSync } = require("child_process");
+
+  // Get the TTY of the Claude process
+  let tty;
+  try {
+    tty = execFileSync("ps", ["-p", String(pid), "-o", "tty="], {
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    return { focused: false };
+  }
+  if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty))
+    return { focused: false };
+
+  const EXEC_TIMEOUT = 3000;
+
+  // Try iTerm: find the session with this TTY and focus it
+  try {
+    const result = execFileSync(
+      "osascript",
+      [
+        "-e",
+        `tell application "System Events"
+  if not (exists process "iTerm2") then return "not_running"
+end tell
+tell application "iTerm"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s ends with "${tty}" then
+          select t
+          set index of w to 1
+          activate
+          return "focused"
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return "not_found"
+end tell`,
+      ],
+      { encoding: "utf-8", timeout: EXEC_TIMEOUT },
+    ).trim();
+    if (result === "focused") return { focused: true, app: "iTerm" };
+  } catch {}
+
+  // Try Cursor / VS Code: walk process tree to find terminal app ancestor
+  const TERMINAL_APPS = [
+    { match: /\/Cursor(\.app\/|\s|$)/, app: "Cursor", activate: "Cursor" },
+    {
+      match: /\/Code(\.app\/|\s|$)/,
+      app: "VS Code",
+      activate: "Visual Studio Code",
+    },
+  ];
+  try {
+    let checkPid = String(pid);
+    for (let i = 0; i < 10; i++) {
+      const ppid = execFileSync("ps", ["-p", checkPid, "-o", "ppid="], {
+        encoding: "utf-8",
+        timeout: EXEC_TIMEOUT,
+      }).trim();
+      if (!ppid || ppid === "0" || ppid === "1") break;
+      const pname = execFileSync("ps", ["-p", ppid, "-o", "comm="], {
+        encoding: "utf-8",
+        timeout: EXEC_TIMEOUT,
+      }).trim();
+      for (const { match, app, activate } of TERMINAL_APPS) {
+        if (match.test(pname)) {
+          execFileSync("osascript", [
+            "-e",
+            `tell application "${activate}" to activate`,
+          ]);
+          return { focused: true, app };
+        }
+      }
+      checkPid = ppid;
+    }
+  } catch {}
+
+  return { focused: false };
+}
+
 // --- Daemon client helpers ---
 
 function isDaemonRunning() {
@@ -532,6 +620,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("pty-set-session", async (_e, termId, sessionId) => {
     await daemonRequest({ type: "set-session", termId, sessionId });
   });
+
+  ipcMain.handle("focus-external-terminal", (_e, pid) =>
+    focusExternalTerminal(pid),
+  );
 
   // Poll for a session-pid file to appear for a given PID
   ipcMain.handle("pty-wait-session", (_e, pid) => {

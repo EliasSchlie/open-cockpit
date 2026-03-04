@@ -736,8 +736,20 @@ async function loadSessions() {
 }
 
 async function selectSession(session) {
-  // Skip if already viewing this session
-  if (session.sessionId === currentSessionId) return;
+  // If already viewing this session, re-focus its external terminal (if any)
+  if (session.sessionId === currentSessionId) {
+    if (session.alive) {
+      const result = await window.api.focusExternalTerminal(session.pid);
+      if (result.focused) {
+        saveStatus.textContent = `Focused ${result.app}`;
+        setTimeout(() => {
+          if (saveStatus.textContent === `Focused ${result.app}`)
+            saveStatus.textContent = "";
+        }, 2000);
+      }
+    }
+    return;
+  }
 
   hideCurrentTerminals();
 
@@ -767,6 +779,19 @@ async function selectSession(session) {
     colorBar.style.background = dirColor;
     colorBar.style.boxShadow = `0 0 8px ${dirColor}`;
     header.appendChild(colorBar);
+  }
+
+  // If session is alive, try to focus its external terminal (iTerm/Cursor)
+  if (session.alive) {
+    const result = await window.api.focusExternalTerminal(session.pid);
+    if (gen !== sessionGeneration) return;
+    if (result.focused) {
+      saveStatus.textContent = `Focused ${result.app}`;
+      setTimeout(() => {
+        if (saveStatus.textContent === `Focused ${result.app}`)
+          saveStatus.textContent = "";
+      }, 2000);
+    }
   }
 
   // Restore cached terminals immediately (sync, no race risk)
