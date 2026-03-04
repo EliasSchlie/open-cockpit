@@ -45,9 +45,15 @@ Bumps version in `.claude-plugin/plugin.json` and `EliasSchlie/claude-plugins` m
 - Both can run simultaneously
 - Multiple Claude sessions may run dev instances concurrently from different worktrees
 
+## Worktree setup
+
+A `post-checkout` git hook auto-runs `npm install` + `npm run build` when creating worktrees. No manual setup needed — just `git worktree add` and it's ready.
+
 ## Managing dev instances (multi-session safe)
 
 Multiple Claude sessions may work on different worktrees simultaneously. Electron processes inherit the `cwd` of the worktree — use `lsof` to identify and kill only yours.
+
+> ⚠️ **CRITICAL: You MUST `cd` into your worktree/project directory before running the kill/launch command.** The command uses `$(pwd)` to scope which Electron process to kill. Running it from `~` or any other directory risks killing the **production instance** if it was launched from that directory.
 
 **Always use this command to launch** (kills any existing instance first — safe even on first launch):
 ```bash
