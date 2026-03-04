@@ -5,6 +5,14 @@ const os = require("os");
 const net = require("net");
 const { spawn: spawnChild, execFileSync, execSync } = require("child_process");
 const { sortSessions } = require("./sort-sessions");
+const {
+  readPool: readPoolFile,
+  writePool: writePoolFile,
+  computePoolHealth,
+  syncStatuses,
+  createSlot,
+  selectShrinkCandidates,
+} = require("./pool");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -163,9 +171,9 @@ function getOffloadedSessions() {
   if (!fs.existsSync(OFFLOADED_DIR)) return [];
   const sessions = [];
   for (const dir of fs.readdirSync(OFFLOADED_DIR)) {
-    const metaFile = path.join(OFFLOADED_DIR, dir, "meta.json");
     try {
-      const meta = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+      const meta = readOffloadMeta(dir);
+      if (!meta) continue;
       sessions.push({
         pid: null,
         sessionId: meta.sessionId || dir,
@@ -309,7 +317,13 @@ function getSessions() {
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
 // Pool and external sessions are mixed together in the same sections.
 // Offload a session: save snapshot + meta, then send /clear to terminal
-async function offloadSession(sessionId, termId, claudeSessionId) {
+async function offloadSession(
+  sessionId,
+  termId,
+  claudeSessionId,
+  { cwd, gitRoot, pid } = {},
+) {
+  validateSessionId(sessionId);
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
   fs.mkdirSync(offloadDir, { recursive: true });
 
@@ -328,15 +342,11 @@ async function offloadSession(sessionId, termId, claudeSessionId) {
     ? getIntentionHeading(intentionFile)
     : null;
 
-  // Find session info for cwd/gitRoot
-  const sessions = getSessions();
-  const session = sessions.find((s) => s.sessionId === sessionId);
-
   const meta = {
     sessionId,
     claudeSessionId: claudeSessionId || null,
-    cwd: session?.cwd || null,
-    gitRoot: session?.gitRoot || null,
+    cwd: cwd || null,
+    gitRoot: gitRoot || null,
     intentionHeading,
     lastInteractionTs: Math.floor(Date.now() / 1000),
     offloadedAt: new Date().toISOString(),
@@ -346,16 +356,60 @@ async function offloadSession(sessionId, termId, claudeSessionId) {
     JSON.stringify(meta, null, 2),
   );
 
-  // Send /clear to the terminal to free the slot
-  daemonSend({ type: "write", termId, data: "\x1b" }); // Escape first
+  // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
+  // 1. Escape (safe no-op or exits any menu)
+  daemonSend({ type: "write", termId, data: "\x1b" });
+  await new Promise((r) => setTimeout(r, 500));
+  // 2. Ctrl-U to clear any partial input, then /clear
+  daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
   await new Promise((r) => setTimeout(r, 200));
   daemonSend({ type: "write", termId, data: "/clear\n" });
+
+  // 3. Remove idle signal so session re-detects as fresh after /clear
+  if (pid) {
+    const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
+    try {
+      fs.unlinkSync(idleSignalFile);
+    } catch {}
+  }
+
+  // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
+  const pool = readPool();
+  if (pool) {
+    const slot = pool.slots.find((s) => s.termId === termId);
+    if (slot) {
+      const oldSessionId = slot.sessionId;
+      slot.status = "fresh";
+      slot.sessionId = null;
+      writePool(pool);
+
+      // Poll until the PID file changes from old UUID to new one
+      pollForSessionId(slot.pid, 60000, oldSessionId).then((newSessionId) => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === termId);
+        if (s) {
+          s.sessionId = newSessionId;
+          s.status = newSessionId ? "fresh" : "error";
+          writePool(p);
+        }
+      });
+    }
+  }
 
   return meta;
 }
 
+// Validate sessionId format to prevent path traversal
+function validateSessionId(sessionId) {
+  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+    throw new Error("Invalid session ID format");
+  }
+}
+
 // Remove offload data for a session (after resume)
 function removeOffloadData(sessionId) {
+  validateSessionId(sessionId);
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
   try {
     fs.rmSync(offloadDir, { recursive: true });
@@ -364,6 +418,7 @@ function removeOffloadData(sessionId) {
 
 // Read offload snapshot
 function readOffloadSnapshot(sessionId) {
+  validateSessionId(sessionId);
   const snapshotFile = path.join(OFFLOADED_DIR, sessionId, "snapshot.log");
   try {
     return fs.readFileSync(snapshotFile, "utf-8");
@@ -374,6 +429,7 @@ function readOffloadSnapshot(sessionId) {
 
 // Read offload meta
 function readOffloadMeta(sessionId) {
+  validateSessionId(sessionId);
   const metaFile = path.join(OFFLOADED_DIR, sessionId, "meta.json");
   try {
     return JSON.parse(fs.readFileSync(metaFile, "utf-8"));
@@ -385,23 +441,27 @@ function readOffloadMeta(sessionId) {
 // --- Pool Management ---
 
 function readPool() {
-  try {
-    return JSON.parse(fs.readFileSync(POOL_FILE, "utf-8"));
-  } catch {
-    return null;
-  }
+  return readPoolFile(POOL_FILE);
 }
 
 function writePool(pool) {
-  fs.mkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
-  const tmp = POOL_FILE + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(pool, null, 2));
-  fs.renameSync(tmp, POOL_FILE);
+  writePoolFile(POOL_FILE, pool);
+}
+
+// Spawn a single Claude session via the PTY daemon. Returns a slot object.
+async function spawnPoolSlot(index) {
+  const resp = await daemonRequest({
+    type: "spawn",
+    cwd: os.homedir(),
+    cmd: "/bin/zsh",
+    args: ["-ic", "exec c"],
+  });
+  return createSlot(index, resp.termId, resp.pid);
 }
 
 // Initialize pool: spawn N Claude sessions via PTY daemon
 async function poolInit(size) {
-  size = size || DEFAULT_POOL_SIZE;
+  size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
   const existing = readPool();
   if (existing) {
     throw new Error(
@@ -416,30 +476,19 @@ async function poolInit(size) {
     slots: [],
   };
 
-  // Spawn each slot as a Claude session in a daemon terminal
-  for (let i = 0; i < size; i++) {
-    const resp = await daemonRequest({
-      type: "spawn",
-      cwd: os.homedir(),
-      cmd: "/bin/zsh",
-      args: ["-ic", "c"],
-    });
-    pool.slots.push({
-      index: i,
-      termId: resp.termId,
-      pid: resp.pid,
-      status: "starting",
-      sessionId: null,
-      createdAt: new Date().toISOString(),
-    });
-  }
+  // Spawn each slot as a Claude session in a daemon terminal (parallel)
+  const slots = await Promise.all(
+    Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
+  );
+  pool.slots = slots;
 
   writePool(pool);
 
-  // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping)
-  const results = await Promise.allSettled(
+  // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
+  // exec in the spawn command makes daemon PID = Claude PID, so session-pids/<PID> matches.
+  await Promise.allSettled(
     pool.slots.map(async (slot) => {
-      const sessionId = await pollForSessionId(slot.pid, 30000);
+      const sessionId = await pollForSessionId(slot.pid, 60000);
       slot.sessionId = sessionId;
       slot.status = sessionId ? "fresh" : "error";
     }),
@@ -449,27 +498,31 @@ async function poolInit(size) {
   return pool;
 }
 
-// Poll for a session-pid file to appear for a PID
-function pollForSessionId(pid, timeoutMs) {
+// Poll for a session-pid file to appear (or change from excludeId) for a PID.
+// Used both for initial session discovery and after /clear (which reuses the PID).
+function pollForSessionId(pid, timeoutMs, excludeId = null) {
   return new Promise((resolve) => {
     let elapsed = 0;
     const interval = 500;
+    const initialDelay = excludeId ? 2000 : 0; // Give /clear time to take effect
     const check = () => {
-      const file = path.join(SESSION_PIDS_DIR, String(pid));
-      if (fs.existsSync(file)) {
-        const sessionId = fs.readFileSync(file, "utf-8").trim();
-        if (sessionId) return resolve(sessionId);
-      }
+      try {
+        const sessionId = fs
+          .readFileSync(path.join(SESSION_PIDS_DIR, String(pid)), "utf-8")
+          .trim();
+        if (sessionId && sessionId !== excludeId) return resolve(sessionId);
+      } catch {} // File doesn't exist yet
       elapsed += interval;
       if (elapsed >= timeoutMs) return resolve(null);
       setTimeout(check, interval);
     };
-    check();
+    setTimeout(check, initialDelay);
   });
 }
 
 // Resize pool: add or remove slots
 async function poolResize(newSize) {
+  newSize = Math.max(1, Math.min(20, newSize));
   const pool = readPool();
   if (!pool) throw new Error("Pool not initialized");
 
@@ -477,47 +530,34 @@ async function poolResize(newSize) {
   if (newSize === currentSize) return pool;
 
   if (newSize > currentSize) {
-    // Grow: add new slots
-    for (let i = currentSize; i < newSize; i++) {
-      const resp = await daemonRequest({
-        type: "spawn",
-        cwd: os.homedir(),
-        cmd: "/bin/zsh",
-        args: ["-ic", "c"],
-      });
-      const slot = {
-        index: i,
-        termId: resp.termId,
-        pid: resp.pid,
-        status: "starting",
-        sessionId: null,
-        createdAt: new Date().toISOString(),
-      };
-      pool.slots.push(slot);
+    // Grow: spawn new slots in parallel
+    const newSlots = await Promise.all(
+      Array.from({ length: newSize - currentSize }, (_, j) =>
+        spawnPoolSlot(currentSize + j),
+      ),
+    );
+    pool.slots.push(...newSlots);
 
-      // Wait for session in background
-      pollForSessionId(resp.pid, 30000).then((sessionId) => {
-        slot.sessionId = sessionId;
-        slot.status = sessionId ? "fresh" : "error";
-        pool.poolSize = newSize;
-        writePool(pool);
+    // Resolve session IDs in background (re-reads pool to avoid clobbering)
+    for (const slot of newSlots) {
+      pollForSessionId(slot.pid, 60000).then((sessionId) => {
+        const current = readPool();
+        if (!current) return;
+        const s = current.slots.find((x) => x.termId === slot.termId);
+        if (s) {
+          s.sessionId = sessionId;
+          s.status = sessionId ? "fresh" : "error";
+          writePool(current);
+        }
       });
     }
   } else {
     // Shrink: kill excess slots (prefer fresh, then LRU idle)
     const toRemove = currentSize - newSize;
-    // Sort candidates: fresh first, then idle by LRU
-    const candidates = [...pool.slots]
-      .filter((s) => s.status === "fresh" || s.status === "idle")
-      .sort((a, b) => {
-        if (a.status === "fresh" && b.status !== "fresh") return -1;
-        if (b.status === "fresh" && a.status !== "fresh") return 1;
-        return 0; // keep order for same status
-      });
+    const candidates = selectShrinkCandidates(pool.slots, toRemove);
 
     let removed = 0;
     for (const slot of candidates) {
-      if (removed >= toRemove) break;
       try {
         await daemonRequest({ type: "kill", termId: slot.termId });
       } catch {}
@@ -537,49 +577,15 @@ async function poolResize(newSize) {
 // Get pool health: enrich pool.json slots with live session data
 function getPoolHealth() {
   const pool = readPool();
-  if (!pool) return { initialized: false, slots: [], counts: {} };
-
   const sessions = getSessions();
-  const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-
-  // Update slot statuses from live session data
-  for (const slot of pool.slots) {
-    // Check if terminal is still alive
-    let termAlive = false;
+  return computePoolHealth(pool, sessions, (pid) => {
     try {
-      if (slot.pid) process.kill(Number(slot.pid), 0);
-      termAlive = true;
-    } catch {}
-
-    if (!termAlive) {
-      slot.healthStatus = "dead";
-      continue;
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      return false;
     }
-
-    const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
-    if (!session) {
-      slot.healthStatus = slot.status === "starting" ? "starting" : "unknown";
-      continue;
-    }
-
-    slot.healthStatus = session.status; // idle, processing, fresh, offloaded
-    slot.intentionHeading = session.intentionHeading;
-    slot.cwd = session.cwd;
-  }
-
-  // Count statuses
-  const counts = {};
-  for (const slot of pool.slots) {
-    const status = slot.healthStatus || slot.status;
-    counts[status] = (counts[status] || 0) + 1;
-  }
-
-  return {
-    initialized: true,
-    poolSize: pool.poolSize,
-    slots: pool.slots,
-    counts,
-  };
+  });
 }
 
 // Reconcile pool.json with reality on startup.
@@ -627,6 +633,14 @@ async function reconcilePool() {
   }
 
   if (changed) writePool(pool);
+}
+
+// Sync pool.json slot statuses with live session state.
+function syncPoolStatuses(sessions) {
+  const pool = readPool();
+  if (!pool) return;
+  const updated = syncStatuses(pool, sessions);
+  if (updated) writePool(updated);
 }
 
 function readIntention(sessionId) {
@@ -929,7 +943,11 @@ app.whenReady().then(async () => {
       return {};
     }
   });
-  ipcMain.handle("get-sessions", () => getSessions());
+  ipcMain.handle("get-sessions", () => {
+    const sessions = getSessions();
+    syncPoolStatuses(sessions);
+    return sessions;
+  });
   ipcMain.handle("read-intention", (_e, sessionId) => readIntention(sessionId));
   ipcMain.handle("write-intention", (_e, sessionId, content) =>
     writeIntention(sessionId, content),
@@ -991,8 +1009,8 @@ app.whenReady().then(async () => {
   // Pool / offload IPC handlers
   ipcMain.handle(
     "offload-session",
-    async (_e, sessionId, termId, claudeSessionId) =>
-      offloadSession(sessionId, termId, claudeSessionId),
+    async (_e, sessionId, termId, claudeSessionId, sessionInfo) =>
+      offloadSession(sessionId, termId, claudeSessionId, sessionInfo),
   );
   ipcMain.handle("remove-offload-data", (_e, sessionId) =>
     removeOffloadData(sessionId),

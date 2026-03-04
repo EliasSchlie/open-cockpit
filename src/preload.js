@@ -38,8 +38,14 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("focus-external-terminal", pid),
 
   // Pool / offload
-  offloadSession: (sessionId, termId, claudeSessionId) =>
-    ipcRenderer.invoke("offload-session", sessionId, termId, claudeSessionId),
+  offloadSession: (sessionId, termId, claudeSessionId, sessionInfo) =>
+    ipcRenderer.invoke(
+      "offload-session",
+      sessionId,
+      termId,
+      claudeSessionId,
+      sessionInfo,
+    ),
   removeOffloadData: (sessionId) =>
     ipcRenderer.invoke("remove-offload-data", sessionId),
   readOffloadSnapshot: (sessionId) =>

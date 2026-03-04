@@ -719,7 +719,7 @@ function createSessionItem(s) {
   li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === "offloaded" ? " offloaded" : ""}`;
   li.dataset.sessionId = s.sessionId;
   const heading = s.intentionHeading || "No intention yet";
-  const displayPath = s.cwd ? s.cwd.replace(s.home, "~") : "~";
+  const dp = displayPath(s);
   const dirColor = getDirColor(s);
   const indicatorStyle = dirColor
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
@@ -733,7 +733,7 @@ function createSessionItem(s) {
         ${escapeHtml(heading)}
         ${extTag}
       </div>
-      <div class="session-cwd">${escapeHtml(displayPath)}</div>
+      <div class="session-cwd">${escapeHtml(dp)}</div>
     </div>
   `;
   li.addEventListener("click", () => handleSessionClick(s));
@@ -761,7 +761,7 @@ async function showOffloadMenu(session) {
   menu.innerHTML = `
     <div class="offload-menu-dialog">
       <div class="offload-menu-title">${escapeHtml(session.intentionHeading || "Offloaded Session")}</div>
-      <div class="offload-menu-subtitle">${escapeHtml(session.cwd ? session.cwd.replace(session.home, "~") : "~")}</div>
+      <div class="offload-menu-subtitle">${escapeHtml(displayPath(session))}</div>
       <div class="offload-menu-actions">
         <button class="offload-menu-btn offload-menu-load">Load Session</button>
         <button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>
@@ -824,23 +824,40 @@ function showSnapshotViewer(session, snapshotText) {
   });
 }
 
+function displayPath(session) {
+  return session.cwd ? session.cwd.replace(session.home, "~") : "~";
+}
+
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-// Resume an offloaded session: find a fresh slot or offload LRU idle, then /resume
 // Acquire a fresh slot: prefer existing fresh, else offload LRU idle.
 // Returns the fresh session object or null if pool is fully busy.
 async function acquireFreshSlot() {
-  let sessions = await window.api.getSessions();
+  const sessions = await window.api.getSessions();
+  const pool = await window.api.poolRead();
+  if (!pool) return null;
 
-  // 1. Prefer an existing fresh slot
-  const freshSession = sessions.find((s) => s.status === "fresh");
+  // Build set of pool-fresh sessionIds (pool says "fresh" even if getSessions says "processing")
+  const poolFreshIds = new Set(
+    pool.slots
+      .filter((s) => s.status === "fresh" && s.sessionId)
+      .map((s) => s.sessionId),
+  );
+
+  // 1. Prefer an existing fresh slot (by session status or pool status)
+  const freshSession = sessions.find(
+    (s) => s.status === "fresh" || poolFreshIds.has(s.sessionId),
+  );
   if (freshSession) return freshSession;
 
   // 2. Offload the longest-unused idle session (LRU)
   const idleSessions = sessions
-    .filter((s) => s.status === "idle" && s.sessionId !== currentSessionId)
+    .filter(
+      (s) =>
+        s.status === "idle" && s.isPool && s.sessionId !== currentSessionId,
+    )
     .sort((a, b) => a.idleTs - b.idleTs);
 
   if (idleSessions.length === 0) return null; // All slots busy — can't acquire
@@ -848,31 +865,39 @@ async function acquireFreshSlot() {
   const victim = idleSessions[0];
 
   // Find the victim's terminal (from pool, not from renderer cache)
-  const pool = await window.api.poolRead();
-  const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
+  const victimSlot = pool.slots.find((s) => s.sessionId === victim.sessionId);
   if (!victimSlot) return null;
 
   await window.api.offloadSession(
     victim.sessionId,
     victimSlot.termId,
-    victim.sessionId,
+    victim.sessionId, // Claude session UUID = our session ID (same value from hook)
+    { cwd: victim.cwd, gitRoot: victim.gitRoot, pid: victim.pid },
   );
 
-  // Poll until the slot becomes fresh (idle signal changes)
-  const fresh = await pollForFreshSlot(15000);
+  // Poll until the slot becomes fresh (idle signal changes after /clear)
+  const fresh = await pollForFreshSlot(30000);
   if (fresh) {
     destroySessionTerminals(victim.sessionId);
   }
   return fresh;
 }
 
-// Poll getSessions() until a fresh slot appears
+// Poll getSessions() until a fresh pool slot appears
 async function pollForFreshSlot(timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, 500));
     const sessions = await window.api.getSessions();
-    const fresh = sessions.find((s) => s.status === "fresh");
+    const pool = await window.api.poolRead();
+    const poolFreshIds = new Set(
+      (pool?.slots || [])
+        .filter((s) => s.status === "fresh" && s.sessionId)
+        .map((s) => s.sessionId),
+    );
+    const fresh = sessions.find(
+      (s) => s.status === "fresh" || poolFreshIds.has(s.sessionId),
+    );
     if (fresh) return fresh;
   }
   return null;
@@ -900,12 +925,16 @@ async function resumeOffloadedSession(session) {
     return;
   }
 
-  // Send /resume to the fresh slot's terminal
+  // Send /resume to the fresh slot's terminal (mirroring sub-Claude's flow)
+  await window.api.ptyWrite(slot.termId, "\x1b"); // Escape
+  await new Promise((r) => setTimeout(r, 500));
+  await window.api.ptyWrite(slot.termId, "\x15"); // Ctrl-U clear line
+  await new Promise((r) => setTimeout(r, 200));
   await window.api.ptyWrite(slot.termId, `/resume ${meta.claudeSessionId}\n`);
 
   // Poll until the session appears in getSessions
   const started = Date.now();
-  while (Date.now() - started < 10000) {
+  while (Date.now() - started < 30000) {
     await new Promise((r) => setTimeout(r, 500));
     const sessions = await window.api.getSessions();
     const resumed = sessions.find(
@@ -961,7 +990,7 @@ async function selectSession(session) {
   sessionView.classList.remove("hidden");
   editorPane.classList.remove("hidden");
   editorProject.textContent = session.project
-    ? `${session.project} — ${session.cwd.replace(session.home, "~")}`
+    ? `${session.project} — ${displayPath(session)}`
     : session.sessionId;
 
   // Apply directory color to editor header
@@ -1021,9 +1050,18 @@ newSessionBtn.addEventListener("click", async () => {
     return;
   }
 
+  // Check if pool is still initializing (has starting/unresolved slots)
+  const health = await window.api.poolHealth();
+  if (health?.counts?.starting > 0) {
+    showNotification("Pool still initializing — wait for slots to be ready");
+    return;
+  }
+
   const freshSlot = await acquireFreshSlot();
   if (!freshSlot) {
-    showNotification("All pool slots are busy");
+    showNotification(
+      "All pool slots are busy — wait for a session to finish or resize pool",
+    );
     return;
   }
 
@@ -1472,7 +1510,7 @@ async function reconnectAllPtys() {
     sessionView.classList.remove("hidden");
     editorPane.classList.remove("hidden");
     editorProject.textContent = lastActive.project
-      ? `${lastActive.project} — ${lastActive.cwd.replace(lastActive.home, "~")}`
+      ? `${lastActive.project} — ${displayPath(lastActive)}`
       : lastActive.sessionId;
 
     const content = await window.api.readIntention(lastActive.sessionId);
