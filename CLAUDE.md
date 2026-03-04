@@ -9,7 +9,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/preload.js` — Context bridge (`api` object)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
-- `hooks/` — Claude Code plugin hooks (SessionStart → PID mapping)
+- `hooks/` — Claude Code plugin hooks (SessionStart → PID mapping + intention intro, UserPromptSubmit → intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
 
 ## Key paths
