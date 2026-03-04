@@ -45,6 +45,15 @@ Unix domain socket at `~/.open-cockpit/pty-daemon.sock`. Newline-delimited JSON.
 | `exit` | `termId, exitCode` | PTY process exited |
 | `replay` | `termId, data` | Buffered output sent on attach |
 
+## Command validation
+
+The `spawn` command validates the `cmd` field:
+- Known shells (`/bin/zsh`, `/bin/bash`, `/bin/sh`) are always allowed
+- Absolute paths to executable files are allowed (verified via `fs.accessSync`)
+- Relative or non-executable paths are rejected; falls back to `$SHELL`
+
+The daemon also augments `PATH` with `~/.claude/local/bin`, `~/.local/bin`, and `/usr/local/bin` so spawned processes can find tools like `claude`.
+
 ## Lifecycle
 
 - **Auto-start**: Electron's main process spawns the daemon if not running

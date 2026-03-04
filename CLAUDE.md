@@ -8,8 +8,10 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/api-server.js` — **API server**: Unix socket API for external process control ([docs/api.md](docs/api.md))
 - `src/main.js` — Main process: window, IPC, daemon client, session discovery
 - `src/preload.js` — Context bridge (`api` object)
+- `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
+- `bin/cockpit-cli` — CLI helper for API (socat + node fallback)
 - `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection, intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
 - `release.sh` — Version bump + marketplace deployment
