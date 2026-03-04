@@ -511,6 +511,24 @@ function readOffloadMeta(sessionId) {
 
 // --- Pool Management ---
 
+function resolveClaudePath() {
+  try {
+    return execFileSync("which", ["claude"], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+  } catch {}
+  const candidates = [
+    path.join(os.homedir(), ".claude", "local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    path.join(os.homedir(), ".local", "bin", "claude"),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error("Claude binary not found");
+}
+
 function readPool() {
   return readPoolFile(POOL_FILE);
 }
@@ -521,11 +539,12 @@ function writePool(pool) {
 
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
+  const claudePath = resolveClaudePath();
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
-    cmd: "/bin/zsh",
-    args: ["-ic", "exec c"],
+    cmd: claudePath,
+    args: ["--dangerously-skip-permissions"],
   });
   return createSlot(index, resp.termId, resp.pid);
 }
@@ -678,10 +697,33 @@ async function reconcilePool() {
   for (const slot of pool.slots) {
     const pty = daemonPtys.get(slot.termId);
     if (!pty || pty.exited) {
-      // Terminal died — mark slot as dead
       if (slot.status !== "dead") {
         slot.status = "dead";
         changed = true;
+      }
+      // Auto-restart dead slot
+      try {
+        const newSlot = await spawnPoolSlot(slot.index);
+        slot.termId = newSlot.termId;
+        slot.pid = newSlot.pid;
+        slot.status = "starting";
+        slot.sessionId = null;
+        changed = true;
+        pollForSessionId(slot.pid, 60000).then((sessionId) => {
+          const p = readPool();
+          if (!p) return;
+          const s = p.slots.find((x) => x.index === slot.index);
+          if (s) {
+            s.sessionId = sessionId;
+            s.status = sessionId ? "fresh" : "error";
+            writePool(p);
+          }
+        });
+      } catch (err) {
+        console.error(
+          `[main] Failed to restart slot ${slot.index}:`,
+          err.message,
+        );
       }
       continue;
     }
@@ -716,6 +758,19 @@ function syncPoolStatuses(sessions) {
   if (!pool) return;
   const updated = syncStatuses(pool, sessions);
   if (updated) writePool(updated);
+}
+
+async function poolDestroy() {
+  const pool = readPool();
+  if (!pool) return;
+  for (const slot of pool.slots) {
+    try {
+      await daemonRequest({ type: "kill", termId: slot.termId });
+    } catch {}
+  }
+  try {
+    fs.unlinkSync(POOL_FILE);
+  } catch {}
 }
 
 function readIntention(sessionId) {
@@ -1102,6 +1157,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pool-resize", async (_e, newSize) => poolResize(newSize));
   ipcMain.handle("pool-health", () => getPoolHealth());
   ipcMain.handle("pool-read", () => readPool());
+  ipcMain.handle("pool-destroy", async () => poolDestroy());
 
   // Poll for a session-pid file to appear for a given PID
   ipcMain.handle("pty-wait-session", (_e, pid) => {
