@@ -1,0 +1,16 @@
+{
+  "name": "claude-sessions",
+  "version": "0.1.0",
+  "description": "Electron app for managing Claude Code sessions",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "markdown-it": "^14.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

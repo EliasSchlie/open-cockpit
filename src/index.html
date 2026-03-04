@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Claude Sessions</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <h2>Sessions</h2>
+        <button id="refresh-btn" title="Refresh sessions">↻</button>
+      </div>
+      <ul id="session-list"></ul>
+    </aside>
+    <main id="editor-area">
+      <div id="empty-state">
+        <p>Select a session to edit its intention</p>
+      </div>
+      <div id="editor-container" class="hidden">
+        <div id="editor-header">
+          <span id="editor-project"></span>
+          <span id="save-status"></span>
+        </div>
+        <div id="split-pane">
+          <textarea id="editor" spellcheck="false" placeholder="Write your session intention here..."></textarea>
+          <div id="preview"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
