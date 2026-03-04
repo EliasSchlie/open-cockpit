@@ -9,8 +9,9 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/preload.js` — Context bridge (`api` object)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
-- `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection)
+- `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection, intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
+- `release.sh` — Version bump + marketplace deployment
 
 ## Key paths
 
@@ -27,6 +28,15 @@ Electron app + Claude Code plugin for session intention tracking.
 npm start       # Build + run
 npm run build   # Bundle renderer only (esbuild)
 ```
+
+## Releasing
+
+```bash
+./release.sh        # auto-increments patch (0.1.0 → 0.1.1)
+./release.sh 1.0.0  # explicit version
+```
+
+Bumps version in `.claude-plugin/plugin.json` and `EliasSchlie/claude-plugins` marketplace, commits, pushes both. Marketplace has `autoUpdate: true` — new sessions pick up changes automatically. **Run after pushing any hook changes.**
 
 ## Dev vs production
 
