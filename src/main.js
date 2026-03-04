@@ -187,6 +187,9 @@ function getOffloadedSessions() {
         status: "offloaded",
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
+        hasSnapshot: fs.existsSync(
+          path.join(OFFLOADED_DIR, dir, "snapshot.log"),
+        ),
       });
     } catch {}
   }
@@ -290,6 +293,31 @@ function getSessions() {
     }
   }
 
+  // Deduplicate: if multiple PIDs map to the same sessionId, keep the newest
+  const bySessionId = new Map();
+  for (const s of sessions) {
+    const existing = bySessionId.get(s.sessionId);
+    if (!existing) {
+      bySessionId.set(s.sessionId, s);
+    } else {
+      // Prefer alive over dead, then highest PID (most recent process)
+      const dominated =
+        s.alive && !existing.alive
+          ? existing
+          : !s.alive && existing.alive
+            ? s
+            : Number(s.pid) > Number(existing.pid)
+              ? existing
+              : s;
+      bySessionId.set(s.sessionId, dominated === existing ? s : existing);
+      // Clean up the dominated PID file
+      try {
+        fs.unlinkSync(path.join(SESSION_PIDS_DIR, dominated.pid));
+      } catch {}
+    }
+  }
+  const dedupedSessions = [...bySessionId.values()];
+
   // Tag sessions as pool vs external
   const pool = readPool();
   const poolSessionIds = new Set();
@@ -298,20 +326,20 @@ function getSessions() {
       if (slot.sessionId) poolSessionIds.add(slot.sessionId);
     }
   }
-  for (const s of sessions) {
+  for (const s of dedupedSessions) {
     s.isPool = poolSessionIds.has(s.sessionId);
   }
 
   // Add offloaded sessions (always pool, skip if live session exists)
-  const liveIds = new Set(sessions.map((s) => s.sessionId));
+  const liveIds = new Set(dedupedSessions.map((s) => s.sessionId));
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       offloaded.isPool = true;
-      sessions.push(offloaded);
+      dedupedSessions.push(offloaded);
     }
   }
 
-  return sortSessions(sessions);
+  return sortSessions(dedupedSessions);
 }
 
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
