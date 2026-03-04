@@ -165,6 +165,22 @@ body {
   opacity: 0.5;
 }
 
+.session-status.offloaded {
+  background: var(--text-dim);
+  border: 1px solid var(--text-dim);
+  width: 5px;
+  height: 5px;
+}
+
+/* Offloaded sessions are dimmed */
+.session-item.offloaded {
+  opacity: 0.55;
+}
+
+.session-item.offloaded:hover {
+  opacity: 0.8;
+}
+
 /* Directory color indicator */
 .session-dir-indicator {
   width: 3px;
@@ -181,6 +197,18 @@ body {
   letter-spacing: 0.05em;
   color: var(--text-dim);
   cursor: default;
+}
+
+.session-ext-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  background: var(--border);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
 }
 
 .session-cwd {
@@ -441,4 +469,220 @@ body {
   color: var(--text-dim);
   font-size: 12px;
   font-family: "SF Mono", Menlo, monospace;
+}
+
+/* Offload menu overlay */
+.offload-menu-overlay {
+  display: flex;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+.offload-menu-dialog {
+  width: 360px;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  padding: 20px;
+}
+
+.offload-menu-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.offload-menu-subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+.offload-menu-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.offload-menu-btn {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.offload-menu-btn:hover {
+  background: var(--accent-dim);
+  border-color: rgba(255, 26, 26, 0.3);
+}
+
+.offload-menu-load {
+  color: var(--accent);
+  border-color: rgba(255, 26, 26, 0.3);
+}
+
+.offload-menu-cancel {
+  color: var(--text-dim);
+}
+
+/* Snapshot viewer */
+.snapshot-dialog {
+  width: 700px;
+  max-height: 80vh;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.snapshot-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.snapshot-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.snapshot-close:hover {
+  color: var(--text);
+}
+
+.snapshot-content {
+  padding: 12px 16px;
+  overflow: auto;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Pool settings */
+.pool-settings-dialog {
+  width: 480px;
+  max-height: 80vh;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pool-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pool-settings-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.pool-health-summary {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  line-height: 2;
+}
+
+.pool-slots-list {
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.pool-slot-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pool-slot-row:last-child {
+  border-bottom: none;
+}
+
+.pool-slot-label {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-slot-status {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pool-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pool-size-label {
+  font-size: 13px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pool-size-input {
+  width: 56px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  text-align: center;
+}
+
+.pool-size-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }

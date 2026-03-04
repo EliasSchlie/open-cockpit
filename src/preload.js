@@ -37,6 +37,28 @@ contextBridge.exposeInMainWorld("api", {
   focusExternalTerminal: (pid) =>
     ipcRenderer.invoke("focus-external-terminal", pid),
 
+  // Pool / offload
+  offloadSession: (sessionId, termId, claudeSessionId, sessionInfo) =>
+    ipcRenderer.invoke(
+      "offload-session",
+      sessionId,
+      termId,
+      claudeSessionId,
+      sessionInfo,
+    ),
+  removeOffloadData: (sessionId) =>
+    ipcRenderer.invoke("remove-offload-data", sessionId),
+  readOffloadSnapshot: (sessionId) =>
+    ipcRenderer.invoke("read-offload-snapshot", sessionId),
+  readOffloadMeta: (sessionId) =>
+    ipcRenderer.invoke("read-offload-meta", sessionId),
+
+  // Pool management
+  poolInit: (size) => ipcRenderer.invoke("pool-init", size),
+  poolResize: (newSize) => ipcRenderer.invoke("pool-resize", newSize),
+  poolHealth: () => ipcRenderer.invoke("pool-health"),
+  poolRead: () => ipcRenderer.invoke("pool-read"),
+
   // Terminal (forwarded to PTY daemon via main process)
   ptySpawn: (opts) => ipcRenderer.invoke("pty-spawn", opts),
   ptyWrite: (termId, data) => ipcRenderer.invoke("pty-write", termId, data),

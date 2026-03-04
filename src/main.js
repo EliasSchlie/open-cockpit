@@ -4,6 +4,15 @@ const fs = require("fs");
 const os = require("os");
 const net = require("net");
 const { spawn: spawnChild, execFileSync, execSync } = require("child_process");
+const { sortSessions } = require("./sort-sessions");
+const {
+  readPool: readPoolFile,
+  writePool: writePoolFile,
+  computePoolHealth,
+  syncStatuses,
+  createSlot,
+  selectShrinkCandidates,
+} = require("./pool");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -15,6 +24,9 @@ const DAEMON_SOCKET = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
 const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
+const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
+const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
+const DEFAULT_POOL_SIZE = 5;
 
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
@@ -139,7 +151,7 @@ function hasUserInput(transcriptPath) {
     const buf = Buffer.alloc(64 * 1024); // 64KB chunks
     let bytesRead;
     let offset = 0;
-    const needle = '"type":"human"';
+    const needle = '"type":"user"';
     try {
       while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, offset)) > 0) {
         if (buf.toString("utf-8", 0, bytesRead).includes(needle)) return true;
@@ -154,123 +166,481 @@ function hasUserInput(transcriptPath) {
   }
 }
 
-function getSessions() {
-  if (!fs.existsSync(SESSION_PIDS_DIR)) return [];
-
+// Read offloaded session metadata
+function getOffloadedSessions() {
+  if (!fs.existsSync(OFFLOADED_DIR)) return [];
   const sessions = [];
-  for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
-    const pid = file;
-    const sessionId = fs
-      .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
-      .trim();
-    if (!sessionId) continue;
-
-    let alive = false;
+  for (const dir of fs.readdirSync(OFFLOADED_DIR)) {
     try {
-      process.kill(Number(pid), 0);
-      alive = true;
-    } catch {
-      alive = false;
-    }
+      const meta = readOffloadMeta(dir);
+      if (!meta) continue;
+      sessions.push({
+        pid: null,
+        sessionId: meta.sessionId || dir,
+        alive: false,
+        cwd: meta.cwd || null,
+        home: os.homedir(),
+        gitRoot: meta.gitRoot || null,
+        project: meta.cwd ? path.basename(meta.cwd) : null,
+        hasIntention: meta.intentionHeading != null,
+        intentionHeading: meta.intentionHeading || null,
+        status: "offloaded",
+        idleTs: meta.lastInteractionTs || 0,
+        claudeSessionId: meta.claudeSessionId || null,
+      });
+    } catch {}
+  }
+  return sessions;
+}
 
-    let cwd = null;
-    if (alive) {
+function getSessions() {
+  const sessions = [];
+
+  // Live sessions from session-pids
+  if (fs.existsSync(SESSION_PIDS_DIR)) {
+    for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
+      const pid = file;
+      const sessionId = fs
+        .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
+        .trim();
+      if (!sessionId) continue;
+
+      let alive = false;
       try {
-        const lsof = execFileSync(
-          "lsof",
-          ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
-          { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
-        );
-        const match = lsof.match(/^n(.+)$/m);
-        if (match) cwd = match[1];
-      } catch {}
-    }
-
-    // Refine CWD via JSONL when spawned from $HOME
-    if (cwd === os.homedir()) {
-      const refined = getCwdFromJsonl(sessionId);
-      if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
-        cwd = refined;
+        process.kill(Number(pid), 0);
+        alive = true;
+      } catch {
+        alive = false;
       }
-    }
 
-    const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
-    const hasIntention = fs.existsSync(intentionFile);
-    const intentionHeading = hasIntention
-      ? getIntentionHeading(intentionFile)
-      : null;
-
-    // Find git root for color grouping
-    // Check for .git directory (not file — worktrees have a .git file pointing elsewhere)
-    let gitRoot = null;
-    if (cwd) {
-      let dir = cwd;
-      while (dir !== path.dirname(dir)) {
-        const dotGit = path.join(dir, ".git");
+      let cwd = null;
+      if (alive) {
         try {
-          if (fs.statSync(dotGit).isDirectory()) {
-            gitRoot = dir;
-            break;
-          }
+          const lsof = execFileSync(
+            "lsof",
+            ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
+            { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+          );
+          const match = lsof.match(/^n(.+)$/m);
+          if (match) cwd = match[1];
         } catch {}
-        dir = path.dirname(dir);
       }
-    }
 
-    // Determine session status: idle, processing, or fresh
-    const idleSignal = alive ? getIdleSignal(pid) : null;
-    let status;
-    let idleTs = 0;
+      // Refine CWD via JSONL when spawned from $HOME
+      if (cwd === os.homedir()) {
+        const refined = getCwdFromJsonl(sessionId);
+        if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
+          cwd = refined;
+        }
+      }
 
-    if (!alive) {
-      status = "dead";
-    } else if (idleSignal) {
-      idleTs = idleSignal.ts || 0;
-      // Idle signal present — but is it fresh (never had user input)?
-      if (!hasUserInput(idleSignal.transcript)) {
-        status = "fresh";
+      const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+      const hasIntention = fs.existsSync(intentionFile);
+      const intentionHeading = hasIntention
+        ? getIntentionHeading(intentionFile)
+        : null;
+
+      // Find git root for color grouping
+      let gitRoot = null;
+      if (cwd) {
+        let dir = cwd;
+        while (dir !== path.dirname(dir)) {
+          const dotGit = path.join(dir, ".git");
+          try {
+            if (fs.statSync(dotGit).isDirectory()) {
+              gitRoot = dir;
+              break;
+            }
+          } catch {}
+          dir = path.dirname(dir);
+        }
+      }
+
+      // Determine session status: idle, processing, or fresh
+      const idleSignal = alive ? getIdleSignal(pid) : null;
+      let status;
+      let idleTs = 0;
+
+      if (!alive) {
+        status = "dead";
+      } else if (idleSignal) {
+        idleTs = idleSignal.ts || 0;
+        if (!hasUserInput(idleSignal.transcript)) {
+          status = "fresh";
+        } else {
+          status = "idle";
+        }
       } else {
-        status = "idle";
+        status = "processing";
       }
-    } else {
-      status = "processing";
-    }
 
-    sessions.push({
-      pid,
-      sessionId,
-      alive,
-      cwd,
-      home: os.homedir(),
-      gitRoot,
-      project: cwd ? path.basename(cwd) : null,
-      hasIntention,
-      intentionHeading,
-      status,
-      idleTs,
-    });
+      sessions.push({
+        pid,
+        sessionId,
+        alive,
+        cwd,
+        home: os.homedir(),
+        gitRoot,
+        project: cwd ? path.basename(cwd) : null,
+        hasIntention,
+        intentionHeading,
+        status,
+        idleTs,
+      });
+    }
+  }
+
+  // Tag sessions as pool vs external
+  const pool = readPool();
+  const poolSessionIds = new Set();
+  if (pool) {
+    for (const slot of pool.slots) {
+      if (slot.sessionId) poolSessionIds.add(slot.sessionId);
+    }
+  }
+  for (const s of sessions) {
+    s.isPool = poolSessionIds.has(s.sessionId);
+  }
+
+  // Add offloaded sessions (always pool, skip if live session exists)
+  const liveIds = new Set(sessions.map((s) => s.sessionId));
+  for (const offloaded of getOffloadedSessions()) {
+    if (!liveIds.has(offloaded.sessionId)) {
+      offloaded.isPool = true;
+      sessions.push(offloaded);
+    }
   }
 
   return sortSessions(sessions);
 }
 
-// Sort into groups: idle (LIFO by ts) → processing (longest running first) → fresh → dead
-function sortSessions(sessions) {
-  const idle = sessions.filter((s) => s.status === "idle");
-  const processing = sessions.filter((s) => s.status === "processing");
-  const fresh = sessions.filter((s) => s.status === "fresh");
-  const dead = sessions.filter((s) => s.status === "dead");
+// Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
+// Pool and external sessions are mixed together in the same sections.
+// Offload a session: save snapshot + meta, then send /clear to terminal
+async function offloadSession(
+  sessionId,
+  termId,
+  claudeSessionId,
+  { cwd, gitRoot, pid } = {},
+) {
+  validateSessionId(sessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, sessionId);
+  fs.mkdirSync(offloadDir, { recursive: true });
 
-  // Idle: most recently idle on top (LIFO — highest ts first)
-  idle.sort((a, b) => b.idleTs - a.idleTs);
-  // Processing: longest running on top (lowest PID = oldest process)
-  processing.sort((a, b) => Number(a.pid) - Number(b.pid));
-  // Fresh: newest first
-  fresh.sort((a, b) => Number(b.pid) - Number(a.pid));
-  // Dead: newest first
-  dead.sort((a, b) => Number(b.pid) - Number(a.pid));
+  // Get terminal buffer as snapshot
+  try {
+    const resp = await daemonRequest({ type: "list" });
+    const pty = resp.ptys.find((p) => p.termId === termId);
+    if (pty && pty.buffer) {
+      fs.writeFileSync(path.join(offloadDir, "snapshot.log"), pty.buffer);
+    }
+  } catch {}
 
-  return [...idle, ...processing, ...fresh, ...dead];
+  // Read intention heading
+  const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+  const intentionHeading = fs.existsSync(intentionFile)
+    ? getIntentionHeading(intentionFile)
+    : null;
+
+  const meta = {
+    sessionId,
+    claudeSessionId: claudeSessionId || null,
+    cwd: cwd || null,
+    gitRoot: gitRoot || null,
+    intentionHeading,
+    lastInteractionTs: Math.floor(Date.now() / 1000),
+    offloadedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(
+    path.join(offloadDir, "meta.json"),
+    JSON.stringify(meta, null, 2),
+  );
+
+  // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
+  // 1. Escape (safe no-op or exits any menu)
+  daemonSend({ type: "write", termId, data: "\x1b" });
+  await new Promise((r) => setTimeout(r, 500));
+  // 2. Ctrl-U to clear any partial input, then /clear
+  daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
+  await new Promise((r) => setTimeout(r, 200));
+  daemonSend({ type: "write", termId, data: "/clear\n" });
+
+  // 3. Remove idle signal so session re-detects as fresh after /clear
+  if (pid) {
+    const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
+    try {
+      fs.unlinkSync(idleSignalFile);
+    } catch {}
+  }
+
+  // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
+  const pool = readPool();
+  if (pool) {
+    const slot = pool.slots.find((s) => s.termId === termId);
+    if (slot) {
+      const oldSessionId = slot.sessionId;
+      slot.status = "fresh";
+      slot.sessionId = null;
+      writePool(pool);
+
+      // Poll until the PID file changes from old UUID to new one
+      pollForSessionId(slot.pid, 60000, oldSessionId).then((newSessionId) => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === termId);
+        if (s) {
+          s.sessionId = newSessionId;
+          s.status = newSessionId ? "fresh" : "error";
+          writePool(p);
+        }
+      });
+    }
+  }
+
+  return meta;
+}
+
+// Validate sessionId format to prevent path traversal
+function validateSessionId(sessionId) {
+  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+    throw new Error("Invalid session ID format");
+  }
+}
+
+// Remove offload data for a session (after resume)
+function removeOffloadData(sessionId) {
+  validateSessionId(sessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, sessionId);
+  try {
+    fs.rmSync(offloadDir, { recursive: true });
+  } catch {}
+}
+
+// Read offload snapshot
+function readOffloadSnapshot(sessionId) {
+  validateSessionId(sessionId);
+  const snapshotFile = path.join(OFFLOADED_DIR, sessionId, "snapshot.log");
+  try {
+    return fs.readFileSync(snapshotFile, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+// Read offload meta
+function readOffloadMeta(sessionId) {
+  validateSessionId(sessionId);
+  const metaFile = path.join(OFFLOADED_DIR, sessionId, "meta.json");
+  try {
+    return JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+// --- Pool Management ---
+
+function readPool() {
+  return readPoolFile(POOL_FILE);
+}
+
+function writePool(pool) {
+  writePoolFile(POOL_FILE, pool);
+}
+
+// Spawn a single Claude session via the PTY daemon. Returns a slot object.
+async function spawnPoolSlot(index) {
+  const resp = await daemonRequest({
+    type: "spawn",
+    cwd: os.homedir(),
+    cmd: "/bin/zsh",
+    args: ["-ic", "exec c"],
+  });
+  return createSlot(index, resp.termId, resp.pid);
+}
+
+// Initialize pool: spawn N Claude sessions via PTY daemon
+async function poolInit(size) {
+  size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
+  const existing = readPool();
+  if (existing) {
+    throw new Error(
+      `Pool already initialized (${existing.slots.length} slots)`,
+    );
+  }
+
+  const pool = {
+    version: 1,
+    poolSize: size,
+    createdAt: new Date().toISOString(),
+    slots: [],
+  };
+
+  // Spawn each slot as a Claude session in a daemon terminal (parallel)
+  const slots = await Promise.all(
+    Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
+  );
+  pool.slots = slots;
+
+  writePool(pool);
+
+  // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
+  // exec in the spawn command makes daemon PID = Claude PID, so session-pids/<PID> matches.
+  await Promise.allSettled(
+    pool.slots.map(async (slot) => {
+      const sessionId = await pollForSessionId(slot.pid, 60000);
+      slot.sessionId = sessionId;
+      slot.status = sessionId ? "fresh" : "error";
+    }),
+  );
+
+  writePool(pool);
+  return pool;
+}
+
+// Poll for a session-pid file to appear (or change from excludeId) for a PID.
+// Used both for initial session discovery and after /clear (which reuses the PID).
+function pollForSessionId(pid, timeoutMs, excludeId = null) {
+  return new Promise((resolve) => {
+    let elapsed = 0;
+    const interval = 500;
+    const initialDelay = excludeId ? 2000 : 0; // Give /clear time to take effect
+    const check = () => {
+      try {
+        const sessionId = fs
+          .readFileSync(path.join(SESSION_PIDS_DIR, String(pid)), "utf-8")
+          .trim();
+        if (sessionId && sessionId !== excludeId) return resolve(sessionId);
+      } catch {} // File doesn't exist yet
+      elapsed += interval;
+      if (elapsed >= timeoutMs) return resolve(null);
+      setTimeout(check, interval);
+    };
+    setTimeout(check, initialDelay);
+  });
+}
+
+// Resize pool: add or remove slots
+async function poolResize(newSize) {
+  newSize = Math.max(1, Math.min(20, newSize));
+  const pool = readPool();
+  if (!pool) throw new Error("Pool not initialized");
+
+  const currentSize = pool.slots.length;
+  if (newSize === currentSize) return pool;
+
+  if (newSize > currentSize) {
+    // Grow: spawn new slots in parallel
+    const newSlots = await Promise.all(
+      Array.from({ length: newSize - currentSize }, (_, j) =>
+        spawnPoolSlot(currentSize + j),
+      ),
+    );
+    pool.slots.push(...newSlots);
+
+    // Resolve session IDs in background (re-reads pool to avoid clobbering)
+    for (const slot of newSlots) {
+      pollForSessionId(slot.pid, 60000).then((sessionId) => {
+        const current = readPool();
+        if (!current) return;
+        const s = current.slots.find((x) => x.termId === slot.termId);
+        if (s) {
+          s.sessionId = sessionId;
+          s.status = sessionId ? "fresh" : "error";
+          writePool(current);
+        }
+      });
+    }
+  } else {
+    // Shrink: kill excess slots (prefer fresh, then LRU idle)
+    const toRemove = currentSize - newSize;
+    const candidates = selectShrinkCandidates(pool.slots, toRemove);
+
+    let removed = 0;
+    for (const slot of candidates) {
+      try {
+        await daemonRequest({ type: "kill", termId: slot.termId });
+      } catch {}
+      pool.slots = pool.slots.filter((s) => s.index !== slot.index);
+      removed++;
+    }
+
+    // Re-index remaining slots
+    pool.slots.forEach((s, i) => (s.index = i));
+  }
+
+  pool.poolSize = newSize;
+  writePool(pool);
+  return pool;
+}
+
+// Get pool health: enrich pool.json slots with live session data
+function getPoolHealth() {
+  const pool = readPool();
+  const sessions = getSessions();
+  return computePoolHealth(pool, sessions, (pid) => {
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Reconcile pool.json with reality on startup.
+// Daemon terminals survive app restarts, so pool slots should still be alive.
+// Update any stale state (dead terminals, changed PIDs, etc.)
+async function reconcilePool() {
+  const pool = readPool();
+  if (!pool) return;
+
+  let changed = false;
+  let daemonPtys;
+  try {
+    const resp = await daemonRequest({ type: "list" });
+    daemonPtys = new Map(resp.ptys.map((p) => [p.termId, p]));
+  } catch {
+    return; // Daemon not running — can't reconcile
+  }
+
+  for (const slot of pool.slots) {
+    const pty = daemonPtys.get(slot.termId);
+    if (!pty || pty.exited) {
+      // Terminal died — mark slot as dead
+      if (slot.status !== "dead") {
+        slot.status = "dead";
+        changed = true;
+      }
+      continue;
+    }
+
+    // Terminal alive — update PID if it changed (shouldn't, but safety)
+    if (pty.pid !== slot.pid) {
+      slot.pid = pty.pid;
+      changed = true;
+    }
+
+    // Re-check session ID mapping
+    const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
+    if (fs.existsSync(pidFile)) {
+      const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
+      if (sessionId && sessionId !== slot.sessionId) {
+        slot.sessionId = sessionId;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) writePool(pool);
+}
+
+// Sync pool.json slot statuses with live session state.
+function syncPoolStatuses(sessions) {
+  const pool = readPool();
+  if (!pool) return;
+  const updated = syncStatuses(pool, sessions);
+  if (updated) writePool(updated);
 }
 
 function readIntention(sessionId) {
@@ -559,6 +929,13 @@ app.whenReady().then(async () => {
     console.error("[main] Failed to start daemon:", err.message);
   }
 
+  // Reconcile pool state with surviving daemon terminals
+  try {
+    await reconcilePool();
+  } catch (err) {
+    console.error("[main] Pool reconciliation failed:", err.message);
+  }
+
   ipcMain.handle("get-dir-colors", () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
@@ -566,7 +943,11 @@ app.whenReady().then(async () => {
       return {};
     }
   });
-  ipcMain.handle("get-sessions", () => getSessions());
+  ipcMain.handle("get-sessions", () => {
+    const sessions = getSessions();
+    syncPoolStatuses(sessions);
+    return sessions;
+  });
   ipcMain.handle("read-intention", (_e, sessionId) => readIntention(sessionId));
   ipcMain.handle("write-intention", (_e, sessionId, content) =>
     writeIntention(sessionId, content),
@@ -624,6 +1005,28 @@ app.whenReady().then(async () => {
   ipcMain.handle("focus-external-terminal", (_e, pid) =>
     focusExternalTerminal(pid),
   );
+
+  // Pool / offload IPC handlers
+  ipcMain.handle(
+    "offload-session",
+    async (_e, sessionId, termId, claudeSessionId, sessionInfo) =>
+      offloadSession(sessionId, termId, claudeSessionId, sessionInfo),
+  );
+  ipcMain.handle("remove-offload-data", (_e, sessionId) =>
+    removeOffloadData(sessionId),
+  );
+  ipcMain.handle("read-offload-snapshot", (_e, sessionId) =>
+    readOffloadSnapshot(sessionId),
+  );
+  ipcMain.handle("read-offload-meta", (_e, sessionId) =>
+    readOffloadMeta(sessionId),
+  );
+
+  // Pool management
+  ipcMain.handle("pool-init", async (_e, size) => poolInit(size));
+  ipcMain.handle("pool-resize", async (_e, newSize) => poolResize(newSize));
+  ipcMain.handle("pool-health", () => getPoolHealth());
+  ipcMain.handle("pool-read", () => readPool());
 
   // Poll for a session-pid file to appear for a given PID
   ipcMain.handle("pty-wait-session", (_e, pid) => {
