@@ -7,8 +7,6 @@
 :root {
   --bg: #1e1e2e;
   --bg-sidebar: #181825;
-  --bg-editor: #1e1e2e;
-  --bg-preview: #232336;
   --text: #cdd6f4;
   --text-dim: #6c7086;
   --accent: #89b4fa;
@@ -16,7 +14,6 @@
   --border: #313244;
   --green: #a6e3a1;
   --red: #f38ba8;
-  --yellow: #f9e2af;
 }
 
 html,
@@ -49,7 +46,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 8px;
-  padding-top: 40px; /* space for traffic lights */
+  padding-top: 40px;
 }
 
 #sidebar-header h2 {
@@ -179,90 +176,11 @@ body {
   color: var(--text-dim);
 }
 
-#split-pane {
-  display: flex;
+#editor-mount {
   flex: 1;
-  min-height: 0;
+  overflow: hidden;
 }
 
-#editor {
-  flex: 1;
-  background: var(--bg-editor);
-  color: var(--text);
-  border: none;
-  padding: 16px;
-  font-family: "SF Mono", "Menlo", "Consolas", monospace;
-  font-size: 14px;
-  line-height: 1.6;
-  resize: none;
-  outline: none;
-  border-right: 1px solid var(--border);
-}
-
-#preview {
-  flex: 1;
-  background: var(--bg-preview);
-  padding: 16px;
-  overflow-y: auto;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-/* Markdown preview styles */
-#preview h1 {
-  font-size: 24px;
-  margin-bottom: 12px;
-  color: var(--accent);
-}
-#preview h2 {
-  font-size: 20px;
-  margin: 20px 0 8px;
-  color: var(--accent);
-}
-#preview h3 {
-  font-size: 16px;
-  margin: 16px 0 6px;
-  color: var(--accent);
-}
-#preview p {
-  margin-bottom: 10px;
-}
-#preview ul,
-#preview ol {
-  margin: 8px 0 8px 20px;
-}
-#preview li {
-  margin-bottom: 4px;
-}
-#preview code {
-  background: var(--border);
-  padding: 2px 5px;
-  border-radius: 3px;
-  font-family: "SF Mono", "Menlo", monospace;
-  font-size: 13px;
-}
-#preview pre {
-  background: var(--bg-sidebar);
-  padding: 12px;
-  border-radius: 6px;
-  margin: 10px 0;
-  overflow-x: auto;
-}
-#preview pre code {
-  background: none;
-  padding: 0;
-}
-#preview blockquote {
-  border-left: 3px solid var(--accent);
-  padding-left: 12px;
-  color: var(--text-dim);
-  margin: 10px 0;
-}
-#preview a {
-  color: var(--accent);
-}
-#preview hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 16px 0;
+#editor-mount .cm-editor {
+  height: 100%;
 }

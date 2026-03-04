@@ -6,8 +6,12 @@ const os = require("os");
 const INTENTIONS_DIR = path.join(os.homedir(), ".intentions");
 const SESSION_PIDS_DIR = path.join(os.homedir(), ".claude", "session-pids");
 
+// Track file watchers and which session each window is viewing
+const fileWatchers = new Map();
+let mainWindow = null;
+
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
     titleBarStyle: "hiddenInset",
@@ -15,13 +19,17 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
     },
   });
 
-  win.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.loadFile(path.join(__dirname, "index.html"));
+
+  mainWindow.webContents.on("console-message", (_e, level, message) => {
+    console.log(`[renderer] ${message}`);
+  });
 }
 
-// Get active sessions: read PID map, check which are alive, resolve project dirs
 function getSessions() {
   if (!fs.existsSync(SESSION_PIDS_DIR)) return [];
 
@@ -33,7 +41,6 @@ function getSessions() {
       .trim();
     if (!sessionId) continue;
 
-    // Check if process is alive
     let alive = false;
     try {
       process.kill(Number(pid), 0);
@@ -42,7 +49,6 @@ function getSessions() {
       alive = false;
     }
 
-    // Get CWD of the Claude process
     let cwd = null;
     if (alive) {
       try {
@@ -68,7 +74,6 @@ function getSessions() {
     });
   }
 
-  // Sort: alive first, then by PID descending (newest first)
   sessions.sort((a, b) => {
     if (a.alive !== b.alive) return a.alive ? -1 : 1;
     return Number(b.pid) - Number(a.pid);
@@ -83,9 +88,43 @@ function readIntention(sessionId) {
   return fs.readFileSync(file, "utf-8");
 }
 
+// Track the last content we wrote so we can detect external changes
+let lastWrittenContent = null;
+
 function writeIntention(sessionId, content) {
   fs.mkdirSync(INTENTIONS_DIR, { recursive: true });
+  lastWrittenContent = content;
   fs.writeFileSync(path.join(INTENTIONS_DIR, `${sessionId}.md`), content);
+}
+
+function watchIntention(sessionId) {
+  // Clean up previous watcher
+  if (fileWatchers.has("current")) {
+    fs.unwatchFile(fileWatchers.get("current"));
+    fileWatchers.delete("current");
+  }
+
+  const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(INTENTIONS_DIR, { recursive: true });
+    fs.writeFileSync(file, "");
+  }
+
+  // Use polling (fs.watchFile) — reliable on macOS unlike fs.watch
+  fs.watchFile(file, { interval: 500 }, () => {
+    try {
+      const content = fs.readFileSync(file, "utf-8");
+      // Skip if this is content we wrote ourselves
+      if (content === lastWrittenContent) return;
+      lastWrittenContent = content;
+      console.log("[main] External file change detected, sending to renderer");
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("intention-changed", content);
+      }
+    } catch {}
+  });
+
+  fileWatchers.set("current", file);
 }
 
 app.whenReady().then(() => {
@@ -93,6 +132,9 @@ app.whenReady().then(() => {
   ipcMain.handle("read-intention", (_e, sessionId) => readIntention(sessionId));
   ipcMain.handle("write-intention", (_e, sessionId, content) =>
     writeIntention(sessionId, content),
+  );
+  ipcMain.handle("watch-intention", (_e, sessionId) =>
+    watchIntention(sessionId),
   );
 
   createWindow();
@@ -103,5 +145,7 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  // Clean up watchers
+  for (const file of fileWatchers.values()) fs.unwatchFile(file);
   if (process.platform !== "darwin") app.quit();
 });
