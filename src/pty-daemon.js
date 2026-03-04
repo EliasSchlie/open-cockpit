@@ -20,6 +20,25 @@ const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
 const ALLOWED_SHELLS = new Set(["/bin/zsh", "/bin/bash", "/bin/sh"]);
+const EXTRA_PATH_DIRS = [
+  path.join(os.homedir(), ".claude", "local", "bin"),
+  path.join(os.homedir(), ".local", "bin"),
+  "/usr/local/bin",
+];
+
+function isAllowedCmd(cmd) {
+  if (ALLOWED_SHELLS.has(cmd)) return true;
+  // Allow absolute paths to existing executables
+  if (path.isAbsolute(cmd)) {
+    try {
+      fs.accessSync(cmd, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 
 // --- State ---
 let nextTermId = 1;
@@ -72,7 +91,7 @@ function cleanup() {
 
 function handleSpawn(socket, msg) {
   const shell =
-    msg.cmd && ALLOWED_SHELLS.has(msg.cmd)
+    msg.cmd && isAllowedCmd(msg.cmd)
       ? msg.cmd
       : process.env.SHELL || "/bin/zsh";
   const args = msg.args || [];
@@ -83,6 +102,7 @@ function handleSpawn(socket, msg) {
   const cleanEnv = { ...process.env, TERM: "xterm-256color" };
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_SESSION_ID;
+  cleanEnv.PATH = [...EXTRA_PATH_DIRS, process.env.PATH || ""].join(":");
 
   const proc = pty.spawn(shell, args, {
     name: "xterm-256color",
