@@ -14,12 +14,33 @@ Electron app + Claude Code plugin for session intention tracking.
 - `.claude-plugin/plugin.json` — Plugin manifest
 - `release.sh` — Version bump + marketplace deployment
 
+## Pool management
+
+The app can manage a pool of pre-started Claude sessions. Pool state lives in `~/.open-cockpit/pool.json`.
+
+- **Init**: via UI or API (`pool-init` with size). Spawns Claude sessions via the PTY daemon using `resolveClaudePath()` (finds `claude` binary via `which` + fallback paths).
+- **Dead slots**: `reconcilePool()` auto-restarts dead slots on app startup.
+- **Offloading**: Idle sessions get offloaded (snapshot + `/clear`). External `/clear` is also detected and saved as offloaded.
+- **Destroy**: `pool-destroy` kills all slots and removes `pool.json`.
+
+### Plugin update → pool reinit
+
+After releasing a plugin update (`./release.sh`), the hooks need 1–2 minutes to auto-update via the marketplace. Pool sessions started before the update have stale hooks. To pick up new hooks:
+
+1. Wait 1–2 minutes after release for auto-update
+2. Destroy the pool (`pool-destroy` via API or UI)
+3. Re-initialize (`pool-init`)
+
+New sessions will have the latest hooks.
+
 ## Key paths
 
 - `~/.claude/session-pids/<PID>` — Session ID (written by plugin hook)
 - `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created by app on first open)
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
+- `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings)
+- `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded session data (meta.json, snapshot.log)
 - `~/.open-cockpit/api.sock` — Programmatic API Unix socket
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
