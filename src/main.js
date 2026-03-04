@@ -290,6 +290,33 @@ function getSessions() {
     }
   }
 
+  // Deduplicate: if multiple PIDs map to the same sessionId, keep the best one
+  // (prefer alive over dead, then highest PID). Remove dominated PID files from disk.
+  const bySessionId = new Map();
+  for (const s of sessions) {
+    const existing = bySessionId.get(s.sessionId);
+    if (!existing) {
+      bySessionId.set(s.sessionId, s);
+      continue;
+    }
+    // Determine winner: alive beats dead, then highest PID wins
+    let dominated;
+    if (existing.alive !== s.alive) {
+      dominated = existing.alive ? s : existing;
+    } else {
+      dominated = Number(existing.pid) >= Number(s.pid) ? s : existing;
+    }
+    const winner = dominated === s ? existing : s;
+    bySessionId.set(s.sessionId, winner);
+    // Remove dominated PID file from disk
+    try {
+      fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(dominated.pid)));
+    } catch {}
+  }
+  const dedupedSessions = [...bySessionId.values()];
+  sessions.length = 0;
+  sessions.push(...dedupedSessions);
+
   // Tag sessions as pool vs external
   const pool = readPool();
   const poolSessionIds = new Set();

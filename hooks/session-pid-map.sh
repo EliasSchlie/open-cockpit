@@ -25,4 +25,18 @@ for f in "$SESSION_DIR"/*; do
     kill -0 "$pid" 2>/dev/null || rm -f "$f"
 done
 
+# Deduplicate: if another alive PID maps to same session_id, remove the older file
+for f in "$SESSION_DIR"/*; do
+    [ -f "$f" ] || continue
+    pid=$(basename "$f")
+    [ "$pid" = "$PPID" ] && continue
+    kill -0 "$pid" 2>/dev/null || continue
+    other_sid=$(cat "$f" 2>/dev/null) || continue
+    if [ "$other_sid" = "$session_id" ]; then
+        if [ "$f" -ot "$SESSION_DIR/$PPID" ]; then
+            rm -f "$f"
+        fi
+    fi
+done
+
 exit 0
