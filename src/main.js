@@ -174,6 +174,7 @@ function getOffloadedSessions() {
     try {
       const meta = readOffloadMeta(dir);
       if (!meta) continue;
+      const snapshotFile = path.join(OFFLOADED_DIR, dir, "snapshot.log");
       sessions.push({
         pid: null,
         sessionId: meta.sessionId || dir,
@@ -187,6 +188,7 @@ function getOffloadedSessions() {
         status: "offloaded",
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
+        hasSnapshot: fs.existsSync(snapshotFile),
       });
     } catch {}
   }
@@ -434,6 +436,48 @@ function validateSessionId(sessionId) {
   }
 }
 
+// Save offload metadata for a session that was cleared externally (e.g. /clear in terminal)
+function saveExternalClearOffload(oldSessionId, pid) {
+  validateSessionId(oldSessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, oldSessionId);
+  if (fs.existsSync(offloadDir)) return; // already offloaded
+  fs.mkdirSync(offloadDir, { recursive: true });
+
+  // Gather what metadata we can
+  let cwd = null,
+    gitRoot = null,
+    intentionHeading = null;
+  if (pid) {
+    try {
+      const lsof = execFileSync(
+        "lsof",
+        ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+      );
+      const m = lsof.match(/^n(.+)$/m);
+      if (m) cwd = m[1];
+    } catch {}
+  }
+  const intentionFile = path.join(INTENTIONS_DIR, `${oldSessionId}.md`);
+  intentionHeading = fs.existsSync(intentionFile)
+    ? getIntentionHeading(intentionFile)
+    : null;
+
+  const meta = {
+    sessionId: oldSessionId,
+    cwd,
+    gitRoot,
+    intentionHeading,
+    externalClear: true,
+    lastInteractionTs: Math.floor(Date.now() / 1000),
+    offloadedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(
+    path.join(offloadDir, "meta.json"),
+    JSON.stringify(meta, null, 2),
+  );
+}
+
 // Remove offload data for a session (after resume)
 function removeOffloadData(sessionId) {
   validateSessionId(sessionId);
@@ -653,7 +697,11 @@ async function reconcilePool() {
     if (fs.existsSync(pidFile)) {
       const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
       if (sessionId && sessionId !== slot.sessionId) {
+        if (slot.sessionId) {
+          saveExternalClearOffload(slot.sessionId, slot.pid);
+        }
         slot.sessionId = sessionId;
+        slot.status = "fresh";
         changed = true;
       }
     }

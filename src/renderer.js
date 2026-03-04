@@ -764,7 +764,7 @@ async function showOffloadMenu(session) {
       <div class="offload-menu-subtitle">${escapeHtml(displayPath(session))}</div>
       <div class="offload-menu-actions">
         <button class="offload-menu-btn offload-menu-load">Load Session</button>
-        <button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>
+        ${session.hasSnapshot !== false ? '<button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>' : ""}
         <button class="offload-menu-btn offload-menu-cancel">Cancel</button>
       </div>
     </div>
@@ -781,13 +781,14 @@ async function showOffloadMenu(session) {
     menu.remove();
   });
 
-  menu
-    .querySelector(".offload-menu-snapshot")
-    .addEventListener("click", async () => {
+  const snapshotBtn = menu.querySelector(".offload-menu-snapshot");
+  if (snapshotBtn) {
+    snapshotBtn.addEventListener("click", async () => {
       menu.remove();
       const snapshot = await window.api.readOffloadSnapshot(session.sessionId);
       showSnapshotViewer(session, snapshot);
     });
+  }
 
   menu
     .querySelector(".offload-menu-load")
