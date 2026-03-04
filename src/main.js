@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const pty = require("node-pty");
+const net = require("net");
+const { spawn: spawnChild } = require("child_process");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -10,14 +11,19 @@ const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
 const COLORS_FILE = path.join(OPEN_COCKPIT_DIR, "colors.json");
 const SESSION_PIDS_DIR = path.join(os.homedir(), ".claude", "session-pids");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+const DAEMON_SOCKET = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
+const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
 
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
 let mainWindow = null;
 
-// PTY management
-const ptyProcesses = new Map(); // termId -> pty process
-let nextTermId = 1;
+// --- PTY Daemon Client ---
+let daemonSocket = null;
+let daemonConnecting = null; // Promise while connection in progress
+let daemonReqId = 0;
+const pendingRequests = new Map(); // reqId -> { resolve, reject }
 
 function createWindow() {
   if (IS_DEV) {
@@ -39,6 +45,16 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
+  // Ctrl+Tab / Ctrl+Shift+Tab — not supported as menu accelerators, handle via input events
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.control && input.key === "Tab") {
+      event.preventDefault();
+      mainWindow.webContents.send(
+        input.shift ? "prev-terminal-tab" : "next-terminal-tab",
+      );
+    }
+  });
+
   mainWindow.webContents.on("console-message", (_e, level, message) => {
     console.log(`[renderer] ${message}`);
   });
@@ -46,14 +62,17 @@ function createWindow() {
 
 function getCwdFromJsonl(sessionId) {
   try {
-    const { execSync } = require("child_process");
-    const jsonlPath = execSync(
-      `find ${JSON.stringify(CLAUDE_PROJECTS_DIR)} -name "${sessionId}.jsonl" 2>/dev/null | head -1`,
-      { encoding: "utf-8" },
-    ).trim();
+    const { execFileSync } = require("child_process");
+    const jsonlPath = execFileSync(
+      "find",
+      [CLAUDE_PROJECTS_DIR, "-name", `${sessionId}.jsonl`],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+    )
+      .split("\n")[0]
+      .trim();
     if (!jsonlPath) return null;
 
-    const tail = execSync(`tail -100 ${JSON.stringify(jsonlPath)}`, {
+    const tail = execFileSync("tail", ["-100", jsonlPath], {
       encoding: "utf-8",
     });
     let cwd = "";
@@ -210,18 +229,157 @@ function watchIntention(sessionId) {
 
 const pendingPolls = new Set();
 
-function killAllPty() {
-  for (const p of ptyProcesses.values()) {
-    try {
-      p.kill();
-    } catch {}
+// --- Daemon client helpers ---
+
+function isDaemonRunning() {
+  try {
+    const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim(), 10);
+    process.kill(pid, 0); // signal 0 = check if alive
+    return true;
+  } catch {
+    return false;
   }
-  ptyProcesses.clear();
-  for (const entry of pendingPolls) entry.cancel();
-  pendingPolls.clear();
 }
 
-app.whenReady().then(() => {
+function startDaemon() {
+  return new Promise((resolve, reject) => {
+    if (isDaemonRunning()) return resolve();
+
+    const child = spawnChild(process.execPath, [DAEMON_SCRIPT], {
+      detached: true,
+      stdio: "ignore",
+      cwd: os.homedir(), // Don't inherit app cwd — prevents kill-by-cwd from hitting daemon
+      env: { ...process.env },
+    });
+    child.unref();
+
+    // Wait for socket to appear
+    let attempts = 0;
+    const check = () => {
+      if (fs.existsSync(DAEMON_SOCKET)) return resolve();
+      if (++attempts > 40) return reject(new Error("Daemon failed to start"));
+      setTimeout(check, 100);
+    };
+    setTimeout(check, 50);
+  });
+}
+
+function connectToDaemon() {
+  if (daemonSocket && !daemonSocket.destroyed) return Promise.resolve();
+  if (daemonConnecting) return daemonConnecting;
+
+  daemonConnecting = new Promise((resolve, reject) => {
+    const sock = net.createConnection(DAEMON_SOCKET);
+    let buf = "";
+    let settled = false;
+
+    sock.on("connect", () => {
+      if (settled) return; // error already fired
+      settled = true;
+      daemonSocket = sock;
+      daemonConnecting = null;
+      resolve();
+    });
+
+    sock.on("data", (chunk) => {
+      buf += chunk.toString();
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (!line.trim()) continue;
+        try {
+          handleDaemonMessage(JSON.parse(line));
+        } catch (err) {
+          console.error("[main] Daemon parse error:", err.message);
+        }
+      }
+    });
+
+    sock.on("close", () => {
+      daemonSocket = null;
+      daemonConnecting = null;
+      // Reject all pending requests
+      for (const [, { reject: rej }] of pendingRequests) {
+        rej(new Error("Daemon disconnected"));
+      }
+      pendingRequests.clear();
+    });
+
+    sock.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        daemonConnecting = null;
+        reject(err);
+      }
+      // After connection established, errors trigger close — handled there
+    });
+  });
+
+  return daemonConnecting;
+}
+
+async function ensureDaemon() {
+  if (daemonSocket && !daemonSocket.destroyed) return;
+  await startDaemon();
+  await connectToDaemon();
+}
+
+function daemonSend(msg) {
+  if (daemonSocket && !daemonSocket.destroyed) {
+    daemonSocket.write(JSON.stringify(msg) + "\n");
+  }
+}
+
+async function daemonRequest(msg) {
+  await ensureDaemon();
+  return new Promise((resolve, reject) => {
+    const id = ++daemonReqId;
+    msg.id = id;
+    pendingRequests.set(id, { resolve, reject });
+    daemonSend(msg);
+    // Timeout after 10s
+    setTimeout(() => {
+      if (pendingRequests.has(id)) {
+        pendingRequests.delete(id);
+        reject(new Error("Daemon request timeout"));
+      }
+    }, 10000);
+  });
+}
+
+function handleDaemonMessage(msg) {
+  // Handle response to a request
+  if (msg.id && pendingRequests.has(msg.id)) {
+    const { resolve } = pendingRequests.get(msg.id);
+    pendingRequests.delete(msg.id);
+    resolve(msg);
+    return;
+  }
+
+  // Handle push events (data, exit, replay)
+  if (msg.type === "data" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("pty-data", msg.termId, msg.data);
+    return;
+  }
+  if (msg.type === "exit" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("pty-exit", msg.termId);
+    return;
+  }
+  if (msg.type === "replay" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("pty-replay", msg.termId, msg.data);
+    return;
+  }
+}
+
+app.whenReady().then(async () => {
+  // Start daemon connection early
+  try {
+    await ensureDaemon();
+  } catch (err) {
+    console.error("[main] Failed to start daemon:", err.message);
+  }
+
   ipcMain.handle("get-dir-colors", () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
@@ -238,54 +396,50 @@ app.whenReady().then(() => {
     watchIntention(sessionId),
   );
 
-  // PTY IPC handlers
-  const ALLOWED_SHELLS = new Set(["/bin/zsh", "/bin/bash", "/bin/sh"]);
+  // PTY IPC handlers — all forwarded to daemon
 
-  ipcMain.handle("pty-spawn", (_e, { cwd, cmd, args }) => {
-    const shell =
-      cmd && ALLOWED_SHELLS.has(cmd) ? cmd : process.env.SHELL || "/bin/zsh";
-    const shellArgs = args || [];
-    const termId = nextTermId++;
-
-    // Strip Claude session env vars so spawned Claude doesn't think it's nested
-    const cleanEnv = { ...process.env, TERM: "xterm-256color" };
-    delete cleanEnv.CLAUDECODE;
-    delete cleanEnv.CLAUDE_CODE_SESSION_ID;
-
-    const p = pty.spawn(shell, shellArgs, {
-      name: "xterm-256color",
-      cols: 80,
-      rows: 24,
-      cwd: cwd || os.homedir(),
-      env: cleanEnv,
+  ipcMain.handle("pty-spawn", async (_e, { cwd, cmd, args, sessionId }) => {
+    const resp = await daemonRequest({
+      type: "spawn",
+      cwd,
+      cmd,
+      args,
+      sessionId,
     });
-
-    ptyProcesses.set(termId, p);
-
-    p.onData((data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("pty-data", termId, data);
-      }
-    });
-
-    p.onExit(() => {
-      ptyProcesses.delete(termId);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("pty-exit", termId);
-      }
-    });
-
-    return { termId, pid: p.pid };
+    return { termId: resp.termId, pid: resp.pid };
   });
 
-  ipcMain.handle("pty-write", (_e, termId, data) => {
-    const p = ptyProcesses.get(termId);
-    if (p) p.write(data);
+  ipcMain.handle("pty-write", async (_e, termId, data) => {
+    await ensureDaemon();
+    daemonSend({ type: "write", termId, data });
   });
 
-  ipcMain.handle("pty-resize", (_e, termId, cols, rows) => {
-    const p = ptyProcesses.get(termId);
-    if (p) p.resize(cols, rows);
+  ipcMain.handle("pty-resize", async (_e, termId, cols, rows) => {
+    await ensureDaemon();
+    daemonSend({ type: "resize", termId, cols, rows });
+  });
+
+  ipcMain.handle("pty-kill", async (_e, termId) => {
+    await daemonRequest({ type: "kill", termId });
+  });
+
+  ipcMain.handle("pty-list", async () => {
+    const resp = await daemonRequest({ type: "list" });
+    return resp.ptys;
+  });
+
+  ipcMain.handle("pty-attach", async (_e, termId) => {
+    const resp = await daemonRequest({ type: "attach", termId });
+    return resp;
+  });
+
+  ipcMain.handle("pty-detach", async (_e, termId) => {
+    await ensureDaemon();
+    daemonSend({ type: "detach", termId });
+  });
+
+  ipcMain.handle("pty-set-session", async (_e, termId, sessionId) => {
+    await daemonRequest({ type: "set-session", termId, sessionId });
   });
 
   // Poll for a session-pid file to appear for a given PID
@@ -320,25 +474,131 @@ app.whenReady().then(() => {
     });
   });
 
-  ipcMain.handle("pty-kill", (_e, termId) => {
-    const p = ptyProcesses.get(termId);
-    if (p) {
-      p.kill();
-      ptyProcesses.delete(termId);
-    }
-  });
-
   createWindow();
+
+  // Build menu with Cmd+T shortcut for new terminal tab
+  const menuTemplate = [
+    {
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "New Terminal Tab",
+          accelerator: "CmdOrCtrl+T",
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("new-terminal-tab");
+            }
+          },
+        },
+        {
+          label: "Close Terminal Tab",
+          accelerator: "CmdOrCtrl+W",
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("close-terminal-tab");
+            }
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Next Tab",
+          accelerator: "CmdOrCtrl+Shift+]",
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("next-terminal-tab");
+            }
+          },
+        },
+        {
+          label: "Previous Tab",
+          accelerator: "CmdOrCtrl+Shift+[",
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("prev-terminal-tab");
+            }
+          },
+        },
+        { type: "separator" },
+        ...Array.from({ length: 9 }, (_, i) => ({
+          label: `Tab ${i + 1}`,
+          accelerator: `CmdOrCtrl+${i + 1}`,
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("switch-terminal-tab", i);
+            }
+          },
+        })),
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { type: "separator" },
+        { role: "front" },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on("before-quit", killAllPty);
+app.on("before-quit", () => {
+  // Disconnect from daemon (daemon keeps PTYs alive)
+  if (daemonSocket && !daemonSocket.destroyed) {
+    daemonSocket.destroy();
+  }
+  for (const entry of pendingPolls) entry.cancel();
+  pendingPolls.clear();
+});
 
 app.on("window-all-closed", () => {
   for (const file of fileWatchers.values()) fs.unwatchFile(file);
-  killAllPty();
+  if (daemonSocket && !daemonSocket.destroyed) {
+    daemonSocket.destroy();
+  }
   if (process.platform !== "darwin") app.quit();
 });

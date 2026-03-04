@@ -1,0 +1,342 @@
+#!/usr/bin/env node
+/**
+ * PTY Daemon — manages terminal processes independently of any Electron window.
+ *
+ * Communicates over a Unix domain socket using newline-delimited JSON.
+ * Multiple clients (Electron instances) can attach to the same terminals.
+ * Terminals survive client disconnects and app restarts.
+ *
+ * Socket: ~/.open-cockpit/pty-daemon.sock
+ */
+
+const net = require("net");
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
+const pty = require("node-pty");
+
+const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
+const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
+const ALLOWED_SHELLS = new Set(["/bin/zsh", "/bin/bash", "/bin/sh"]);
+
+// --- State ---
+let nextTermId = 1;
+const terminals = new Map(); // termId -> { proc, meta, buffer, clients: Set<socket> }
+const clients = new Set(); // all connected sockets
+let idleTimer = null;
+
+// --- Helpers ---
+
+function broadcast(termId, msg) {
+  const entry = terminals.get(termId);
+  if (!entry) return;
+  const line = JSON.stringify(msg) + "\n";
+  for (const client of entry.clients) {
+    client.write(line);
+  }
+}
+
+function sendTo(socket, msg) {
+  if (!socket.destroyed) {
+    socket.write(JSON.stringify(msg) + "\n");
+  }
+}
+
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
+  if (terminals.size === 0 && clients.size === 0) {
+    idleTimer = setTimeout(() => {
+      console.log("[pty-daemon] Idle timeout, exiting");
+      cleanup();
+      process.exit(0);
+    }, IDLE_TIMEOUT_MS);
+  }
+}
+
+function cleanup() {
+  for (const [, entry] of terminals) {
+    try {
+      entry.proc.kill();
+    } catch {}
+  }
+  terminals.clear();
+  try {
+    fs.unlinkSync(SOCKET_PATH);
+  } catch {}
+}
+
+// --- Command handlers ---
+
+function handleSpawn(socket, msg) {
+  const shell =
+    msg.cmd && ALLOWED_SHELLS.has(msg.cmd)
+      ? msg.cmd
+      : process.env.SHELL || "/bin/zsh";
+  const args = msg.args || [];
+  const cwd = msg.cwd || os.homedir();
+  const termId = nextTermId++;
+
+  // Strip Claude session env vars
+  const cleanEnv = { ...process.env, TERM: "xterm-256color" };
+  delete cleanEnv.CLAUDECODE;
+  delete cleanEnv.CLAUDE_CODE_SESSION_ID;
+
+  const proc = pty.spawn(shell, args, {
+    name: "xterm-256color",
+    cols: msg.cols || 80,
+    rows: msg.rows || 24,
+    cwd,
+    env: cleanEnv,
+  });
+
+  const entry = {
+    proc,
+    meta: {
+      termId,
+      sessionId: msg.sessionId || null,
+      cwd,
+      pid: proc.pid,
+      exited: false,
+    },
+    buffer: "",
+    clients: new Set(),
+  };
+  terminals.set(termId, entry);
+
+  proc.onData((data) => {
+    // Buffer for replay
+    entry.buffer += data;
+    if (entry.buffer.length > BUFFER_SIZE) {
+      entry.buffer = entry.buffer.slice(entry.buffer.length - BUFFER_SIZE);
+    }
+    broadcast(termId, { type: "data", termId, data });
+  });
+
+  proc.onExit(({ exitCode }) => {
+    entry.meta.exited = true;
+    entry.meta.exitCode = exitCode;
+    broadcast(termId, { type: "exit", termId, exitCode });
+    // Keep the entry around so clients can still see the buffer and exit status.
+    // It gets cleaned up when all clients detach or via kill.
+    resetIdleTimer();
+  });
+
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
+  sendTo(socket, {
+    type: "spawned",
+    id: msg.id,
+    termId,
+    pid: proc.pid,
+  });
+}
+
+function handleWrite(msg) {
+  const entry = terminals.get(msg.termId);
+  if (entry && !entry.meta.exited) {
+    entry.proc.write(msg.data);
+  }
+}
+
+function handleResize(msg) {
+  const entry = terminals.get(msg.termId);
+  if (entry && !entry.meta.exited) {
+    entry.proc.resize(msg.cols, msg.rows);
+  }
+}
+
+function handleKill(socket, msg) {
+  const entry = terminals.get(msg.termId);
+  if (entry) {
+    if (!entry.meta.exited) {
+      try {
+        entry.proc.kill();
+      } catch {}
+    }
+    terminals.delete(msg.termId);
+  }
+  sendTo(socket, { type: "killed", id: msg.id, termId: msg.termId });
+  resetIdleTimer();
+}
+
+function handleList(socket, msg) {
+  const ptys = [];
+  for (const [, entry] of terminals) {
+    ptys.push({
+      ...entry.meta,
+      buffer: entry.buffer,
+      clientCount: entry.clients.size,
+    });
+  }
+  sendTo(socket, { type: "list-result", id: msg.id, ptys });
+}
+
+function handleAttach(socket, msg) {
+  const entry = terminals.get(msg.termId);
+  if (!entry) {
+    sendTo(socket, {
+      type: "attach-error",
+      id: msg.id,
+      termId: msg.termId,
+      error: "not found",
+    });
+    return;
+  }
+  entry.clients.add(socket);
+
+  // Send response first (resolves the pending request in main.js)
+  sendTo(socket, { type: "attached", id: msg.id, termId: msg.termId });
+
+  // Then replay buffered output (no id — goes through push event path)
+  if (entry.buffer) {
+    sendTo(socket, { type: "replay", termId: msg.termId, data: entry.buffer });
+  }
+  if (entry.meta.exited) {
+    sendTo(socket, {
+      type: "exit",
+      termId: msg.termId,
+      exitCode: entry.meta.exitCode,
+    });
+  }
+}
+
+function handleDetach(socket, msg) {
+  const entry = terminals.get(msg.termId);
+  if (entry) {
+    entry.clients.delete(socket);
+    // Clean up exited terminals with no attached clients
+    if (entry.meta.exited && entry.clients.size === 0) {
+      terminals.delete(msg.termId);
+      resetIdleTimer();
+    }
+  }
+}
+
+function handleSetSession(socket, msg) {
+  const entry = terminals.get(msg.termId);
+  if (entry) {
+    entry.meta.sessionId = msg.sessionId;
+  }
+  sendTo(socket, {
+    type: "session-set",
+    id: msg.id,
+    termId: msg.termId,
+  });
+}
+
+// --- Socket server ---
+
+function handleMessage(socket, msg) {
+  switch (msg.type) {
+    case "spawn":
+      return handleSpawn(socket, msg);
+    case "write":
+      return handleWrite(msg);
+    case "resize":
+      return handleResize(msg);
+    case "kill":
+      return handleKill(socket, msg);
+    case "list":
+      return handleList(socket, msg);
+    case "attach":
+      return handleAttach(socket, msg);
+    case "detach":
+      return handleDetach(socket, msg);
+    case "set-session":
+      return handleSetSession(socket, msg);
+    case "ping":
+      return sendTo(socket, { type: "pong", id: msg.id });
+    default:
+      sendTo(socket, {
+        type: "error",
+        id: msg.id,
+        error: `unknown command: ${msg.type}`,
+      });
+  }
+}
+
+function startServer() {
+  fs.mkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
+
+  // Remove stale socket
+  try {
+    fs.unlinkSync(SOCKET_PATH);
+  } catch {}
+
+  const server = net.createServer((socket) => {
+    clients.add(socket);
+    resetIdleTimer();
+
+    let buf = "";
+    socket.on("data", (chunk) => {
+      buf += chunk.toString();
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (!line.trim()) continue;
+        try {
+          handleMessage(socket, JSON.parse(line));
+        } catch (err) {
+          console.error("[pty-daemon] Parse error:", err.message);
+        }
+      }
+    });
+
+    socket.on("close", () => {
+      clients.delete(socket);
+      // Remove this socket from all terminal client sets; reap exited terminals
+      for (const [termId, entry] of terminals) {
+        entry.clients.delete(socket);
+        if (entry.meta.exited && entry.clients.size === 0) {
+          terminals.delete(termId);
+        }
+      }
+      resetIdleTimer();
+    });
+
+    socket.on("error", () => {
+      clients.delete(socket);
+      for (const [termId, entry] of terminals) {
+        entry.clients.delete(socket);
+        if (entry.meta.exited && entry.clients.size === 0) {
+          terminals.delete(termId);
+        }
+      }
+    });
+  });
+
+  server.listen(SOCKET_PATH, () => {
+    // Restrict socket to owner only
+    fs.chmodSync(SOCKET_PATH, 0o600);
+    console.log(`[pty-daemon] Listening on ${SOCKET_PATH}`);
+    // Write PID file so clients can check if daemon is alive
+    fs.writeFileSync(
+      path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"),
+      String(process.pid),
+    );
+    resetIdleTimer();
+  });
+
+  server.on("error", (err) => {
+    console.error("[pty-daemon] Server error:", err);
+    process.exit(1);
+  });
+
+  process.on("SIGTERM", () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit(0);
+  });
+}
+
+startServer();
