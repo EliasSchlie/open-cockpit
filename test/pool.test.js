@@ -102,23 +102,23 @@ describe("selectShrinkCandidates", () => {
     expect(result.map((s) => s.index)).toEqual([1, 3]);
   });
 
-  it("skips processing and dead slots", () => {
+  it("falls back to busy slots when no fresh/idle available", () => {
     const slots = [
-      { index: 0, status: "processing" },
-      { index: 1, status: "dead" },
+      { index: 0, status: "busy" },
+      { index: 1, status: "busy" },
       { index: 2, status: "idle" },
     ];
-    const result = selectShrinkCandidates(slots, 5);
-    expect(result).toHaveLength(1);
-    expect(result[0].index).toBe(2);
+    const result = selectShrinkCandidates(slots, 2);
+    expect(result.map((s) => s.index)).toEqual([2, 0]);
   });
 
-  it("returns empty array when all busy", () => {
+  it("includes busy slots when all are busy", () => {
     const slots = [
-      { index: 0, status: "processing" },
-      { index: 1, status: "processing" },
+      { index: 0, status: "busy" },
+      { index: 1, status: "busy" },
     ];
-    expect(selectShrinkCandidates(slots, 1)).toEqual([]);
+    const result = selectShrinkCandidates(slots, 1);
+    expect(result).toHaveLength(1);
   });
 });
 
@@ -330,9 +330,13 @@ describe("pool lifecycle integration", () => {
     const victims = selectShrinkCandidates(pool.slots, 2);
     expect(victims.map((v) => v.index)).toEqual([1, 3]);
 
-    // Shrink by 3: 2 fresh + 1 idle
+    // Shrink by 3: 2 fresh + 1 idle + 0 busy (but only 3 needed)
     const victims2 = selectShrinkCandidates(pool.slots, 3);
     expect(victims2.map((v) => v.index)).toEqual([1, 3, 0]);
+
+    // Shrink by 4: includes busy slot too
+    const victims3 = selectShrinkCandidates(pool.slots, 4);
+    expect(victims3.map((v) => v.index)).toEqual([1, 3, 0, 2]);
   });
 
   it("offload → fresh cycle updates pool state", () => {

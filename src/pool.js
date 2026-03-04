@@ -64,16 +64,15 @@ function resolveSlot(pool, termId, sessionId) {
 }
 
 /**
- * Select candidates for shrinking: prefer fresh, then idle (by LRU).
+ * Select candidates for shrinking: prefer fresh, then idle, then busy/starting.
  */
 function selectShrinkCandidates(slots, count) {
-  const candidates = [...slots]
-    .filter((s) => s.status === "fresh" || s.status === "idle")
-    .sort((a, b) => {
-      if (a.status === "fresh" && b.status !== "fresh") return -1;
-      if (b.status === "fresh" && a.status !== "fresh") return 1;
-      return 0;
-    });
+  const priority = { fresh: 0, idle: 1, starting: 2, busy: 3, error: 4 };
+  const candidates = [...slots].sort((a, b) => {
+    const pa = priority[a.status] ?? 5;
+    const pb = priority[b.status] ?? 5;
+    return pa - pb;
+  });
   return candidates.slice(0, count);
 }
 
