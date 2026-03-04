@@ -195,11 +195,8 @@ function getOffloadedSessions() {
 
 function getSessions() {
   const sessions = [];
-  const seenSessionIds = new Set();
 
-  // Live sessions from session-pids.
-  // Multiple PIDs can map to the same session UUID (e.g. parent shell + claude process,
-  // or stale entries after /resume). Deduplicate by sessionId, preferring alive PIDs.
+  // Live sessions from session-pids
   if (fs.existsSync(SESSION_PIDS_DIR)) {
     for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
       const pid = file;
@@ -207,8 +204,6 @@ function getSessions() {
         .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
         .trim();
       if (!sessionId) continue;
-      if (seenSessionIds.has(sessionId)) continue;
-      seenSessionIds.add(sessionId);
 
       let alive = false;
       try {
