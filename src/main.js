@@ -798,7 +798,7 @@ function startDaemon() {
       detached: true,
       stdio: "ignore",
       cwd: os.homedir(), // Don't inherit app cwd — prevents kill-by-cwd from hitting daemon
-      env: { ...process.env },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     });
     child.unref();
 
