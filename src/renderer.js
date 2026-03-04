@@ -264,7 +264,8 @@ const TERM_THEME = {
   background: "#0a0a0a",
   cursor: "#ff1a1a",
   cursorAccent: "#0a0a0a",
-  selectionBackground: "#1a0808",
+  selectionBackground: "rgba(255, 26, 26, 0.25)",
+  selectionForeground: "#ffffff",
 };
 
 // --- Directory color coding ---
