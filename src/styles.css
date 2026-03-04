@@ -339,3 +339,86 @@ body {
 #editor-mount .cm-editor {
   height: 100%;
 }
+
+/* Sidebar collapse */
+#sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-right: none;
+}
+
+/* Command palette overlay */
+#command-palette {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+#command-palette.visible {
+  display: flex;
+}
+
+#command-palette-dialog {
+  width: 480px;
+  max-height: 400px;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#command-palette-input {
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+
+#command-palette-input::placeholder {
+  color: var(--text-dim);
+}
+
+#command-palette-list {
+  overflow-y: auto;
+  max-height: 340px;
+  padding: 4px;
+}
+
+.command-palette-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.command-palette-item:hover,
+.command-palette-item.selected {
+  background: var(--accent-dim);
+}
+
+.command-palette-label {
+  color: var(--text);
+}
+
+.command-palette-shortcut {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-family: "SF Mono", Menlo, monospace;
+}

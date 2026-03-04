@@ -6,7 +6,9 @@
   "scripts": {
     "build": "esbuild src/renderer.js --bundle --outfile=dist/renderer.js --platform=browser --format=iife",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron . --dev"
+    "dev": "npm run build && electron . --dev",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.2",
@@ -25,6 +27,7 @@
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-rebuild": "^3.2.9",
-    "esbuild": "^0.27.3"
+    "esbuild": "^0.27.3",
+    "vitest": "^4.0.18"
   }
 }
