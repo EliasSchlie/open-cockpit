@@ -21,6 +21,13 @@ const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for repla
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
 const ALLOWED_SHELLS = new Set(["/bin/zsh", "/bin/bash", "/bin/sh"]);
 
+// Additional paths to include in PATH for spawned processes (Dock launches strip PATH)
+const EXTRA_PATH_DIRS = [
+  path.join(os.homedir(), ".claude", "local", "bin"),
+  "/usr/local/bin",
+  path.join(os.homedir(), ".local", "bin"),
+];
+
 // --- State ---
 let nextTermId = 1;
 const terminals = new Map(); // termId -> { proc, meta, buffer, clients: Set<socket> }
@@ -70,21 +77,34 @@ function cleanup() {
 
 // --- Command handlers ---
 
+function isAllowedCmd(cmd) {
+  if (ALLOWED_SHELLS.has(cmd)) return true;
+  // Allow absolute paths to executables that exist on disk
+  if (path.isAbsolute(cmd) && fs.existsSync(cmd)) return true;
+  return false;
+}
+
 function handleSpawn(socket, msg) {
-  const shell =
-    msg.cmd && ALLOWED_SHELLS.has(msg.cmd)
+  const cmd =
+    msg.cmd && isAllowedCmd(msg.cmd)
       ? msg.cmd
       : process.env.SHELL || "/bin/zsh";
   const args = msg.args || [];
   const cwd = msg.cwd || os.homedir();
   const termId = nextTermId++;
 
-  // Strip Claude session env vars
+  // Strip Claude session env vars, augment PATH for Dock-launched apps
   const cleanEnv = { ...process.env, TERM: "xterm-256color" };
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_SESSION_ID;
+  const existingPath = cleanEnv.PATH || "/usr/bin:/bin";
+  const pathDirs = existingPath.split(":");
+  for (const dir of EXTRA_PATH_DIRS) {
+    if (!pathDirs.includes(dir)) pathDirs.unshift(dir);
+  }
+  cleanEnv.PATH = pathDirs.join(":");
 
-  const proc = pty.spawn(shell, args, {
+  const proc = pty.spawn(cmd, args, {
     name: "xterm-256color",
     cols: msg.cols || 80,
     rows: msg.rows || 24,

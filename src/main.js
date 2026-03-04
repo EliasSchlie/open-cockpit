@@ -448,13 +448,30 @@ function writePool(pool) {
   writePoolFile(POOL_FILE, pool);
 }
 
+// Resolve the claude binary path explicitly (aliases don't work in non-interactive shells).
+function resolveClaudePath() {
+  try {
+    return execFileSync("which", ["claude"], { encoding: "utf-8" }).trim();
+  } catch {}
+  const candidates = [
+    path.join(os.homedir(), ".claude", "local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    path.join(os.homedir(), ".local", "bin", "claude"),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error("Claude binary not found");
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
+  const claudePath = resolveClaudePath();
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
-    cmd: "/bin/zsh",
-    args: ["-ic", "exec c"],
+    cmd: claudePath,
+    args: ["--dangerously-skip-permissions"],
   });
   return createSlot(index, resp.termId, resp.pid);
 }
@@ -588,9 +605,27 @@ function getPoolHealth() {
   });
 }
 
+// Destroy pool: kill all slot terminals and remove pool.json
+async function poolDestroy() {
+  const pool = readPool();
+  if (!pool) throw new Error("Pool not initialized");
+
+  for (const slot of pool.slots) {
+    try {
+      await daemonRequest({ type: "kill", termId: slot.termId });
+    } catch {}
+  }
+
+  try {
+    fs.unlinkSync(POOL_FILE);
+  } catch {}
+
+  return { destroyed: true, slotsKilled: pool.slots.length };
+}
+
 // Reconcile pool.json with reality on startup.
 // Daemon terminals survive app restarts, so pool slots should still be alive.
-// Update any stale state (dead terminals, changed PIDs, etc.)
+// Update any stale state, auto-restart dead slots.
 async function reconcilePool() {
   const pool = readPool();
   if (!pool) return;
@@ -604,41 +639,145 @@ async function reconcilePool() {
     return; // Daemon not running — can't reconcile
   }
 
+  const deadSlotIndices = [];
+
   for (const slot of pool.slots) {
-    const pty = daemonPtys.get(slot.termId);
-    if (!pty || pty.exited) {
-      // Terminal died — mark slot as dead
+    const dPty = daemonPtys.get(slot.termId);
+    if (!dPty || dPty.exited) {
       if (slot.status !== "dead") {
+        const buffer = dPty?.buffer || "(no buffer available)";
+        const lastLines = buffer.split("\n").slice(-20).join("\n");
+        console.error(
+          `[pool] Slot ${slot.index} (termId=${slot.termId}, pid=${slot.pid}) died. Last output:\n${lastLines}`,
+        );
         slot.status = "dead";
         changed = true;
       }
+      deadSlotIndices.push(slot.index);
       continue;
     }
 
-    // Terminal alive — update PID if it changed (shouldn't, but safety)
-    if (pty.pid !== slot.pid) {
-      slot.pid = pty.pid;
+    if (dPty.pid !== slot.pid) {
+      slot.pid = dPty.pid;
       changed = true;
     }
 
-    // Re-check session ID mapping
     const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
     if (fs.existsSync(pidFile)) {
       const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
       if (sessionId && sessionId !== slot.sessionId) {
+        // Session UUID changed — /clear was run externally. Offload the old session.
+        if (slot.sessionId) {
+          saveExternalClearOffload(slot.sessionId, slot.pid);
+        }
         slot.sessionId = sessionId;
+        slot.status = "fresh";
         changed = true;
       }
     }
   }
 
   if (changed) writePool(pool);
+
+  // Auto-restart dead slots
+  for (const idx of deadSlotIndices) {
+    try {
+      console.log(`[pool] Restarting dead slot ${idx}...`);
+      const newSlot = await spawnPoolSlot(idx);
+      const current = readPool();
+      if (!current) continue;
+      current.slots[idx] = newSlot;
+      writePool(current);
+
+      pollForSessionId(newSlot.pid, 60000).then((sessionId) => {
+        const latest = readPool();
+        if (!latest) return;
+        const s = latest.slots.find((x) => x.termId === newSlot.termId);
+        if (s) {
+          s.sessionId = sessionId;
+          s.status = sessionId ? "fresh" : "error";
+          writePool(latest);
+        }
+      });
+    } catch (err) {
+      console.error(`[pool] Failed to restart slot ${idx}:`, err.message);
+    }
+  }
+}
+
+// Save offload metadata for a session that was cleared externally (no snapshot available).
+function saveExternalClearOffload(oldSessionId, pid) {
+  try {
+    validateSessionId(oldSessionId);
+    const offloadDir = path.join(OFFLOADED_DIR, oldSessionId);
+    if (fs.existsSync(path.join(offloadDir, "meta.json"))) return; // Already offloaded
+    fs.mkdirSync(offloadDir, { recursive: true });
+
+    const cwd = getCwdFromJsonl(oldSessionId);
+    const intentionFile = path.join(INTENTIONS_DIR, `${oldSessionId}.md`);
+    const intentionHeading = fs.existsSync(intentionFile)
+      ? getIntentionHeading(intentionFile)
+      : null;
+
+    // Find git root
+    let gitRoot = null;
+    if (cwd) {
+      let dir = cwd;
+      while (dir !== path.dirname(dir)) {
+        try {
+          if (fs.statSync(path.join(dir, ".git")).isDirectory()) {
+            gitRoot = dir;
+            break;
+          }
+        } catch {}
+        dir = path.dirname(dir);
+      }
+    }
+
+    // Try to read Claude session ID from idle signal
+    const idleSignal = pid ? getIdleSignal(pid) : null;
+
+    const meta = {
+      sessionId: oldSessionId,
+      claudeSessionId: idleSignal?.session_id || null,
+      cwd: cwd || null,
+      gitRoot,
+      intentionHeading,
+      lastInteractionTs: Math.floor(Date.now() / 1000),
+      offloadedAt: new Date().toISOString(),
+      externalClear: true,
+    };
+    fs.writeFileSync(
+      path.join(offloadDir, "meta.json"),
+      JSON.stringify(meta, null, 2),
+    );
+  } catch (err) {
+    console.error("[main] Failed to save external clear offload:", err.message);
+  }
 }
 
 // Sync pool.json slot statuses with live session state.
+// Also detects external /clear by checking if a slot's PID now maps to a different session UUID.
 function syncPoolStatuses(sessions) {
   const pool = readPool();
   if (!pool) return;
+
+  let externalClearDetected = false;
+  for (const slot of pool.slots) {
+    if (!slot.pid || !slot.sessionId || slot.status === "dead") continue;
+    try {
+      const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
+      const currentSessionId = fs.readFileSync(pidFile, "utf-8").trim();
+      if (currentSessionId && currentSessionId !== slot.sessionId) {
+        saveExternalClearOffload(slot.sessionId, slot.pid);
+        slot.sessionId = currentSessionId;
+        slot.status = "fresh";
+        externalClearDetected = true;
+      }
+    } catch {}
+  }
+  if (externalClearDetected) writePool(pool);
+
   const updated = syncStatuses(pool, sessions);
   if (updated) writePool(updated);
 }
@@ -936,6 +1075,75 @@ app.whenReady().then(async () => {
     console.error("[main] Pool reconciliation failed:", err.message);
   }
 
+  // --- Programmatic API server ---
+  const api = startApiServer({
+    "pool-init": (msg) => poolInit(msg.size),
+    "pool-resize": (msg) => poolResize(msg.size),
+    "pool-health": () => getPoolHealth(),
+    "pool-read": () => readPool(),
+    "pool-destroy": () => poolDestroy(),
+    "get-sessions": () => {
+      const sessions = getSessions();
+      syncPoolStatuses(sessions);
+      return sessions;
+    },
+    "read-intention": (msg) => {
+      validateSessionId(msg.sessionId);
+      return readIntention(msg.sessionId);
+    },
+    "write-intention": (msg) => {
+      validateSessionId(msg.sessionId);
+      writeIntention(msg.sessionId, String(msg.content || ""));
+      return { ok: true };
+    },
+    "offload-session": (msg) => {
+      validateSessionId(msg.sessionId);
+      return offloadSession(msg.sessionId, msg.termId, msg.claudeSessionId, {});
+    },
+    "read-offload-snapshot": (msg) => {
+      validateSessionId(msg.sessionId);
+      return readOffloadSnapshot(msg.sessionId);
+    },
+    "read-offload-meta": (msg) => {
+      validateSessionId(msg.sessionId);
+      return readOffloadMeta(msg.sessionId);
+    },
+    "pty-list": async () => {
+      const resp = await daemonRequest({ type: "list" });
+      return resp.ptys;
+    },
+    "pty-write": async (msg) => {
+      if (!msg.termId) throw new Error("missing termId");
+      await ensureDaemon();
+      daemonSend({
+        type: "write",
+        termId: msg.termId,
+        data: String(msg.data || ""),
+      });
+      return { ok: true };
+    },
+    "pty-read": async (msg) => {
+      if (!msg.termId) throw new Error("missing termId");
+      const resp = await daemonRequest({ type: "list" });
+      const pty = resp.ptys.find((p) => p.termId === msg.termId);
+      return pty ? { termId: pty.termId, buffer: pty.buffer } : null;
+    },
+    "pty-spawn": async (msg) => {
+      const resp = await daemonRequest({
+        type: "spawn",
+        cwd: msg.cwd || os.homedir(),
+        cmd: msg.cmd || "/bin/zsh",
+        args: msg.args || [],
+      });
+      return { termId: resp.termId, pid: resp.pid };
+    },
+    "pty-kill": async (msg) => {
+      if (!msg.termId) throw new Error("missing termId");
+      await daemonRequest({ type: "kill", termId: msg.termId });
+      return { ok: true };
+    },
+  });
+
   ipcMain.handle("get-dir-colors", () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
@@ -1026,6 +1234,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pool-init", async (_e, size) => poolInit(size));
   ipcMain.handle("pool-resize", async (_e, newSize) => poolResize(newSize));
   ipcMain.handle("pool-health", () => getPoolHealth());
+  ipcMain.handle("pool-destroy", async () => poolDestroy());
   ipcMain.handle("pool-read", () => readPool());
 
   // Poll for a session-pid file to appear for a given PID
@@ -1206,6 +1415,8 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", () => {
+  // Clean up API server
+  if (api) api.cleanup();
   // Disconnect from daemon (daemon keeps PTYs alive)
   if (daemonSocket && !daemonSocket.destroyed) {
     daemonSocket.destroy();
