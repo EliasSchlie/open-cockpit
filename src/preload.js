@@ -21,4 +21,10 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("pty-data", (_e, termId, data) => callback(termId, data)),
   onPtyExit: (callback) =>
     ipcRenderer.on("pty-exit", (_e, termId) => callback(termId)),
+
+  // Menu actions
+  onNewTerminalTab: (callback) =>
+    ipcRenderer.on("new-terminal-tab", () => callback()),
+  onCloseTerminalTab: (callback) =>
+    ipcRenderer.on("close-terminal-tab", () => callback()),
 });

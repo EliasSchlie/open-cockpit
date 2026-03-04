@@ -302,9 +302,30 @@ let currentSessionCwd = null;
 let saveTimeout = null;
 let editorView = null;
 
-// Terminal state: multiple terminals per session
-const terminals = [];
+// Terminal state: per-session cache for persistent terminals
+// Map<sessionId, { terminals: [], activeTermIndex: number, lastAccessed: number }>
+const sessionTerminals = new Map();
+const CLEANUP_AFTER_MS = 30 * 60 * 1000; // 30 minutes
+
+// Active view into current session's terminals
+let terminals = [];
 let activeTermIndex = -1;
+// Generation counter to detect stale async operations after session switches
+let sessionGeneration = 0;
+
+// Sync current terminals into the session cache
+function syncSessionCache() {
+  if (!currentSessionId) return;
+  if (terminals.length === 0) {
+    sessionTerminals.delete(currentSessionId);
+  } else {
+    sessionTerminals.set(currentSessionId, {
+      terminals: [...terminals],
+      activeTermIndex,
+      lastAccessed: Date.now(),
+    });
+  }
+}
 
 function createEditor(content) {
   if (editorView) editorView.destroy();
@@ -365,6 +386,7 @@ async function spawnTerminal(cwd, cmd, args) {
 
   renderTerminalTabs();
   switchToTerminal(terminals.length - 1);
+  syncSessionCache();
 
   return entry;
 }
@@ -405,6 +427,8 @@ async function closeTerminal(index) {
     switchToTerminal(Math.min(index, terminals.length - 1));
   }
 
+  // Update session cache after activeTermIndex is corrected
+  syncSessionCache();
   renderTerminalTabs();
 }
 
@@ -429,33 +453,119 @@ function renderTerminalTabs() {
   });
 }
 
-function killAllTerminals() {
-  const kills = [];
-  while (terminals.length > 0) {
-    const entry = terminals.pop();
-    kills.push(window.api.ptyKill(entry.termId).catch(() => {}));
+// Hide current session's terminals (preserve them in cache)
+function hideCurrentTerminals() {
+  if (currentSessionId && terminals.length > 0) {
+    sessionTerminals.set(currentSessionId, {
+      terminals: [...terminals],
+      activeTermIndex,
+      lastAccessed: Date.now(),
+    });
+  }
+  for (const t of terminals) {
+    t.container.style.display = "none";
+  }
+  terminals = [];
+  activeTermIndex = -1;
+  terminalTabList.innerHTML = "";
+}
+
+// Restore cached terminals for a session, returns true if restored
+function restoreSessionTerminals(sessionId) {
+  const cached = sessionTerminals.get(sessionId);
+  if (!cached || cached.terminals.length === 0) return false;
+
+  cached.lastAccessed = Date.now();
+  terminals = cached.terminals;
+  activeTermIndex = cached.activeTermIndex;
+
+  renderTerminalTabs();
+  const idx = activeTermIndex >= 0 ? activeTermIndex : 0;
+  switchToTerminal(idx);
+
+  // Re-fit all terminals after restore — dimensions may have changed while hidden
+  requestAnimationFrame(() => {
+    for (const t of terminals) {
+      if (t.container.style.display !== "none") {
+        t.fitAddon.fit();
+        window.api.ptyResize(t.termId, t.term.cols, t.term.rows);
+      }
+    }
+  });
+
+  return true;
+}
+
+// Kill and fully dispose terminals for a specific session
+function destroySessionTerminals(sessionId) {
+  const cached = sessionTerminals.get(sessionId);
+  if (!cached) return;
+  for (const entry of cached.terminals) {
+    window.api.ptyKill(entry.termId).catch(() => {});
     entry.resizeObserver.disconnect();
     entry.term.dispose();
     entry.container.remove();
   }
+  sessionTerminals.delete(sessionId);
+}
+
+// Kill ALL terminals across all sessions (used on new-session)
+function killAllTerminals() {
+  for (const [sid] of sessionTerminals) {
+    destroySessionTerminals(sid);
+  }
+  for (const entry of terminals) {
+    window.api.ptyKill(entry.termId).catch(() => {});
+    entry.resizeObserver.disconnect();
+    entry.term.dispose();
+    entry.container.remove();
+  }
+  terminals = [];
   activeTermIndex = -1;
   terminalTabList.innerHTML = "";
-  return Promise.all(kills);
+}
+
+// Clean up terminals for dead sessions that haven't been accessed recently
+function cleanupStaleTerminals(liveSessions) {
+  const aliveIds = new Set(
+    liveSessions.filter((s) => s.alive).map((s) => s.sessionId),
+  );
+  const now = Date.now();
+  for (const [sid, cached] of sessionTerminals) {
+    if (sid === currentSessionId) continue; // never clean up active session
+    const isDead = !aliveIds.has(sid);
+    const isStale = now - cached.lastAccessed > CLEANUP_AFTER_MS;
+    if (isDead && isStale) {
+      destroySessionTerminals(sid);
+    }
+  }
+}
+
+// Find a terminal entry across all sessions (active + cached)
+function findTerminalEntry(termId) {
+  const active = terminals.find((t) => t.termId === termId);
+  if (active) return active;
+  for (const cached of sessionTerminals.values()) {
+    const entry = cached.terminals.find((t) => t.termId === termId);
+    if (entry) return entry;
+  }
+  return null;
 }
 
 // Wire PTY output from main process
 window.api.onPtyData((termId, data) => {
-  const entry = terminals.find((t) => t.termId === termId);
+  const entry = findTerminalEntry(termId);
   if (entry) entry.term.write(data);
 });
 
 window.api.onPtyExit((termId) => {
-  const entry = terminals.find((t) => t.termId === termId);
+  const entry = findTerminalEntry(termId);
   if (entry) entry.term.write("\r\n[Process exited]\r\n");
 });
 
 async function loadSessions() {
   const sessions = await window.api.getSessions();
+  cleanupStaleTerminals(sessions);
   sessionList.innerHTML = "";
 
   if (sessions.length === 0) {
@@ -483,14 +593,18 @@ async function loadSessions() {
 }
 
 async function selectSession(session) {
+  // Skip if already viewing this session
+  if (session.sessionId === currentSessionId) return;
+
+  hideCurrentTerminals();
+
   currentSessionId = session.sessionId;
   currentSessionCwd = session.cwd;
+  const gen = ++sessionGeneration;
 
   document.querySelectorAll(".session-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.sessionId === session.sessionId);
   });
-
-  killAllTerminals();
 
   emptyState.classList.add("hidden");
   sessionView.classList.remove("hidden");
@@ -499,14 +613,26 @@ async function selectSession(session) {
     ? `${session.project} — ${session.cwd.replace(session.home, "~")}`
     : session.sessionId;
 
+  // Restore cached terminals immediately (sync, no race risk)
+  if (!restoreSessionTerminals(session.sessionId)) {
+    // Spawn is async — guard against stale completion
+    const entry = await spawnTerminal(session.cwd);
+    if (gen !== sessionGeneration) {
+      // Session changed while spawning — orphan cleanup
+      await window.api.ptyKill(entry.termId);
+      entry.resizeObserver.disconnect();
+      entry.term.dispose();
+      entry.container.remove();
+      return;
+    }
+  }
+
   const content = await window.api.readIntention(session.sessionId);
+  if (gen !== sessionGeneration) return;
   createEditor(content);
   saveStatus.textContent = "";
 
   await window.api.watchIntention(session.sessionId);
-
-  // Open a companion shell at session's CWD
-  await spawnTerminal(session.cwd);
 }
 
 // "+" in sidebar: new Claude session
@@ -515,14 +641,16 @@ newSessionBtn.addEventListener("click", async () => {
   const beforeSessions = await window.api.getSessions();
   const beforeIds = new Set(beforeSessions.map((s) => s.sessionId));
 
+  // Save current session's terminals before switching
+  hideCurrentTerminals();
+
   currentSessionId = null;
   currentSessionCwd = null;
+  const gen = ++sessionGeneration;
 
   document
     .querySelectorAll(".session-item")
     .forEach((el) => el.classList.remove("active"));
-
-  killAllTerminals();
 
   emptyState.classList.add("hidden");
   sessionView.classList.remove("hidden");
@@ -530,21 +658,27 @@ newSessionBtn.addEventListener("click", async () => {
 
   // Spawn Claude via interactive shell (resolves `c` alias)
   await spawnTerminal(null, "/bin/zsh", ["-ic", "c"]);
+  if (gen !== sessionGeneration) return;
 
   // Poll for a new session to appear
   let attempts = 0;
   const detectSession = async () => {
+    if (gen !== sessionGeneration) return; // user switched away
     const sessions = await window.api.getSessions();
     const newSession = sessions.find((s) => !beforeIds.has(s.sessionId));
     if (newSession) {
+      if (gen !== sessionGeneration) return;
       currentSessionId = newSession.sessionId;
       currentSessionCwd = newSession.cwd;
+      syncSessionCache();
+
       editorPane.classList.remove("hidden");
       editorProject.textContent = newSession.project
         ? `${newSession.project} — ${newSession.cwd.replace(newSession.home, "~")}`
         : "New session";
 
       const content = await window.api.readIntention(newSession.sessionId);
+      if (gen !== sessionGeneration) return;
       createEditor(content);
       saveStatus.textContent = "";
       await window.api.watchIntention(newSession.sessionId);
@@ -589,6 +723,15 @@ window.api.onIntentionChanged((content) => {
         saveStatus.textContent = "";
     }, 2000);
   }
+});
+
+// Menu keyboard shortcuts (Cmd+T, Cmd+W)
+window.api.onNewTerminalTab(() => {
+  if (currentSessionId) spawnTerminal(currentSessionCwd);
+});
+
+window.api.onCloseTerminalTab(() => {
+  if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
 });
 
 refreshBtn.addEventListener("click", loadSessions);
