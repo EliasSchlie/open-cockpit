@@ -14,7 +14,7 @@ const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 const DAEMON_SOCKET = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
 const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
-const IDLE_SIGNALS_DIR = path.join(os.homedir(), ".claude", "idle-signals");
+const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
@@ -176,9 +176,11 @@ function getSessions() {
     let cwd = null;
     if (alive) {
       try {
-        const lsof = execSync(`lsof -a -p ${pid} -d cwd -F n 2>/dev/null`, {
-          encoding: "utf-8",
-        });
+        const lsof = execFileSync(
+          "lsof",
+          ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
+          { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+        );
         const match = lsof.match(/^n(.+)$/m);
         if (match) cwd = match[1];
       } catch {}

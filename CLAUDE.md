@@ -9,7 +9,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/preload.js` — Context bridge (`api` object)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
-- `hooks/` — Claude Code plugin hooks (SessionStart → PID mapping + intention intro, UserPromptSubmit → intention change notify)
+- `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection)
 - `.claude-plugin/plugin.json` — Plugin manifest
 
 ## Key paths
@@ -17,6 +17,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `~/.claude/session-pids/<PID>` — Session ID (written by plugin hook)
 - `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created by app on first open)
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
+- `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
 
