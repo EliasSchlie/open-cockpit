@@ -394,7 +394,7 @@ async function offloadSession(
   // 2. Ctrl-U to clear any partial input, then /clear
   daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
   await new Promise((r) => setTimeout(r, 200));
-  daemonSend({ type: "write", termId, data: "/clear\n" });
+  daemonSend({ type: "write", termId, data: "/clear\r" });
 
   // 3. Remove idle signal so session re-detects as fresh after /clear
   if (pid) {
@@ -578,7 +578,7 @@ async function poolInit(size) {
   // Wait for prompt to appear, then send Enter to accept
   await new Promise((r) => setTimeout(r, 3000));
   for (const slot of pool.slots) {
-    daemonSend({ type: "write", termId: slot.termId, data: "\n" });
+    daemonSend({ type: "write", termId: slot.termId, data: "\r" });
   }
   // Give Claude time to start after trust acceptance
   await new Promise((r) => setTimeout(r, 2000));
@@ -722,7 +722,7 @@ async function reconcilePool() {
         changed = true;
         // Accept trust prompt after spawning
         setTimeout(() => {
-          daemonSend({ type: "write", termId: newSlot.termId, data: "\n" });
+          daemonSend({ type: "write", termId: newSlot.termId, data: "\r" });
         }, 3000);
         pollForSessionId(slot.pid, 60000).then((sessionId) => {
           const p = readPool();
