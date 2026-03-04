@@ -9,6 +9,8 @@ import {
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 
 // --- Bullet widget: replaces "- " / "* " / "1. " with rendered bullet ---
 class BulletWidget extends WidgetType {
@@ -43,7 +45,6 @@ const livePreviewTheme = EditorView.theme({
   ".cm-line": {
     padding: "1px 0",
   },
-  // Headings
   ".cm-md-heading1": {
     fontSize: "1.8em",
     fontWeight: "700",
@@ -62,7 +63,6 @@ const livePreviewTheme = EditorView.theme({
     color: "#89b4fa",
     marginTop: "4px",
   },
-  // Inline formatting
   ".cm-md-bold": { fontWeight: "700" },
   ".cm-md-italic": { fontStyle: "italic" },
   ".cm-md-code": {
@@ -74,26 +74,22 @@ const livePreviewTheme = EditorView.theme({
   },
   ".cm-md-link": { color: "#89b4fa", textDecoration: "underline" },
   ".cm-md-strikethrough": { textDecoration: "line-through", color: "#6c7086" },
-  // Bullet
   ".cm-md-bullet-char": {
     color: "#89b4fa",
     fontWeight: "600",
     marginRight: "2px",
   },
   ".cm-md-list-line": { paddingLeft: "8px" },
-  // Blockquote
   ".cm-md-blockquote": {
     borderLeft: "3px solid #89b4fa",
     paddingLeft: "14px",
     color: "#a6adc8",
   },
-  // Horizontal rule
   ".cm-md-hr": {
     display: "block",
     borderTop: "1px solid #45475a",
     margin: "12px 0",
   },
-  // Checkbox
   ".cm-md-checkbox": { marginRight: "4px" },
 });
 
@@ -104,7 +100,6 @@ const INLINE_STYLES = {
   Strikethrough: "cm-md-strikethrough",
 };
 
-// Marks to hide on non-active lines
 const SYNTAX_MARKS = new Set([
   "HeaderMark",
   "EmphasisMark",
@@ -130,9 +125,7 @@ function buildDecorations(view) {
   const activeLines = getActiveLines(state);
   const decorations = [];
   const tree = syntaxTree(state);
-  const processedLines = new Set(); // track line decorations to avoid duplicates
-
-  // Track ordered list numbering
+  const processedLines = new Set();
   let orderedIndex = 0;
 
   tree.iterate({
@@ -140,7 +133,6 @@ function buildDecorations(view) {
       const line = state.doc.lineAt(node.from);
       const isActive = activeLines.has(line.number);
 
-      // --- Headings (apply on all lines) ---
       if (node.name.startsWith("ATXHeading") && !node.name.includes("Mark")) {
         const level = node.name.match(/(\d)$/)?.[1] || "1";
         if (!processedLines.has(`heading-${line.number}`)) {
@@ -151,13 +143,11 @@ function buildDecorations(view) {
           );
           processedLines.add(`heading-${line.number}`);
         }
-        if (isActive) return; // show raw markdown on active line
+        if (isActive) return;
       }
 
-      // On active lines: show raw markdown, skip decorations
       if (isActive) return;
 
-      // --- Blockquote ---
       if (node.name === "Blockquote") {
         const startLine = state.doc.lineAt(node.from).number;
         const endLine = state.doc.lineAt(node.to).number;
@@ -173,34 +163,26 @@ function buildDecorations(view) {
         }
       }
 
-      // --- List items: replace marker with bullet/number ---
       if (node.name === "ListMark") {
         const text = state.doc.sliceString(node.from, node.to);
         const isOrdered = /^\d+[.)]$/.test(text);
-
         if (isOrdered) {
           orderedIndex++;
         } else {
           orderedIndex = 0;
         }
-
-        // Replace the list marker (and trailing space) with a widget
         let end = node.to;
-        // Include trailing space after marker
         if (
           end < state.doc.length &&
           state.doc.sliceString(end, end + 1) === " "
         ) {
           end += 1;
         }
-
         decorations.push(
           Decoration.replace({
             widget: new BulletWidget(isOrdered, orderedIndex),
           }).range(node.from, end),
         );
-
-        // Add indentation to the line
         if (!processedLines.has(`list-${line.number}`)) {
           decorations.push(
             Decoration.line({ class: "cm-md-list-line" }).range(line.from),
@@ -210,38 +192,27 @@ function buildDecorations(view) {
         return;
       }
 
-      // --- Hide syntax marks ---
       if (SYNTAX_MARKS.has(node.name) && node.from < node.to) {
         decorations.push(Decoration.replace({}).range(node.from, node.to));
       }
-
-      // --- Link marks (hide [ ] ( ) on non-active lines) ---
       if (node.name === "LinkMark" && node.from < node.to) {
         decorations.push(Decoration.replace({}).range(node.from, node.to));
       }
-
-      // --- URL in links (hide on non-active lines) ---
       if (node.name === "URL" && node.from < node.to) {
-        // Hide the URL portion including surrounding parens
         decorations.push(Decoration.replace({}).range(node.from, node.to));
       }
 
-      // --- Inline styles ---
       const styleClass = INLINE_STYLES[node.name];
       if (styleClass && node.from < node.to) {
         decorations.push(
           Decoration.mark({ class: styleClass }).range(node.from, node.to),
         );
       }
-
-      // --- Links: style the text portion ---
       if (node.name === "Link" && node.from < node.to) {
         decorations.push(
           Decoration.mark({ class: "cm-md-link" }).range(node.from, node.to),
         );
       }
-
-      // --- Horizontal rule ---
       if (node.name === "HorizontalRule") {
         decorations.push(
           Decoration.line({ class: "cm-md-hr" }).range(line.from),
@@ -268,7 +239,6 @@ const livePreviewPlugin = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations },
 );
 
-// --- Dark theme ---
 const darkTheme = EditorView.theme(
   {
     "&": {
@@ -288,18 +258,53 @@ const darkTheme = EditorView.theme(
   { dark: true },
 );
 
+// --- xterm.js Catppuccin theme ---
+const TERM_THEME = {
+  background: "#1e1e2e",
+  foreground: "#cdd6f4",
+  cursor: "#cdd6f4",
+  cursorAccent: "#1e1e2e",
+  selectionBackground: "#45475a",
+  black: "#45475a",
+  red: "#f38ba8",
+  green: "#a6e3a1",
+  yellow: "#f9e2af",
+  blue: "#89b4fa",
+  magenta: "#cba6f7",
+  cyan: "#94e2d5",
+  white: "#bac2de",
+  brightBlack: "#585b70",
+  brightRed: "#f38ba8",
+  brightGreen: "#a6e3a1",
+  brightYellow: "#f9e2af",
+  brightBlue: "#89b4fa",
+  brightMagenta: "#cba6f7",
+  brightCyan: "#94e2d5",
+  brightWhite: "#a6adc8",
+};
+
 // --- App logic ---
 const sessionList = document.getElementById("session-list");
 const refreshBtn = document.getElementById("refresh-btn");
+const newSessionBtn = document.getElementById("new-session-btn");
 const emptyState = document.getElementById("empty-state");
-const editorContainer = document.getElementById("editor-container");
+const sessionView = document.getElementById("session-view");
+const editorPane = document.getElementById("editor-pane");
 const editorProject = document.getElementById("editor-project");
 const saveStatus = document.getElementById("save-status");
 const editorMount = document.getElementById("editor-mount");
+const terminalTabList = document.getElementById("terminal-tab-list");
+const newTermBtn = document.getElementById("new-term-btn");
+const terminalMount = document.getElementById("terminal-mount");
 
 let currentSessionId = null;
+let currentSessionCwd = null;
 let saveTimeout = null;
 let editorView = null;
+
+// Terminal state: multiple terminals per session
+const terminals = [];
+let activeTermIndex = -1;
 
 function createEditor(content) {
   if (editorView) editorView.destroy();
@@ -322,6 +327,132 @@ function createEditor(content) {
 
   editorView = new EditorView({ state, parent: editorMount });
 }
+
+async function spawnTerminal(cwd, cmd, args) {
+  const container = document.createElement("div");
+  container.style.cssText = "width:100%;height:100%;display:none;";
+  terminalMount.appendChild(container);
+
+  const term = new Terminal({
+    theme: TERM_THEME,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+  });
+
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+
+  const { termId, pid } = await window.api.ptySpawn({
+    cwd: cwd || undefined,
+    cmd: cmd || undefined,
+    args: args || undefined,
+  });
+
+  term.onData((data) => window.api.ptyWrite(termId, data));
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (container.style.display !== "none") {
+      fitAddon.fit();
+      window.api.ptyResize(termId, term.cols, term.rows);
+    }
+  });
+  resizeObserver.observe(terminalMount);
+
+  const entry = { termId, pid, term, fitAddon, resizeObserver, container };
+  terminals.push(entry);
+
+  renderTerminalTabs();
+  switchToTerminal(terminals.length - 1);
+
+  return entry;
+}
+
+function switchToTerminal(index) {
+  if (index < 0 || index >= terminals.length) return;
+
+  for (const t of terminals) {
+    t.container.style.display = "none";
+  }
+
+  activeTermIndex = index;
+  terminals[index].container.style.display = "block";
+
+  requestAnimationFrame(() => {
+    terminals[index].fitAddon.fit();
+    terminals[index].term.focus();
+  });
+
+  renderTerminalTabs();
+}
+
+async function closeTerminal(index) {
+  if (index < 0 || index >= terminals.length) return;
+
+  const entry = terminals[index];
+  await window.api.ptyKill(entry.termId);
+  entry.resizeObserver.disconnect();
+  entry.term.dispose();
+  entry.container.remove();
+  terminals.splice(index, 1);
+
+  if (terminals.length === 0) {
+    activeTermIndex = -1;
+    sessionView.classList.add("hidden");
+    emptyState.classList.remove("hidden");
+  } else {
+    switchToTerminal(Math.min(index, terminals.length - 1));
+  }
+
+  renderTerminalTabs();
+}
+
+function renderTerminalTabs() {
+  terminalTabList.innerHTML = "";
+  terminals.forEach((t, i) => {
+    const tab = document.createElement("button");
+    tab.className = `terminal-tab${i === activeTermIndex ? " active" : ""}`;
+    tab.textContent = `Terminal ${i + 1} `;
+    const closeBtn = document.createElement("span");
+    closeBtn.className = "terminal-tab-close";
+    closeBtn.textContent = "\u2715";
+    tab.appendChild(closeBtn);
+    tab.addEventListener("click", (e) => {
+      if (e.target.classList.contains("terminal-tab-close")) {
+        closeTerminal(i);
+      } else {
+        switchToTerminal(i);
+      }
+    });
+    terminalTabList.appendChild(tab);
+  });
+}
+
+function killAllTerminals() {
+  const kills = [];
+  while (terminals.length > 0) {
+    const entry = terminals.pop();
+    kills.push(window.api.ptyKill(entry.termId).catch(() => {}));
+    entry.resizeObserver.disconnect();
+    entry.term.dispose();
+    entry.container.remove();
+  }
+  activeTermIndex = -1;
+  terminalTabList.innerHTML = "";
+  return Promise.all(kills);
+}
+
+// Wire PTY output from main process
+window.api.onPtyData((termId, data) => {
+  const entry = terminals.find((t) => t.termId === termId);
+  if (entry) entry.term.write(data);
+});
+
+window.api.onPtyExit((termId) => {
+  const entry = terminals.find((t) => t.termId === termId);
+  if (entry) entry.term.write("\r\n[Process exited]\r\n");
+});
 
 async function loadSessions() {
   const sessions = await window.api.getSessions();
@@ -353,13 +484,17 @@ async function loadSessions() {
 
 async function selectSession(session) {
   currentSessionId = session.sessionId;
+  currentSessionCwd = session.cwd;
 
   document.querySelectorAll(".session-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.sessionId === session.sessionId);
   });
 
+  killAllTerminals();
+
   emptyState.classList.add("hidden");
-  editorContainer.classList.remove("hidden");
+  sessionView.classList.remove("hidden");
+  editorPane.classList.remove("hidden");
   editorProject.textContent = session.project
     ? `${session.project} — ${session.cwd.replace(session.home, "~")}`
     : session.sessionId;
@@ -369,7 +504,62 @@ async function selectSession(session) {
   saveStatus.textContent = "";
 
   await window.api.watchIntention(session.sessionId);
+
+  // Open a companion shell at session's CWD
+  await spawnTerminal(session.cwd);
 }
+
+// "+" in sidebar: new Claude session
+newSessionBtn.addEventListener("click", async () => {
+  // Snapshot current session IDs to detect the new one
+  const beforeSessions = await window.api.getSessions();
+  const beforeIds = new Set(beforeSessions.map((s) => s.sessionId));
+
+  currentSessionId = null;
+  currentSessionCwd = null;
+
+  document
+    .querySelectorAll(".session-item")
+    .forEach((el) => el.classList.remove("active"));
+
+  killAllTerminals();
+
+  emptyState.classList.add("hidden");
+  sessionView.classList.remove("hidden");
+  editorPane.classList.add("hidden"); // hide editor until session detected
+
+  // Spawn Claude via interactive shell (resolves `c` alias)
+  await spawnTerminal(null, "/bin/zsh", ["-ic", "c"]);
+
+  // Poll for a new session to appear
+  let attempts = 0;
+  const detectSession = async () => {
+    const sessions = await window.api.getSessions();
+    const newSession = sessions.find((s) => !beforeIds.has(s.sessionId));
+    if (newSession) {
+      currentSessionId = newSession.sessionId;
+      currentSessionCwd = newSession.cwd;
+      editorPane.classList.remove("hidden");
+      editorProject.textContent = newSession.project
+        ? `${newSession.project} — ${newSession.cwd.replace(newSession.home, "~")}`
+        : "New session";
+
+      const content = await window.api.readIntention(newSession.sessionId);
+      createEditor(content);
+      saveStatus.textContent = "";
+      await window.api.watchIntention(newSession.sessionId);
+      await loadSessions();
+    } else if (++attempts < 30) {
+      setTimeout(detectSession, 1000);
+    }
+  };
+  setTimeout(detectSession, 2000); // give Claude a moment to start
+});
+
+// "+" in terminal tab bar: new terminal at current session's CWD
+newTermBtn.addEventListener("click", async () => {
+  await spawnTerminal(currentSessionCwd);
+});
 
 function scheduleSave() {
   if (!currentSessionId || !editorView) return;

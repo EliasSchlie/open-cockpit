@@ -5,26 +5,39 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>Open Cockpit</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
 </head>
 <body>
   <div id="app">
     <aside id="sidebar">
       <div id="sidebar-header">
         <h2>Sessions</h2>
-        <button id="refresh-btn" title="Refresh sessions">↻</button>
+        <div id="sidebar-actions">
+          <button id="new-session-btn" title="New Claude session">+</button>
+          <button id="refresh-btn" title="Refresh sessions">↻</button>
+        </div>
       </div>
       <ul id="session-list"></ul>
     </aside>
-    <main id="editor-area">
+    <main id="main-area">
       <div id="empty-state">
         <p>Select a session to edit its intention</p>
       </div>
-      <div id="editor-container" class="hidden">
-        <div id="editor-header">
-          <span id="editor-project"></span>
-          <span id="save-status"></span>
+      <div id="session-view" class="hidden">
+        <div id="terminal-pane">
+          <div id="terminal-tabs">
+            <div id="terminal-tab-list"></div>
+            <button id="new-term-btn" title="New terminal">+</button>
+          </div>
+          <div id="terminal-mount"></div>
         </div>
-        <div id="editor-mount"></div>
+        <div id="editor-pane">
+          <div id="editor-header">
+            <span id="editor-project"></span>
+            <span id="save-status"></span>
+          </div>
+          <div id="editor-mount"></div>
+        </div>
       </div>
     </main>
   </div>

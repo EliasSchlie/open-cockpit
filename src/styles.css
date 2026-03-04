@@ -57,8 +57,13 @@ body {
   color: var(--text-dim);
 }
 
-#refresh-btn {
+#sidebar-actions {
+  display: flex;
+  gap: 2px;
   -webkit-app-region: no-drag;
+}
+
+#sidebar-actions button {
   background: none;
   border: none;
   color: var(--text-dim);
@@ -68,7 +73,7 @@ body {
   border-radius: 4px;
 }
 
-#refresh-btn:hover {
+#sidebar-actions button:hover {
   background: var(--border);
   color: var(--text);
 }
@@ -130,8 +135,8 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Editor area */
-#editor-area {
+/* Main area */
+#main-area {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -151,10 +156,110 @@ body {
   display: none !important;
 }
 
-#editor-container {
+/* Session view: horizontal split (terminal | editor) */
+#session-view {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Terminal pane (left) */
+#terminal-pane {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+#terminal-tabs {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  padding-top: 36px;
+  gap: 4px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+#terminal-tab-list {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  overflow-x: auto;
+  -webkit-app-region: no-drag;
+}
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal-tab:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.terminal-tab.active {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.terminal-tab-close {
+  font-size: 10px;
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.terminal-tab-close:hover {
+  opacity: 1;
+}
+
+#new-term-btn {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+#new-term-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+#terminal-mount {
+  flex: 1;
+  min-height: 0;
+}
+
+#terminal-mount .xterm {
   height: 100%;
+  padding: 4px;
+}
+
+/* Editor pane (right) */
+#editor-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  border-left: 1px solid var(--border);
 }
 
 #editor-header {
@@ -176,6 +281,7 @@ body {
 #save-status {
   font-size: 11px;
   color: var(--text-dim);
+  -webkit-app-region: no-drag;
 }
 
 #editor-mount {
