@@ -44,7 +44,7 @@ esac
 
 # Send via socat (or node if socat unavailable)
 if command -v socat &>/dev/null; then
-  echo "$json" | socat -t5 - UNIX-CONNECT:"$SOCKET"
+  echo "$json" | socat -t1 - UNIX-CONNECT:"$SOCKET"
 else
   node -e "
     const net = require('net');

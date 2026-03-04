@@ -574,6 +574,15 @@ async function poolInit(size) {
   );
   pool.slots = slots;
 
+  // Accept trust prompts: Claude shows "Do you trust this folder?" even with --dangerously-skip-permissions
+  // Wait for prompt to appear, then send Enter to accept
+  await new Promise((r) => setTimeout(r, 3000));
+  for (const slot of pool.slots) {
+    daemonSend({ type: "write", termId: slot.termId, data: "\n" });
+  }
+  // Give Claude time to start after trust acceptance
+  await new Promise((r) => setTimeout(r, 2000));
+
   writePool(pool);
 
   // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
@@ -711,6 +720,10 @@ async function reconcilePool() {
         slot.status = "starting";
         slot.sessionId = null;
         changed = true;
+        // Accept trust prompt after spawning
+        setTimeout(() => {
+          daemonSend({ type: "write", termId: newSlot.termId, data: "\n" });
+        }, 3000);
         pollForSessionId(slot.pid, 60000).then((sessionId) => {
           const p = readPool();
           if (!p) return;
