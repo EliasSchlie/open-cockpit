@@ -371,7 +371,7 @@ let activeTermIndex = -1;
 // Generation counter to detect stale async operations after session switches
 let sessionGeneration = 0;
 
-// Sync current terminals into the session cache
+// Sync current terminals into the session cache (renderer + main process)
 function syncSessionCache() {
   if (!currentSessionId) return;
   if (terminals.length === 0) {
@@ -382,6 +382,10 @@ function syncSessionCache() {
       activeTermIndex,
       lastAccessed: Date.now(),
     });
+    // Keep main process metadata in sync
+    for (const t of terminals) {
+      window.api.ptySetSession(t.termId, currentSessionId);
+    }
   }
 }
 
@@ -423,11 +427,42 @@ async function spawnTerminal(cwd, cmd, args) {
   term.loadAddon(fitAddon);
   term.open(container);
 
-  const { termId, pid } = await window.api.ptySpawn({
-    cwd: cwd || undefined,
-    cmd: cmd || undefined,
-    args: args || undefined,
-  });
+  let termId, pid;
+  try {
+    ({ termId, pid } = await window.api.ptySpawn({
+      cwd: cwd || undefined,
+      cmd: cmd || undefined,
+      args: args || undefined,
+      sessionId: currentSessionId || undefined,
+    }));
+  } catch (err) {
+    term.dispose();
+    container.remove();
+    throw err;
+  }
+
+  const entry = {
+    termId,
+    pid,
+    term,
+    fitAddon,
+    resizeObserver: null,
+    container,
+  };
+  terminals.push(entry);
+
+  // Register before attach so replay/data can find this terminal
+  pendingTerminals.set(termId, entry);
+  try {
+    await window.api.ptyAttach(termId);
+  } catch (err) {
+    terminals.splice(terminals.indexOf(entry), 1);
+    term.dispose();
+    container.remove();
+    pendingTerminals.delete(termId);
+    throw err;
+  }
+  pendingTerminals.delete(termId);
 
   term.onData((data) => window.api.ptyWrite(termId, data));
 
@@ -438,9 +473,7 @@ async function spawnTerminal(cwd, cmd, args) {
     }
   });
   resizeObserver.observe(terminalMount);
-
-  const entry = { termId, pid, term, fitAddon, resizeObserver, container };
-  terminals.push(entry);
+  entry.resizeObserver = resizeObserver;
 
   renderTerminalTabs();
   switchToTerminal(terminals.length - 1);
@@ -471,6 +504,7 @@ async function closeTerminal(index) {
   if (index < 0 || index >= terminals.length) return;
 
   const entry = terminals[index];
+  await window.api.ptyDetach(entry.termId).catch(() => {});
   await window.api.ptyKill(entry.termId);
   entry.resizeObserver.disconnect();
   entry.term.dispose();
@@ -559,6 +593,7 @@ function destroySessionTerminals(sessionId) {
   const cached = sessionTerminals.get(sessionId);
   if (!cached) return;
   for (const entry of cached.terminals) {
+    window.api.ptyDetach(entry.termId).catch(() => {});
     window.api.ptyKill(entry.termId).catch(() => {});
     entry.resizeObserver.disconnect();
     entry.term.dispose();
@@ -600,6 +635,9 @@ function cleanupStaleTerminals(liveSessions) {
 }
 
 // Find a terminal entry across all sessions (active + cached)
+// Temporary lookup for terminals being reconnected (before they're in sessionTerminals)
+const pendingTerminals = new Map(); // termId -> entry
+
 function findTerminalEntry(termId) {
   const active = terminals.find((t) => t.termId === termId);
   if (active) return active;
@@ -607,13 +645,19 @@ function findTerminalEntry(termId) {
     const entry = cached.terminals.find((t) => t.termId === termId);
     if (entry) return entry;
   }
-  return null;
+  return pendingTerminals.get(termId) || null;
 }
 
-// Wire PTY output from main process
+// Wire PTY output from daemon (via main process)
 window.api.onPtyData((termId, data) => {
   const entry = findTerminalEntry(termId);
   if (entry) entry.term.write(data);
+});
+
+window.api.onPtyReplay((termId, data) => {
+  const entry = findTerminalEntry(termId);
+  // Skip if buffer was already written directly during reconnect
+  if (entry && !entry.skipReplay) entry.term.write(data);
 });
 
 window.api.onPtyExit((termId) => {
@@ -748,6 +792,10 @@ newSessionBtn.addEventListener("click", async () => {
       if (gen !== sessionGeneration) return;
       currentSessionId = newSession.sessionId;
       currentSessionCwd = newSession.cwd;
+      // Update main process PTY metadata with the new session ID
+      for (const t of terminals) {
+        window.api.ptySetSession(t.termId, newSession.sessionId);
+      }
       syncSessionCache();
 
       editorPane.classList.remove("hidden");
@@ -803,7 +851,7 @@ window.api.onIntentionChanged((content) => {
   }
 });
 
-// Menu keyboard shortcuts (Cmd+T, Cmd+W)
+// Menu keyboard shortcuts
 window.api.onNewTerminalTab(() => {
   if (currentSessionId) spawnTerminal(currentSessionCwd);
 });
@@ -812,11 +860,147 @@ window.api.onCloseTerminalTab(() => {
   if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
 });
 
+window.api.onNextTerminalTab(() => {
+  if (terminals.length > 1) {
+    switchToTerminal((activeTermIndex + 1) % terminals.length);
+  }
+});
+
+window.api.onPrevTerminalTab(() => {
+  if (terminals.length > 1) {
+    switchToTerminal(
+      (activeTermIndex - 1 + terminals.length) % terminals.length,
+    );
+  }
+});
+
+window.api.onSwitchTerminalTab((index) => {
+  if (index < terminals.length) switchToTerminal(index);
+});
+
+// Reconnect a single PTY from daemon (after app restart or reload)
+async function reconnectTerminal(ptyInfo) {
+  const container = document.createElement("div");
+  container.style.cssText = "width:100%;height:100%;display:none;";
+  terminalMount.appendChild(container);
+
+  const term = new Terminal({
+    theme: TERM_THEME,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+  });
+
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+
+  const entry = {
+    termId: ptyInfo.termId,
+    pid: ptyInfo.pid,
+    term,
+    fitAddon,
+    resizeObserver: null,
+    container,
+  };
+
+  // Write buffered output directly (already available from ptyList response)
+  if (ptyInfo.buffer) {
+    term.write(ptyInfo.buffer);
+    entry.skipReplay = true; // Suppress duplicate daemon replay
+  }
+
+  // Register before attach so any new data arriving can find this terminal
+  pendingTerminals.set(ptyInfo.termId, entry);
+
+  // Attach to daemon for future data
+  await window.api.ptyAttach(ptyInfo.termId);
+
+  pendingTerminals.delete(ptyInfo.termId);
+
+  if (ptyInfo.exited) term.write("\r\n[Process exited]\r\n");
+
+  term.onData((data) => window.api.ptyWrite(ptyInfo.termId, data));
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (container.style.display !== "none") {
+      fitAddon.fit();
+      window.api.ptyResize(ptyInfo.termId, term.cols, term.rows);
+    }
+  });
+  resizeObserver.observe(terminalMount);
+  entry.resizeObserver = resizeObserver;
+
+  return entry;
+}
+
+// On app start: reconnect to any PTYs that survived from previous instance
+async function reconnectAllPtys() {
+  const ptys = await window.api.ptyList();
+  if (ptys.length === 0) return;
+
+  // Group by sessionId
+  const bySession = new Map();
+  for (const p of ptys) {
+    const sid = p.sessionId || "__none__";
+    if (!bySession.has(sid)) bySession.set(sid, []);
+    bySession.get(sid).push(p);
+  }
+
+  // Reconnect each session's terminals (skip orphaned terminals with no session)
+  for (const [sid, sessionPtys] of bySession) {
+    if (sid === "__none__") {
+      // Detach orphaned terminals — they have no session to display under
+      for (const p of sessionPtys) {
+        window.api.ptyDetach(p.termId).catch(() => {});
+      }
+      continue;
+    }
+    const entries = [];
+    for (const p of sessionPtys) {
+      entries.push(await reconnectTerminal(p));
+    }
+    sessionTerminals.set(sid, {
+      terminals: entries,
+      activeTermIndex: 0,
+      lastAccessed: Date.now(),
+    });
+  }
+
+  // Restore the most recent alive session that has terminals
+  const sessions = await window.api.getSessions();
+  const lastActive = sessions.find(
+    (s) => s.alive && sessionTerminals.has(s.sessionId),
+  );
+  if (lastActive) {
+    currentSessionId = lastActive.sessionId;
+    currentSessionCwd = lastActive.cwd;
+
+    terminals = sessionTerminals.get(lastActive.sessionId).terminals;
+    activeTermIndex = 0;
+
+    emptyState.classList.add("hidden");
+    sessionView.classList.remove("hidden");
+    editorPane.classList.remove("hidden");
+    editorProject.textContent = lastActive.project
+      ? `${lastActive.project} — ${lastActive.cwd.replace(lastActive.home, "~")}`
+      : lastActive.sessionId;
+
+    const content = await window.api.readIntention(lastActive.sessionId);
+    createEditor(content);
+    await window.api.watchIntention(lastActive.sessionId);
+
+    renderTerminalTabs();
+    switchToTerminal(0);
+  }
+}
+
 refreshBtn.addEventListener("click", async () => {
   await loadDirColors();
   loadSessions();
 });
-loadDirColors().then(() => {
+loadDirColors().then(async () => {
+  await reconnectAllPtys();
   setInterval(loadSessions, 10000);
   loadSessions();
 });
