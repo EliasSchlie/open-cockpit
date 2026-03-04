@@ -3,7 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const net = require("net");
-const { spawn: spawnChild } = require("child_process");
+const { spawn: spawnChild, execFileSync, execSync } = require("child_process");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -14,6 +14,7 @@ const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 const DAEMON_SOCKET = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
 const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
+const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
@@ -81,7 +82,6 @@ function createWindow() {
 
 function getCwdFromJsonl(sessionId) {
   try {
-    const { execFileSync } = require("child_process");
     const jsonlPath = execFileSync(
       "find",
       [CLAUDE_PROJECTS_DIR, "-name", `${sessionId}.jsonl`],
@@ -118,6 +118,42 @@ function getIntentionHeading(filePath) {
   }
 }
 
+// Read idle signal for a PID. Returns {cwd, ts, trigger, session_id} or null.
+function getIdleSignal(pid) {
+  try {
+    const signalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
+    if (!fs.existsSync(signalFile)) return null;
+    return JSON.parse(fs.readFileSync(signalFile, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+// Check if a session's JSONL transcript contains any human turn.
+// Uses the transcript path from the idle signal to avoid a `find` call.
+function hasUserInput(transcriptPath) {
+  if (!transcriptPath) return false;
+  try {
+    // Read in chunks — check early lines first (human turns appear near the start)
+    const fd = fs.openSync(transcriptPath, "r");
+    const buf = Buffer.alloc(64 * 1024); // 64KB chunks
+    let bytesRead;
+    let offset = 0;
+    const needle = '"type":"human"';
+    try {
+      while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, offset)) > 0) {
+        if (buf.toString("utf-8", 0, bytesRead).includes(needle)) return true;
+        offset += bytesRead;
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function getSessions() {
   if (!fs.existsSync(SESSION_PIDS_DIR)) return [];
 
@@ -140,9 +176,10 @@ function getSessions() {
     let cwd = null;
     if (alive) {
       try {
-        const lsof = require("child_process").execSync(
-          `lsof -a -p ${pid} -d cwd -F n 2>/dev/null`,
-          { encoding: "utf-8" },
+        const lsof = execFileSync(
+          "lsof",
+          ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
+          { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
         );
         const match = lsof.match(/^n(.+)$/m);
         if (match) cwd = match[1];
@@ -180,6 +217,25 @@ function getSessions() {
       }
     }
 
+    // Determine session status: idle, processing, or fresh
+    const idleSignal = alive ? getIdleSignal(pid) : null;
+    let status;
+    let idleTs = 0;
+
+    if (!alive) {
+      status = "dead";
+    } else if (idleSignal) {
+      idleTs = idleSignal.ts || 0;
+      // Idle signal present — but is it fresh (never had user input)?
+      if (!hasUserInput(idleSignal.transcript)) {
+        status = "fresh";
+      } else {
+        status = "idle";
+      }
+    } else {
+      status = "processing";
+    }
+
     sessions.push({
       pid,
       sessionId,
@@ -190,15 +246,31 @@ function getSessions() {
       project: cwd ? path.basename(cwd) : null,
       hasIntention,
       intentionHeading,
+      status,
+      idleTs,
     });
   }
 
-  sessions.sort((a, b) => {
-    if (a.alive !== b.alive) return a.alive ? -1 : 1;
-    return Number(b.pid) - Number(a.pid);
-  });
+  return sortSessions(sessions);
+}
 
-  return sessions;
+// Sort into groups: idle (LIFO by ts) → processing (longest running first) → fresh → dead
+function sortSessions(sessions) {
+  const idle = sessions.filter((s) => s.status === "idle");
+  const processing = sessions.filter((s) => s.status === "processing");
+  const fresh = sessions.filter((s) => s.status === "fresh");
+  const dead = sessions.filter((s) => s.status === "dead");
+
+  // Idle: most recently idle on top (LIFO — highest ts first)
+  idle.sort((a, b) => b.idleTs - a.idleTs);
+  // Processing: longest running on top (lowest PID = oldest process)
+  processing.sort((a, b) => Number(a.pid) - Number(b.pid));
+  // Fresh: newest first
+  fresh.sort((a, b) => Number(b.pid) - Number(a.pid));
+  // Dead: newest first
+  dead.sort((a, b) => Number(b.pid) - Number(a.pid));
+
+  return [...idle, ...processing, ...fresh, ...dead];
 }
 
 function readIntention(sessionId) {

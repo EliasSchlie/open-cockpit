@@ -15,6 +15,8 @@
   --border: #1a1a1a;
   --green: #00ff41;
   --red: #ff1a1a;
+  --yellow: #ffff00;
+  --mauve: #ff00ff;
 }
 
 html,
@@ -145,9 +147,17 @@ body {
   flex-shrink: 0;
 }
 
-.session-status.alive {
+.session-status.idle {
   background: var(--green);
   box-shadow: 0 0 6px var(--green);
+}
+
+.session-status.processing {
+  background: var(--yellow);
+}
+
+.session-status.fresh {
+  background: var(--mauve);
 }
 
 .session-status.dead {
@@ -161,6 +171,16 @@ body {
   border-radius: 2px;
   align-self: stretch;
   flex-shrink: 0;
+}
+
+.session-section-header {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  cursor: default;
 }
 
 .session-cwd {

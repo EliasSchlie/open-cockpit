@@ -672,6 +672,20 @@ window.api.onPtyExit((termId) => {
   if (entry) entry.term.write("\r\n[Process exited]\r\n");
 });
 
+const STATUS_LABELS = {
+  idle: "Ready for input",
+  processing: "Processing",
+  fresh: "Fresh",
+  dead: "Inactive",
+};
+
+const STATUS_CLASSES = {
+  idle: "idle",
+  processing: "processing",
+  fresh: "fresh",
+  dead: "dead",
+};
+
 async function loadSessions() {
   const sessions = await window.api.getSessions();
   cachedSessions = sessions;
@@ -684,7 +698,19 @@ async function loadSessions() {
     return;
   }
 
+  // Sessions arrive pre-sorted in group order from main process
+  let currentGroup = null;
   for (const s of sessions) {
+    // Insert section header when group changes
+    if (s.status !== currentGroup) {
+      currentGroup = s.status;
+      const count = sessions.filter((x) => x.status === s.status).length;
+      const header = document.createElement("li");
+      header.className = "session-section-header";
+      header.textContent = `${STATUS_LABELS[s.status] || s.status} (${count})`;
+      sessionList.appendChild(header);
+    }
+
     const li = document.createElement("li");
     li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}`;
     li.dataset.sessionId = s.sessionId;
@@ -698,7 +724,7 @@ async function loadSessions() {
       <div class="session-dir-indicator" style="${indicatorStyle}"></div>
       <div class="session-item-content">
         <div class="session-project">
-          <span class="session-status ${s.alive ? "alive" : "dead"}"></span>
+          <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
           ${heading}
         </div>
         <div class="session-cwd">${displayPath}</div>
