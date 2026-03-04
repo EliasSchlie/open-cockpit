@@ -1,10 +1,10 @@
 {
-  "name": "claude-sessions",
-  "description": "Maps Claude Code session PIDs to session IDs for the Claude Sessions app",
+  "name": "open-cockpit",
+  "description": "Maps Claude Code session PIDs to session IDs for the Open Cockpit app",
   "version": "0.1.0",
   "author": {
     "name": "Elias Schlie"
   },
-  "repository": "https://github.com/EliasSchlie/claude-sessions",
+  "repository": "https://github.com/EliasSchlie/open-cockpit",
   "license": "MIT"
 }

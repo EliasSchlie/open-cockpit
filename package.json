@@ -1,7 +1,7 @@
 {
-  "name": "claude-sessions",
+  "name": "open-cockpit",
   "version": "0.1.0",
-  "description": "Electron app for managing Claude Code sessions",
+  "description": "Session cockpit for Claude Code",
   "main": "src/main.js",
   "scripts": {
     "build": "esbuild src/renderer.js --bundle --outfile=dist/renderer.js --platform=browser --format=iife",

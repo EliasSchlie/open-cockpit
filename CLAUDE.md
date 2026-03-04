@@ -1,4 +1,4 @@
-# Claude Sessions
+# Open Cockpit
 
 Electron app + Claude Code plugin for session intention tracking.
 
