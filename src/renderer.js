@@ -48,19 +48,19 @@ const livePreviewTheme = EditorView.theme({
   ".cm-md-heading1": {
     fontSize: "1.8em",
     fontWeight: "700",
-    color: "#89b4fa",
+    color: "#ff1a1a",
     marginTop: "8px",
   },
   ".cm-md-heading2": {
     fontSize: "1.4em",
     fontWeight: "600",
-    color: "#89b4fa",
+    color: "#ff4444",
     marginTop: "6px",
   },
   ".cm-md-heading3": {
     fontSize: "1.2em",
     fontWeight: "600",
-    color: "#89b4fa",
+    color: "#ff6666",
     marginTop: "4px",
   },
   ".cm-md-bold": { fontWeight: "700" },
@@ -68,26 +68,27 @@ const livePreviewTheme = EditorView.theme({
   ".cm-md-code": {
     fontFamily: "'SF Mono', Menlo, monospace",
     fontSize: "13px",
-    background: "#313244",
+    background: "#1a1a1a",
     padding: "1px 5px",
     borderRadius: "3px",
+    color: "#ff6666",
   },
-  ".cm-md-link": { color: "#89b4fa", textDecoration: "underline" },
-  ".cm-md-strikethrough": { textDecoration: "line-through", color: "#6c7086" },
+  ".cm-md-link": { color: "#ff4444", textDecoration: "underline" },
+  ".cm-md-strikethrough": { textDecoration: "line-through", color: "#555555" },
   ".cm-md-bullet-char": {
-    color: "#89b4fa",
+    color: "#ff1a1a",
     fontWeight: "600",
     marginRight: "2px",
   },
   ".cm-md-list-line": { paddingLeft: "8px" },
   ".cm-md-blockquote": {
-    borderLeft: "3px solid #89b4fa",
+    borderLeft: "3px solid #ff1a1a",
     paddingLeft: "14px",
-    color: "#a6adc8",
+    color: "#999999",
   },
   ".cm-md-hr": {
     display: "block",
-    borderTop: "1px solid #45475a",
+    borderTop: "1px solid #1a1a1a",
     margin: "12px 0",
   },
   ".cm-md-checkbox": { marginRight: "4px" },
@@ -242,46 +243,103 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 const darkTheme = EditorView.theme(
   {
     "&": {
-      backgroundColor: "#1e1e2e",
-      color: "#cdd6f4",
+      backgroundColor: "#0a0a0a",
+      color: "#e0e0e0",
       height: "100%",
     },
-    ".cm-cursor": { borderLeftColor: "#cdd6f4" },
+    ".cm-cursor": { borderLeftColor: "#ff1a1a" },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-      backgroundColor: "#45475a",
+      backgroundColor: "#1a0808",
     },
     ".cm-gutters": { display: "none" },
-    ".cm-activeLine": { backgroundColor: "#25253a" },
+    ".cm-activeLine": { backgroundColor: "#0f0f0f" },
     "&.cm-focused": { outline: "none" },
     ".cm-scroller": { overflow: "auto" },
   },
   { dark: true },
 );
 
-// --- xterm.js Catppuccin theme ---
+// --- xterm.js theme (minimal — let shell theme handle ANSI colors) ---
 const TERM_THEME = {
-  background: "#1e1e2e",
-  foreground: "#cdd6f4",
-  cursor: "#cdd6f4",
-  cursorAccent: "#1e1e2e",
-  selectionBackground: "#45475a",
-  black: "#45475a",
-  red: "#f38ba8",
-  green: "#a6e3a1",
-  yellow: "#f9e2af",
-  blue: "#89b4fa",
-  magenta: "#cba6f7",
-  cyan: "#94e2d5",
-  white: "#bac2de",
-  brightBlack: "#585b70",
-  brightRed: "#f38ba8",
-  brightGreen: "#a6e3a1",
-  brightYellow: "#f9e2af",
-  brightBlue: "#89b4fa",
-  brightMagenta: "#cba6f7",
-  brightCyan: "#94e2d5",
-  brightWhite: "#a6adc8",
+  background: "#0a0a0a",
+  cursor: "#ff1a1a",
+  cursorAccent: "#0a0a0a",
+  selectionBackground: "#1a0808",
 };
+
+// --- Directory color coding ---
+// Neon-friendly palette for directory indicators
+const DIR_COLORS = [
+  "#ff1a1a", // neon red
+  "#00ff41", // neon green
+  "#ff6600", // neon orange
+  "#00ccff", // neon cyan
+  "#ff00ff", // neon magenta
+  "#ffff00", // neon yellow
+  "#7b68ee", // neon purple
+  "#ff69b4", // neon pink
+  "#00ff88", // neon mint
+  "#ff4500", // neon vermillion
+];
+
+// User-configured colors from ~/.open-cockpit/colors.json
+// Format: { "~/Documents/Projects/foo": "#ff00ff" }
+// null value = no color (transparent)
+let userDirColors = {};
+
+async function loadDirColors() {
+  userDirColors = await window.api.getDirColors();
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+// Get the path used for color hashing.
+// - Worktrees (.claude/worktrees/xxx) → parent project dir
+// - Inside a git repo → git root
+// - Otherwise → exact cwd (each folder gets its own color)
+function getColorKey(session) {
+  const { cwd, gitRoot, home } = session;
+  if (!cwd) return "";
+  // Strip worktree suffix (.claude/worktrees/xxx or .wt/xxx)
+  const wtMatch = cwd.match(/^(.+?)\/(?:\.claude\/worktrees|\.wt)\/.+$/);
+  const resolved = wtMatch ? wtMatch[1] : cwd;
+  // If inside a git repo, use the git root
+  if (gitRoot) {
+    // Also handle worktree: if the worktree-stripped path has a git root,
+    // use the worktree-stripped path (it IS the git root)
+    if (wtMatch) return wtMatch[1];
+    return gitRoot;
+  }
+  return resolved;
+}
+
+function getDirColor(session) {
+  const { cwd, home } = session;
+  if (!cwd) return null;
+  // Home directory exactly → no color
+  if (cwd === home) return null;
+
+  const colorKey = getColorKey(session);
+
+  // Check user config — match longest prefix first
+  const configKeys = Object.keys(userDirColors).sort(
+    (a, b) => b.length - a.length,
+  );
+  for (const key of configKeys) {
+    const expandedKey = home ? key.replace(/^~/, home) : key;
+    if (colorKey === expandedKey || colorKey.startsWith(expandedKey + "/")) {
+      return userDirColors[key]; // null = no color, string = exact color
+    }
+  }
+
+  return DIR_COLORS[hashString(colorKey) % DIR_COLORS.length];
+}
 
 // --- App logic ---
 const sessionList = document.getElementById("session-list");
@@ -580,12 +638,19 @@ async function loadSessions() {
     li.dataset.sessionId = s.sessionId;
     const heading = s.intentionHeading || "No intention yet";
     const displayPath = s.cwd ? s.cwd.replace(s.home, "~") : "~";
+    const dirColor = getDirColor(s);
+    const indicatorStyle = dirColor
+      ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
+      : "background: transparent";
     li.innerHTML = `
-      <div class="session-project">
-        <span class="session-status ${s.alive ? "alive" : "dead"}"></span>
-        ${heading}
+      <div class="session-dir-indicator" style="${indicatorStyle}"></div>
+      <div class="session-item-content">
+        <div class="session-project">
+          <span class="session-status ${s.alive ? "alive" : "dead"}"></span>
+          ${heading}
+        </div>
+        <div class="session-cwd">${displayPath}</div>
       </div>
-      <div class="session-cwd">${displayPath}</div>
     `;
     li.addEventListener("click", () => selectSession(s));
     sessionList.appendChild(li);
@@ -612,6 +677,19 @@ async function selectSession(session) {
   editorProject.textContent = session.project
     ? `${session.project} — ${session.cwd.replace(session.home, "~")}`
     : session.sessionId;
+
+  // Apply directory color to editor header
+  const dirColor = getDirColor(session);
+  const header = document.getElementById("editor-header");
+  const existingBar = header.querySelector("#editor-header-color-bar");
+  if (existingBar) existingBar.remove();
+  if (dirColor) {
+    const colorBar = document.createElement("div");
+    colorBar.id = "editor-header-color-bar";
+    colorBar.style.background = dirColor;
+    colorBar.style.boxShadow = `0 0 8px ${dirColor}`;
+    header.appendChild(colorBar);
+  }
 
   // Restore cached terminals immediately (sync, no race risk)
   if (!restoreSessionTerminals(session.sessionId)) {
@@ -734,6 +812,11 @@ window.api.onCloseTerminalTab(() => {
   if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
 });
 
-refreshBtn.addEventListener("click", loadSessions);
-setInterval(loadSessions, 10000);
-loadSessions();
+refreshBtn.addEventListener("click", async () => {
+  await loadDirColors();
+  loadSessions();
+});
+loadDirColors().then(() => {
+  setInterval(loadSessions, 10000);
+  loadSessions();
+});

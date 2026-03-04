@@ -5,7 +5,9 @@ const os = require("os");
 const pty = require("node-pty");
 
 const IS_DEV = process.argv.includes("--dev");
-const INTENTIONS_DIR = path.join(os.homedir(), ".open-cockpit", "intentions");
+const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
+const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
+const COLORS_FILE = path.join(OPEN_COCKPIT_DIR, "colors.json");
 const SESSION_PIDS_DIR = path.join(os.homedir(), ".claude", "session-pids");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 
@@ -123,12 +125,30 @@ function getSessions() {
       ? getIntentionHeading(intentionFile)
       : null;
 
+    // Find git root for color grouping
+    // Check for .git directory (not file — worktrees have a .git file pointing elsewhere)
+    let gitRoot = null;
+    if (cwd) {
+      let dir = cwd;
+      while (dir !== path.dirname(dir)) {
+        const dotGit = path.join(dir, ".git");
+        try {
+          if (fs.statSync(dotGit).isDirectory()) {
+            gitRoot = dir;
+            break;
+          }
+        } catch {}
+        dir = path.dirname(dir);
+      }
+    }
+
     sessions.push({
       pid,
       sessionId,
       alive,
       cwd,
       home: os.homedir(),
+      gitRoot,
       project: cwd ? path.basename(cwd) : null,
       hasIntention,
       intentionHeading,
@@ -202,7 +222,13 @@ function killAllPty() {
 }
 
 app.whenReady().then(() => {
-  // Existing IPC handlers
+  ipcMain.handle("get-dir-colors", () => {
+    try {
+      return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
+    } catch {
+      return {};
+    }
+  });
   ipcMain.handle("get-sessions", () => getSessions());
   ipcMain.handle("read-intention", (_e, sessionId) => readIntention(sessionId));
   ipcMain.handle("write-intention", (_e, sessionId, content) =>
