@@ -1,19 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-// Extracted sortSessions from main.js for testing
-function sortSessions(sessions) {
-  const recent = sessions.filter(
-    (s) => s.status === "idle" || s.status === "offloaded",
-  );
-  const processing = sessions.filter((s) => s.status === "processing");
-  const fresh = sessions.filter((s) => s.status === "fresh");
-  const dead = sessions.filter((s) => s.status === "dead");
-
-  recent.sort((a, b) => b.idleTs - a.idleTs);
-  processing.sort((a, b) => Number(a.pid) - Number(b.pid));
-
-  return [...recent.slice(0, 10), ...processing, ...fresh, ...dead];
-}
+import { sortSessions } from "../src/sort-sessions";
 
 describe("sortSessions", () => {
   it("sorts recent (idle+offloaded) by most recently used first", () => {

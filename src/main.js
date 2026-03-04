@@ -4,6 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const net = require("net");
 const { spawn: spawnChild, execFileSync, execSync } = require("child_process");
+const { sortSessions } = require("./sort-sessions");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -307,22 +308,6 @@ function getSessions() {
 
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
 // Pool and external sessions are mixed together in the same sections.
-function sortSessions(sessions) {
-  const recent = sessions.filter(
-    (s) => s.status === "idle" || s.status === "offloaded",
-  );
-  const processing = sessions.filter((s) => s.status === "processing");
-  const fresh = sessions.filter((s) => s.status === "fresh");
-  const dead = sessions.filter((s) => s.status === "dead");
-
-  // Recent: most recently used first (highest idleTs)
-  recent.sort((a, b) => b.idleTs - a.idleTs);
-  // Processing: longest running on top (lowest PID = oldest process)
-  processing.sort((a, b) => Number(a.pid) - Number(b.pid));
-
-  return [...recent.slice(0, 10), ...processing, ...fresh, ...dead];
-}
-
 // Offload a session: save snapshot + meta, then send /clear to terminal
 async function offloadSession(sessionId, termId, claudeSessionId) {
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
@@ -409,7 +394,9 @@ function readPool() {
 
 function writePool(pool) {
   fs.mkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
-  fs.writeFileSync(POOL_FILE, JSON.stringify(pool, null, 2));
+  const tmp = POOL_FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(pool, null, 2));
+  fs.renameSync(tmp, POOL_FILE);
 }
 
 // Initialize pool: spawn N Claude sessions via PTY daemon

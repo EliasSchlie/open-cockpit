@@ -730,10 +730,10 @@ function createSessionItem(s) {
     <div class="session-item-content">
       <div class="session-project">
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
-        ${heading}
+        ${escapeHtml(heading)}
         ${extTag}
       </div>
-      <div class="session-cwd">${displayPath}</div>
+      <div class="session-cwd">${escapeHtml(displayPath)}</div>
     </div>
   `;
   li.addEventListener("click", () => handleSessionClick(s));
@@ -760,8 +760,8 @@ async function showOffloadMenu(session) {
   menu.className = "offload-menu-overlay";
   menu.innerHTML = `
     <div class="offload-menu-dialog">
-      <div class="offload-menu-title">${session.intentionHeading || "Offloaded Session"}</div>
-      <div class="offload-menu-subtitle">${session.cwd ? session.cwd.replace(session.home, "~") : "~"}</div>
+      <div class="offload-menu-title">${escapeHtml(session.intentionHeading || "Offloaded Session")}</div>
+      <div class="offload-menu-subtitle">${escapeHtml(session.cwd ? session.cwd.replace(session.home, "~") : "~")}</div>
       <div class="offload-menu-actions">
         <button class="offload-menu-btn offload-menu-load">Load Session</button>
         <button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>
@@ -808,7 +808,7 @@ function showSnapshotViewer(session, snapshotText) {
   viewer.innerHTML = `
     <div class="snapshot-dialog">
       <div class="snapshot-header">
-        <span>${session.intentionHeading || "Snapshot"}</span>
+        <span>${escapeHtml(session.intentionHeading || "Snapshot")}</span>
         <button class="snapshot-close">\u2715</button>
       </div>
       <pre class="snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
@@ -903,9 +903,6 @@ async function resumeOffloadedSession(session) {
   // Send /resume to the fresh slot's terminal
   await window.api.ptyWrite(slot.termId, `/resume ${meta.claudeSessionId}\n`);
 
-  // Remove offload data
-  await window.api.removeOffloadData(session.sessionId);
-
   // Poll until the session appears in getSessions
   const started = Date.now();
   while (Date.now() - started < 10000) {
@@ -915,6 +912,8 @@ async function resumeOffloadedSession(session) {
       (s) => s.sessionId === session.sessionId && s.status !== "offloaded",
     );
     if (resumed) {
+      // Remove offload data only after confirmed resume
+      await window.api.removeOffloadData(session.sessionId);
       await loadSessions();
       await selectSession(resumed);
       return;
@@ -1586,6 +1585,10 @@ async function showPoolSettings() {
         overlay.querySelector(".pool-size-input").value,
         10,
       );
+      if (isNaN(size) || size < 1 || size > 20) {
+        showNotification("Pool size must be between 1 and 20");
+        return;
+      }
       initBtn.textContent = "Initializing...";
       initBtn.disabled = true;
       try {
@@ -1609,6 +1612,10 @@ async function showPoolSettings() {
         overlay.querySelector(".pool-size-input").value,
         10,
       );
+      if (isNaN(newSize) || newSize < 1 || newSize > 20) {
+        showNotification("Pool size must be between 1 and 20");
+        return;
+      }
       resizeBtn.textContent = "Resizing...";
       resizeBtn.disabled = true;
       try {
