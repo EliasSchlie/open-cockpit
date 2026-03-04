@@ -13,6 +13,7 @@ const {
   createSlot,
   selectShrinkCandidates,
 } = require("./pool");
+const { startApiServer } = require("./api-server");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -588,6 +589,21 @@ function getPoolHealth() {
   });
 }
 
+// Destroy pool: kill all slots and remove pool.json
+async function poolDestroy() {
+  const pool = readPool();
+  if (!pool) throw new Error("Pool not initialized");
+  for (const slot of pool.slots) {
+    try {
+      await daemonRequest({ type: "kill", termId: slot.termId });
+    } catch {}
+  }
+  try {
+    fs.unlinkSync(POOL_FILE);
+  } catch {}
+  return { destroyed: true, slotsKilled: pool.slots.length };
+}
+
 // Reconcile pool.json with reality on startup.
 // Daemon terminals survive app restarts, so pool slots should still be alive.
 // Update any stale state (dead terminals, changed PIDs, etc.)
@@ -936,6 +952,75 @@ app.whenReady().then(async () => {
     console.error("[main] Pool reconciliation failed:", err.message);
   }
 
+  // --- Programmatic API server ---
+  const api = startApiServer({
+    "pool-init": (msg) => poolInit(msg.size),
+    "pool-resize": (msg) => poolResize(msg.size),
+    "pool-health": () => getPoolHealth(),
+    "pool-read": () => readPool(),
+    "pool-destroy": () => poolDestroy(),
+    "get-sessions": () => {
+      const sessions = getSessions();
+      syncPoolStatuses(sessions);
+      return sessions;
+    },
+    "read-intention": (msg) => {
+      validateSessionId(msg.sessionId);
+      return readIntention(msg.sessionId);
+    },
+    "write-intention": (msg) => {
+      validateSessionId(msg.sessionId);
+      writeIntention(msg.sessionId, String(msg.content || ""));
+      return { ok: true };
+    },
+    "offload-session": (msg) => {
+      validateSessionId(msg.sessionId);
+      return offloadSession(msg.sessionId, msg.termId, msg.claudeSessionId, {});
+    },
+    "read-offload-snapshot": (msg) => {
+      validateSessionId(msg.sessionId);
+      return readOffloadSnapshot(msg.sessionId);
+    },
+    "read-offload-meta": (msg) => {
+      validateSessionId(msg.sessionId);
+      return readOffloadMeta(msg.sessionId);
+    },
+    "pty-list": async () => {
+      const resp = await daemonRequest({ type: "list" });
+      return resp.ptys;
+    },
+    "pty-write": async (msg) => {
+      if (!msg.termId) throw new Error("missing termId");
+      await ensureDaemon();
+      daemonSend({
+        type: "write",
+        termId: msg.termId,
+        data: String(msg.data || ""),
+      });
+      return { ok: true };
+    },
+    "pty-read": async (msg) => {
+      if (!msg.termId) throw new Error("missing termId");
+      const resp = await daemonRequest({ type: "list" });
+      const pty = resp.ptys.find((p) => p.termId === msg.termId);
+      return pty ? { termId: pty.termId, buffer: pty.buffer } : null;
+    },
+    "pty-spawn": async (msg) => {
+      const resp = await daemonRequest({
+        type: "spawn",
+        cwd: msg.cwd || os.homedir(),
+        cmd: msg.cmd || "/bin/zsh",
+        args: msg.args || [],
+      });
+      return { termId: resp.termId, pid: resp.pid };
+    },
+    "pty-kill": async (msg) => {
+      if (!msg.termId) throw new Error("missing termId");
+      await daemonRequest({ type: "kill", termId: msg.termId });
+      return { ok: true };
+    },
+  });
+
   ipcMain.handle("get-dir-colors", () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
@@ -1206,6 +1291,8 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", () => {
+  // Clean up API server
+  if (api) api.cleanup();
   // Disconnect from daemon (daemon keeps PTYs alive)
   if (daemonSocket && !daemonSocket.destroyed) {
     daemonSocket.destroy();

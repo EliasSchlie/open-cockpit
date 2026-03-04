@@ -29,5 +29,8 @@
     "electron-rebuild": "^3.2.9",
     "esbuild": "^0.27.3",
     "vitest": "^4.0.18"
+  },
+  "bin": {
+    "cockpit-cli": "bin/cockpit-cli"
   }
 }

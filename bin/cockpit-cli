@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+/**
+ * cockpit-cli — CLI wrapper for the Open Cockpit programmatic API.
+ *
+ * Usage:
+ *   cockpit-cli <command> [args...]
+ *
+ * Examples:
+ *   cockpit-cli ping
+ *   cockpit-cli get-sessions
+ *   cockpit-cli pool-health
+ *   cockpit-cli read-intention <sessionId>
+ *   cockpit-cli pty-list
+ */
+
+const net = require("net");
+const path = require("path");
+const os = require("os");
+
+const API_SOCKET = path.join(os.homedir(), ".open-cockpit", "api.sock");
+const TIMEOUT_MS = 10000;
+
+const [, , command, ...rest] = process.argv;
+
+if (!command || command === "--help" || command === "-h") {
+  console.log(`Usage: cockpit-cli <command> [args...]
+
+Commands:
+  ping                              Check API server is alive
+  get-sessions                      List all sessions
+  read-intention <sessionId>        Read intention file
+  write-intention <sessionId> <content>  Write intention file
+  pool-init [size]                  Initialize session pool
+  pool-resize <size>                Resize session pool
+  pool-health                       Get pool health
+  pool-read                         Read pool.json
+  pool-destroy                      Destroy pool
+  pty-list                          List terminals
+  pty-write <termId> <data>         Write to terminal
+  pty-read <termId>                 Read terminal buffer
+  pty-spawn [cwd] [cmd] [args...]   Spawn terminal
+  pty-kill <termId>                 Kill terminal
+  offload-session <sessionId> <termId> [claudeSessionId]
+  read-offload-snapshot <sessionId>
+  read-offload-meta <sessionId>
+  subscribe                         Subscribe to events (streaming)`);
+  process.exit(0);
+}
+
+function buildMessage(cmd, args) {
+  const msg = { id: 1, type: cmd };
+
+  switch (cmd) {
+    case "ping":
+    case "get-sessions":
+    case "pool-health":
+    case "pool-read":
+    case "pool-destroy":
+    case "pty-list":
+      break;
+    case "pool-init":
+      if (args[0]) msg.size = parseInt(args[0], 10);
+      break;
+    case "pool-resize":
+      if (!args[0]) fatal("Usage: cockpit-cli pool-resize <size>");
+      msg.size = parseInt(args[0], 10);
+      break;
+    case "read-intention":
+    case "read-offload-snapshot":
+    case "read-offload-meta":
+      if (!args[0]) fatal(`Usage: cockpit-cli ${cmd} <sessionId>`);
+      msg.sessionId = args[0];
+      break;
+    case "write-intention":
+      if (!args[0] || !args[1]) fatal("Usage: cockpit-cli write-intention <sessionId> <content>");
+      msg.sessionId = args[0];
+      msg.content = args[1];
+      break;
+    case "offload-session":
+      if (!args[0] || !args[1]) fatal("Usage: cockpit-cli offload-session <sessionId> <termId>");
+      msg.sessionId = args[0];
+      msg.termId = parseInt(args[1], 10);
+      if (args[2]) msg.claudeSessionId = args[2];
+      break;
+    case "pty-write":
+      if (!args[0] || args[1] === undefined) fatal("Usage: cockpit-cli pty-write <termId> <data>");
+      msg.termId = parseInt(args[0], 10);
+      msg.data = args[1];
+      break;
+    case "pty-read":
+    case "pty-kill":
+      if (!args[0]) fatal(`Usage: cockpit-cli ${cmd} <termId>`);
+      msg.termId = parseInt(args[0], 10);
+      break;
+    case "pty-spawn":
+      if (args[0]) msg.cwd = args[0];
+      if (args[1]) msg.cmd = args[1];
+      if (args.length > 2) msg.args = args.slice(2);
+      break;
+    case "subscribe":
+      break;
+    default:
+      fatal(`Unknown command: ${cmd}`);
+  }
+  return msg;
+}
+
+function fatal(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+const msg = buildMessage(command, rest);
+const isSubscribe = command === "subscribe";
+
+const socket = net.createConnection(API_SOCKET);
+let buf = "";
+let responded = false;
+
+const timer = isSubscribe
+  ? null
+  : setTimeout(() => {
+      if (!responded) fatal("Timeout: no response from API server");
+    }, TIMEOUT_MS);
+
+socket.on("connect", () => {
+  socket.write(JSON.stringify(msg) + "\n");
+});
+
+socket.on("data", (chunk) => {
+  buf += chunk.toString();
+  let idx;
+  while ((idx = buf.indexOf("\n")) !== -1) {
+    const line = buf.slice(0, idx);
+    buf = buf.slice(idx + 1);
+    if (!line.trim()) continue;
+    try {
+      const resp = JSON.parse(line);
+      if (isSubscribe) {
+        console.log(JSON.stringify(resp));
+        continue;
+      }
+      responded = true;
+      if (timer) clearTimeout(timer);
+      if (resp.type === "error") {
+        console.error(JSON.stringify(resp, null, 2));
+        process.exit(1);
+      }
+      const output = resp.data !== undefined ? resp.data : resp;
+      if (typeof output === "string") {
+        console.log(output);
+      } else {
+        console.log(JSON.stringify(output, null, 2));
+      }
+      if (!isSubscribe) socket.end();
+    } catch (err) {
+      console.error("Parse error:", err.message);
+    }
+  }
+});
+
+socket.on("error", (err) => {
+  if (err.code === "ENOENT" || err.code === "ECONNREFUSED") {
+    fatal("Cannot connect to Open Cockpit API. Is the app running?");
+  }
+  fatal(`Socket error: ${err.message}`);
+});
+
+socket.on("close", () => {
+  if (!responded && !isSubscribe) fatal("Connection closed without response");
+});
