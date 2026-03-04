@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("api", {
+  getDirColors: () => ipcRenderer.invoke("get-dir-colors"),
   getSessions: () => ipcRenderer.invoke("get-sessions"),
   readIntention: (sessionId) => ipcRenderer.invoke("read-intention", sessionId),
   writeIntention: (sessionId, content) =>
