@@ -187,6 +187,9 @@ function getOffloadedSessions() {
         status: "offloaded",
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
+        hasSnapshot: fs.existsSync(
+          path.join(OFFLOADED_DIR, dir, "snapshot.log"),
+        ),
       });
     } catch {}
   }
@@ -626,7 +629,12 @@ async function reconcilePool() {
     if (fs.existsSync(pidFile)) {
       const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
       if (sessionId && sessionId !== slot.sessionId) {
+        // Session UUID changed — /clear was run externally. Offload the old session.
+        if (slot.sessionId) {
+          saveExternalClearOffload(slot.sessionId, slot.pid);
+        }
         slot.sessionId = sessionId;
+        slot.status = "fresh";
         changed = true;
       }
     }
@@ -635,10 +643,79 @@ async function reconcilePool() {
   if (changed) writePool(pool);
 }
 
+// Save offload metadata for a session that was cleared externally (no snapshot available).
+function saveExternalClearOffload(oldSessionId, pid) {
+  try {
+    validateSessionId(oldSessionId);
+    const offloadDir = path.join(OFFLOADED_DIR, oldSessionId);
+    if (fs.existsSync(path.join(offloadDir, "meta.json"))) return; // Already offloaded
+    fs.mkdirSync(offloadDir, { recursive: true });
+
+    const cwd = getCwdFromJsonl(oldSessionId);
+    const intentionFile = path.join(INTENTIONS_DIR, `${oldSessionId}.md`);
+    const intentionHeading = fs.existsSync(intentionFile)
+      ? getIntentionHeading(intentionFile)
+      : null;
+
+    // Find git root
+    let gitRoot = null;
+    if (cwd) {
+      let dir = cwd;
+      while (dir !== path.dirname(dir)) {
+        try {
+          if (fs.statSync(path.join(dir, ".git")).isDirectory()) {
+            gitRoot = dir;
+            break;
+          }
+        } catch {}
+        dir = path.dirname(dir);
+      }
+    }
+
+    // Try to read Claude session ID from idle signal
+    const idleSignal = pid ? getIdleSignal(pid) : null;
+
+    const meta = {
+      sessionId: oldSessionId,
+      claudeSessionId: idleSignal?.session_id || null,
+      cwd: cwd || null,
+      gitRoot,
+      intentionHeading,
+      lastInteractionTs: Math.floor(Date.now() / 1000),
+      offloadedAt: new Date().toISOString(),
+      externalClear: true,
+    };
+    fs.writeFileSync(
+      path.join(offloadDir, "meta.json"),
+      JSON.stringify(meta, null, 2),
+    );
+  } catch (err) {
+    console.error("[main] Failed to save external clear offload:", err.message);
+  }
+}
+
 // Sync pool.json slot statuses with live session state.
+// Also detects external /clear by checking if a slot's PID now maps to a different session UUID.
 function syncPoolStatuses(sessions) {
   const pool = readPool();
   if (!pool) return;
+
+  let externalClearDetected = false;
+  for (const slot of pool.slots) {
+    if (!slot.pid || !slot.sessionId || slot.status === "dead") continue;
+    try {
+      const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
+      const currentSessionId = fs.readFileSync(pidFile, "utf-8").trim();
+      if (currentSessionId && currentSessionId !== slot.sessionId) {
+        saveExternalClearOffload(slot.sessionId, slot.pid);
+        slot.sessionId = currentSessionId;
+        slot.status = "fresh";
+        externalClearDetected = true;
+      }
+    } catch {}
+  }
+  if (externalClearDetected) writePool(pool);
+
   const updated = syncStatuses(pool, sessions);
   if (updated) writePool(updated);
 }
