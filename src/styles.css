@@ -5,15 +5,16 @@
 }
 
 :root {
-  --bg: #1e1e2e;
-  --bg-sidebar: #181825;
-  --text: #cdd6f4;
-  --text-dim: #6c7086;
-  --accent: #89b4fa;
-  --accent-dim: #45475a;
-  --border: #313244;
-  --green: #a6e3a1;
-  --red: #f38ba8;
+  --bg: #0a0a0a;
+  --bg-sidebar: #060606;
+  --text: #e0e0e0;
+  --text-dim: #555555;
+  --accent: #ff1a1a;
+  --accent-glow: #ff0033;
+  --accent-dim: #1a0000;
+  --border: #1a1a1a;
+  --green: #00ff41;
+  --red: #ff1a1a;
 }
 
 html,
@@ -23,6 +24,24 @@ body {
     -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #222;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #333;
 }
 
 #app {
@@ -91,6 +110,14 @@ body {
   border-radius: 6px;
   cursor: pointer;
   margin-bottom: 2px;
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.session-item-content {
+  flex: 1;
+  min-width: 0;
 }
 
 .session-item:hover {
@@ -99,6 +126,7 @@ body {
 
 .session-item.active {
   background: var(--accent-dim);
+  border: 1px solid rgba(255, 26, 26, 0.3);
 }
 
 .session-project {
@@ -119,11 +147,20 @@ body {
 
 .session-status.alive {
   background: var(--green);
+  box-shadow: 0 0 6px var(--green);
 }
 
 .session-status.dead {
   background: var(--red);
   opacity: 0.5;
+}
+
+/* Directory color indicator */
+.session-dir-indicator {
+  width: 3px;
+  border-radius: 2px;
+  align-self: stretch;
+  flex-shrink: 0;
 }
 
 .session-cwd {
@@ -270,6 +307,16 @@ body {
   padding-top: 40px;
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
+  transition: border-color 0.2s;
+  position: relative;
+}
+
+#editor-header-color-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
 }
 
 #editor-project {
