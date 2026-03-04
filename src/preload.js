@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld("api", {
   onIntentionChanged: (callback) =>
     ipcRenderer.on("intention-changed", (_e, content) => callback(content)),
 
+  // External terminal focus
+  focusExternalTerminal: (pid) =>
+    ipcRenderer.invoke("focus-external-terminal", pid),
+
   // Terminal (forwarded to PTY daemon via main process)
   ptySpawn: (opts) => ipcRenderer.invoke("pty-spawn", opts),
   ptyWrite: (termId, data) => ipcRenderer.invoke("pty-write", termId, data),
