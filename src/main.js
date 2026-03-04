@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const pty = require("node-pty");
 
 const IS_DEV = process.argv.includes("--dev");
 const INTENTIONS_DIR = path.join(os.homedir(), ".open-cockpit", "intentions");
@@ -11,6 +12,10 @@ const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
 let mainWindow = null;
+
+// PTY management
+const ptyProcesses = new Map(); // termId -> pty process
+let nextTermId = 1;
 
 function createWindow() {
   if (IS_DEV) {
@@ -183,7 +188,21 @@ function watchIntention(sessionId) {
   fileWatchers.set("current", file);
 }
 
+const pendingPolls = new Set();
+
+function killAllPty() {
+  for (const p of ptyProcesses.values()) {
+    try {
+      p.kill();
+    } catch {}
+  }
+  ptyProcesses.clear();
+  for (const entry of pendingPolls) entry.cancel();
+  pendingPolls.clear();
+}
+
 app.whenReady().then(() => {
+  // Existing IPC handlers
   ipcMain.handle("get-sessions", () => getSessions());
   ipcMain.handle("read-intention", (_e, sessionId) => readIntention(sessionId));
   ipcMain.handle("write-intention", (_e, sessionId, content) =>
@@ -193,6 +212,96 @@ app.whenReady().then(() => {
     watchIntention(sessionId),
   );
 
+  // PTY IPC handlers
+  const ALLOWED_SHELLS = new Set(["/bin/zsh", "/bin/bash", "/bin/sh"]);
+
+  ipcMain.handle("pty-spawn", (_e, { cwd, cmd, args }) => {
+    const shell =
+      cmd && ALLOWED_SHELLS.has(cmd) ? cmd : process.env.SHELL || "/bin/zsh";
+    const shellArgs = args || [];
+    const termId = nextTermId++;
+
+    // Strip Claude session env vars so spawned Claude doesn't think it's nested
+    const cleanEnv = { ...process.env, TERM: "xterm-256color" };
+    delete cleanEnv.CLAUDECODE;
+    delete cleanEnv.CLAUDE_CODE_SESSION_ID;
+
+    const p = pty.spawn(shell, shellArgs, {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd: cwd || os.homedir(),
+      env: cleanEnv,
+    });
+
+    ptyProcesses.set(termId, p);
+
+    p.onData((data) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("pty-data", termId, data);
+      }
+    });
+
+    p.onExit(() => {
+      ptyProcesses.delete(termId);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("pty-exit", termId);
+      }
+    });
+
+    return { termId, pid: p.pid };
+  });
+
+  ipcMain.handle("pty-write", (_e, termId, data) => {
+    const p = ptyProcesses.get(termId);
+    if (p) p.write(data);
+  });
+
+  ipcMain.handle("pty-resize", (_e, termId, cols, rows) => {
+    const p = ptyProcesses.get(termId);
+    if (p) p.resize(cols, rows);
+  });
+
+  // Poll for a session-pid file to appear for a given PID
+  ipcMain.handle("pty-wait-session", (_e, pid) => {
+    return new Promise((resolve) => {
+      let attempts = 0;
+      let timer = null;
+      const entry = {
+        cancel: () => {
+          clearTimeout(timer);
+          resolve(null);
+        },
+      };
+      pendingPolls.add(entry);
+      const check = () => {
+        const file = path.join(SESSION_PIDS_DIR, String(pid));
+        if (fs.existsSync(file)) {
+          const sessionId = fs.readFileSync(file, "utf-8").trim();
+          if (sessionId) {
+            pendingPolls.delete(entry);
+            return resolve(sessionId);
+          }
+        }
+        if (++attempts < 60) {
+          timer = setTimeout(check, 500);
+        } else {
+          pendingPolls.delete(entry);
+          resolve(null);
+        }
+      };
+      check();
+    });
+  });
+
+  ipcMain.handle("pty-kill", (_e, termId) => {
+    const p = ptyProcesses.get(termId);
+    if (p) {
+      p.kill();
+      ptyProcesses.delete(termId);
+    }
+  });
+
   createWindow();
 
   app.on("activate", () => {
@@ -200,8 +309,10 @@ app.whenReady().then(() => {
   });
 });
 
+app.on("before-quit", killAllPty);
+
 app.on("window-all-closed", () => {
-  // Clean up watchers
   for (const file of fileWatchers.values()) fs.unwatchFile(file);
+  killAllPty();
   if (process.platform !== "darwin") app.quit();
 });
