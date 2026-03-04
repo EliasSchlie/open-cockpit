@@ -1,15 +1,25 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 // Remove stale listeners from previous renderer loads (Cmd+R)
-ipcRenderer.removeAllListeners("intention-changed");
-ipcRenderer.removeAllListeners("pty-data");
-ipcRenderer.removeAllListeners("pty-replay");
-ipcRenderer.removeAllListeners("pty-exit");
-ipcRenderer.removeAllListeners("new-terminal-tab");
-ipcRenderer.removeAllListeners("close-terminal-tab");
-ipcRenderer.removeAllListeners("next-terminal-tab");
-ipcRenderer.removeAllListeners("prev-terminal-tab");
-ipcRenderer.removeAllListeners("switch-terminal-tab");
+const channels = [
+  "intention-changed",
+  "pty-data",
+  "pty-replay",
+  "pty-exit",
+  "new-terminal-tab",
+  "close-terminal-tab",
+  "next-terminal-tab",
+  "prev-terminal-tab",
+  "switch-terminal-tab",
+  "new-session",
+  "next-session",
+  "prev-session",
+  "toggle-sidebar",
+  "focus-editor",
+  "focus-terminal",
+  "toggle-command-palette",
+];
+for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
 contextBridge.exposeInMainWorld("api", {
   getDirColors: () => ipcRenderer.invoke("get-dir-colors"),
@@ -52,4 +62,16 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("prev-terminal-tab", () => callback()),
   onSwitchTerminalTab: (callback) =>
     ipcRenderer.on("switch-terminal-tab", (_e, index) => callback(index)),
+
+  // Navigation actions
+  onNewSession: (callback) => ipcRenderer.on("new-session", () => callback()),
+  onNextSession: (callback) => ipcRenderer.on("next-session", () => callback()),
+  onPrevSession: (callback) => ipcRenderer.on("prev-session", () => callback()),
+  onToggleSidebar: (callback) =>
+    ipcRenderer.on("toggle-sidebar", () => callback()),
+  onFocusEditor: (callback) => ipcRenderer.on("focus-editor", () => callback()),
+  onFocusTerminal: (callback) =>
+    ipcRenderer.on("focus-terminal", () => callback()),
+  onToggleCommandPalette: (callback) =>
+    ipcRenderer.on("toggle-command-palette", () => callback()),
 });

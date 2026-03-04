@@ -354,6 +354,13 @@ const editorMount = document.getElementById("editor-mount");
 const terminalTabList = document.getElementById("terminal-tab-list");
 const newTermBtn = document.getElementById("new-term-btn");
 const terminalMount = document.getElementById("terminal-mount");
+const sidebar = document.getElementById("sidebar");
+const commandPalette = document.getElementById("command-palette");
+const commandPaletteInput = document.getElementById("command-palette-input");
+const commandPaletteList = document.getElementById("command-palette-list");
+
+// Keep a cached copy of sessions for keyboard navigation
+let cachedSessions = [];
 
 let currentSessionId = null;
 let currentSessionCwd = null;
@@ -667,6 +674,7 @@ window.api.onPtyExit((termId) => {
 
 async function loadSessions() {
   const sessions = await window.api.getSessions();
+  cachedSessions = sessions;
   cleanupStaleTerminals(sessions);
   sessionList.innerHTML = "";
 
@@ -851,6 +859,245 @@ window.api.onIntentionChanged((content) => {
   }
 });
 
+// --- Session switching ---
+function switchSession(direction) {
+  if (cachedSessions.length === 0) return;
+  const currentIndex = cachedSessions.findIndex(
+    (s) => s.sessionId === currentSessionId,
+  );
+  let nextIndex;
+  if (currentIndex === -1) {
+    nextIndex = 0;
+  } else {
+    nextIndex =
+      (currentIndex + direction + cachedSessions.length) %
+      cachedSessions.length;
+  }
+  selectSession(cachedSessions[nextIndex]);
+}
+
+// --- Sidebar toggle ---
+function toggleSidebar() {
+  sidebar.classList.toggle("collapsed");
+}
+
+// --- Focus management ---
+function focusTerminal() {
+  if (activeTermIndex >= 0 && terminals[activeTermIndex]) {
+    terminals[activeTermIndex].term.focus();
+  }
+}
+
+function focusEditor() {
+  if (editorView) editorView.focus();
+}
+
+// --- Command palette ---
+const COMMANDS = [
+  {
+    id: "next-session",
+    label: "Next Session",
+    shortcut: "Alt+↓",
+    action: () => switchSession(1),
+  },
+  {
+    id: "prev-session",
+    label: "Previous Session",
+    shortcut: "Alt+↑",
+    action: () => switchSession(-1),
+  },
+  {
+    id: "new-session",
+    label: "New Claude Session",
+    shortcut: "⌘N",
+    action: () => newSessionBtn.click(),
+  },
+  {
+    id: "new-terminal",
+    label: "New Terminal Tab",
+    shortcut: "⌘T",
+    action: () => {
+      if (currentSessionId) spawnTerminal(currentSessionCwd);
+    },
+  },
+  {
+    id: "close-terminal",
+    label: "Close Terminal Tab",
+    shortcut: "⌘W",
+    action: () => {
+      if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
+    },
+  },
+  {
+    id: "next-tab",
+    label: "Next Terminal Tab",
+    shortcut: "⌘⇧]",
+    action: () => {
+      if (terminals.length > 1)
+        switchToTerminal((activeTermIndex + 1) % terminals.length);
+    },
+  },
+  {
+    id: "prev-tab",
+    label: "Previous Terminal Tab",
+    shortcut: "⌘⇧[",
+    action: () => {
+      if (terminals.length > 1)
+        switchToTerminal(
+          (activeTermIndex - 1 + terminals.length) % terminals.length,
+        );
+    },
+  },
+  {
+    id: "toggle-sidebar",
+    label: "Toggle Sidebar",
+    shortcut: "⌘\\",
+    action: toggleSidebar,
+  },
+  {
+    id: "focus-editor",
+    label: "Focus Editor",
+    shortcut: "⌘E",
+    action: focusEditor,
+  },
+  {
+    id: "focus-terminal",
+    label: "Focus Terminal",
+    shortcut: "⌘`",
+    action: focusTerminal,
+  },
+  {
+    id: "refresh",
+    label: "Refresh Sessions",
+    shortcut: "",
+    action: () => {
+      loadDirColors();
+      loadSessions();
+    },
+  },
+  {
+    id: "command-palette",
+    label: "Command Palette",
+    shortcut: "⌘/",
+    action: () => toggleCommandPalette(),
+  },
+];
+
+// Also add Tab 1-9 commands
+for (let i = 0; i < 9; i++) {
+  COMMANDS.push({
+    id: `tab-${i + 1}`,
+    label: `Switch to Tab ${i + 1}`,
+    shortcut: `⌘${i + 1}`,
+    action: () => {
+      if (i < terminals.length) switchToTerminal(i);
+    },
+  });
+}
+
+let paletteSelectedIndex = 0;
+let filteredCommands = [];
+
+function toggleCommandPalette() {
+  if (commandPalette.classList.contains("visible")) {
+    closeCommandPalette();
+  } else {
+    openCommandPalette();
+  }
+}
+
+function openCommandPalette() {
+  commandPalette.classList.add("visible");
+  commandPaletteInput.value = "";
+  paletteSelectedIndex = 0;
+  renderPaletteList("");
+  commandPaletteInput.focus();
+}
+
+function closeCommandPalette() {
+  commandPalette.classList.remove("visible");
+  commandPaletteInput.value = "";
+  // Return focus to terminal
+  focusTerminal();
+}
+
+function renderPaletteList(query) {
+  const q = query.toLowerCase();
+  filteredCommands = q
+    ? COMMANDS.filter(
+        (c) =>
+          c.label.toLowerCase().includes(q) ||
+          c.shortcut.toLowerCase().includes(q),
+      )
+    : COMMANDS.filter((c) => !c.id.startsWith("tab-")); // Hide tab-N from unfiltered list
+
+  paletteSelectedIndex = Math.min(
+    paletteSelectedIndex,
+    Math.max(0, filteredCommands.length - 1),
+  );
+
+  commandPaletteList.innerHTML = "";
+  filteredCommands.forEach((cmd, i) => {
+    const item = document.createElement("div");
+    item.className = `command-palette-item${i === paletteSelectedIndex ? " selected" : ""}`;
+    item.innerHTML = `<span class="command-palette-label">${cmd.label}</span><span class="command-palette-shortcut">${cmd.shortcut}</span>`;
+    item.addEventListener("click", () => {
+      closeCommandPalette();
+      cmd.action();
+    });
+    item.addEventListener("mouseenter", () => updatePaletteSelection(i));
+    commandPaletteList.appendChild(item);
+  });
+}
+
+commandPaletteInput.addEventListener("input", () => {
+  paletteSelectedIndex = 0;
+  renderPaletteList(commandPaletteInput.value);
+});
+
+function updatePaletteSelection(newIndex) {
+  const items = commandPaletteList.children;
+  if (items[paletteSelectedIndex])
+    items[paletteSelectedIndex].classList.remove("selected");
+  paletteSelectedIndex = newIndex;
+  if (items[paletteSelectedIndex]) {
+    items[paletteSelectedIndex].classList.add("selected");
+    items[paletteSelectedIndex].scrollIntoView({ block: "nearest" });
+  }
+}
+
+commandPaletteInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeCommandPalette();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    updatePaletteSelection(
+      Math.min(paletteSelectedIndex + 1, filteredCommands.length - 1),
+    );
+    return;
+  }
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    updatePaletteSelection(Math.max(paletteSelectedIndex - 1, 0));
+    return;
+  }
+  if (e.key === "Enter" && filteredCommands.length > 0) {
+    e.preventDefault();
+    const cmd = filteredCommands[paletteSelectedIndex];
+    closeCommandPalette();
+    cmd.action();
+    return;
+  }
+});
+
+// Click outside palette to close
+commandPalette.addEventListener("click", (e) => {
+  if (e.target === commandPalette) closeCommandPalette();
+});
+
 // Menu keyboard shortcuts
 window.api.onNewTerminalTab(() => {
   if (currentSessionId) spawnTerminal(currentSessionCwd);
@@ -877,6 +1124,18 @@ window.api.onPrevTerminalTab(() => {
 window.api.onSwitchTerminalTab((index) => {
   if (index < terminals.length) switchToTerminal(index);
 });
+
+// Navigation shortcuts
+window.api.onNewSession(() => newSessionBtn.click());
+window.api.onNextSession(() => switchSession(1));
+window.api.onPrevSession(() => switchSession(-1));
+window.api.onToggleSidebar(toggleSidebar);
+window.api.onFocusEditor(focusEditor);
+window.api.onFocusTerminal(() => {
+  // Don't steal focus from command palette (Escape closes it instead)
+  if (!commandPalette.classList.contains("visible")) focusTerminal();
+});
+window.api.onToggleCommandPalette(toggleCommandPalette);
 
 // Reconnect a single PTY from daemon (after app restart or reload)
 async function reconnectTerminal(ptyInfo) {

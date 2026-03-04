@@ -45,13 +45,24 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
-  // Ctrl+Tab / Ctrl+Shift+Tab — not supported as menu accelerators, handle via input events
+  // Shortcuts not supported as menu accelerators — handle via input events
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.control && input.key === "Tab") {
       event.preventDefault();
       mainWindow.webContents.send(
         input.shift ? "prev-terminal-tab" : "next-terminal-tab",
       );
+    }
+    // Alt+Up / Alt+Down — switch sessions
+    if (input.alt && (input.key === "ArrowUp" || input.key === "ArrowDown")) {
+      event.preventDefault();
+      mainWindow.webContents.send(
+        input.key === "ArrowUp" ? "prev-session" : "next-session",
+      );
+    }
+    // Escape — focus terminal (only when not in command palette)
+    if (input.key === "Escape" && !input.meta && !input.control && !input.alt) {
+      mainWindow.webContents.send("focus-terminal");
     }
   });
 
@@ -476,7 +487,13 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  // Build menu with Cmd+T shortcut for new terminal tab
+  const send = (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, ...args);
+    }
+  };
+
+  // Build menu with keyboard shortcuts
   const menuTemplate = [
     {
       label: app.name,
@@ -494,54 +511,76 @@ app.whenReady().then(async () => {
       label: "File",
       submenu: [
         {
+          label: "New Claude Session",
+          accelerator: "CmdOrCtrl+N",
+          click: () => send("new-session"),
+        },
+        {
           label: "New Terminal Tab",
           accelerator: "CmdOrCtrl+T",
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("new-terminal-tab");
-            }
-          },
+          click: () => send("new-terminal-tab"),
         },
         {
           label: "Close Terminal Tab",
           accelerator: "CmdOrCtrl+W",
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("close-terminal-tab");
-            }
-          },
+          click: () => send("close-terminal-tab"),
         },
         { type: "separator" },
         {
           label: "Next Tab",
           accelerator: "CmdOrCtrl+Shift+]",
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("next-terminal-tab");
-            }
-          },
+          click: () => send("next-terminal-tab"),
         },
         {
           label: "Previous Tab",
           accelerator: "CmdOrCtrl+Shift+[",
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("prev-terminal-tab");
-            }
-          },
+          click: () => send("prev-terminal-tab"),
         },
         { type: "separator" },
         ...Array.from({ length: 9 }, (_, i) => ({
           label: `Tab ${i + 1}`,
           accelerator: `CmdOrCtrl+${i + 1}`,
-          click: () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("switch-terminal-tab", i);
-            }
-          },
+          click: () => send("switch-terminal-tab", i),
         })),
         { type: "separator" },
         { role: "close" },
+      ],
+    },
+    {
+      label: "Navigate",
+      submenu: [
+        {
+          label: "Next Session",
+          accelerator: "Alt+Down",
+          click: () => send("next-session"),
+        },
+        {
+          label: "Previous Session",
+          accelerator: "Alt+Up",
+          click: () => send("prev-session"),
+        },
+        { type: "separator" },
+        {
+          label: "Toggle Sidebar",
+          accelerator: "CmdOrCtrl+\\",
+          click: () => send("toggle-sidebar"),
+        },
+        {
+          label: "Focus Editor",
+          accelerator: "CmdOrCtrl+E",
+          click: () => send("focus-editor"),
+        },
+        {
+          label: "Focus Terminal",
+          accelerator: "CmdOrCtrl+`",
+          click: () => send("focus-terminal"),
+        },
+        { type: "separator" },
+        {
+          label: "Command Palette",
+          accelerator: "CmdOrCtrl+/",
+          click: () => send("toggle-command-palette"),
+        },
       ],
     },
     {
