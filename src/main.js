@@ -5,6 +5,7 @@ const os = require("os");
 const net = require("net");
 const { spawn: spawnChild, execFileSync, execSync } = require("child_process");
 const { sortSessions } = require("./sort-sessions");
+const { createApiServer } = require("./api-server");
 const {
   readPool: readPoolFile,
   writePool: writePoolFile,
@@ -26,6 +27,7 @@ const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
 const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
+const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
 const DEFAULT_POOL_SIZE = 5;
 
 // Track file watchers and which session each window is viewing
@@ -760,6 +762,7 @@ function syncPoolStatuses(sessions) {
   if (updated) writePool(updated);
 }
 
+// Destroy pool: kill all slots and remove pool.json
 async function poolDestroy() {
   const pool = readPool();
   if (!pool) return;
@@ -771,6 +774,13 @@ async function poolDestroy() {
   try {
     fs.unlinkSync(POOL_FILE);
   } catch {}
+}
+
+// Validate termId: must be a finite number
+function validateTermId(termId) {
+  if (typeof termId !== "number" || !Number.isFinite(termId)) {
+    throw new Error("Invalid termId: must be a number");
+  }
 }
 
 function readIntention(sessionId) {
@@ -1193,6 +1203,73 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  // --- Programmatic API server (Unix socket) ---
+  const apiServer = createApiServer(API_SOCKET, {
+    ping: async () => ({ type: "pong" }),
+    "get-sessions": async () => ({
+      type: "sessions",
+      sessions: getSessions(),
+    }),
+    "pool-init": async (msg) => ({
+      type: "pool",
+      pool: await poolInit(msg.size),
+    }),
+    "pool-resize": async (msg) => ({
+      type: "pool",
+      pool: await poolResize(msg.size),
+    }),
+    "pool-health": async () => ({
+      type: "health",
+      health: getPoolHealth(),
+    }),
+    "pool-read": async () => ({
+      type: "pool",
+      pool: readPool(),
+    }),
+    "pool-destroy": async () => {
+      await poolDestroy();
+      return { type: "ok" };
+    },
+    "read-intention": async (msg) => {
+      validateSessionId(msg.sessionId);
+      return { type: "intention", content: readIntention(msg.sessionId) };
+    },
+    "write-intention": async (msg) => {
+      validateSessionId(msg.sessionId);
+      writeIntention(msg.sessionId, msg.content);
+      return { type: "ok" };
+    },
+    "pty-list": async () => {
+      const resp = await daemonRequest({ type: "list" });
+      return { type: "ptys", ptys: resp.ptys };
+    },
+    "pty-write": async (msg) => {
+      validateTermId(msg.termId);
+      daemonSend({ type: "write", termId: msg.termId, data: msg.data });
+      return { type: "ok" };
+    },
+    "pty-spawn": async (msg) => {
+      const resp = await daemonRequest({
+        type: "spawn",
+        cwd: msg.cwd,
+        cmd: msg.cmd,
+        args: msg.args,
+      });
+      return { type: "spawned", termId: resp.termId, pid: resp.pid };
+    },
+    "pty-kill": async (msg) => {
+      validateTermId(msg.termId);
+      await daemonRequest({ type: "kill", termId: msg.termId });
+      return { type: "ok" };
+    },
+    "pty-read": async (msg) => {
+      validateTermId(msg.termId);
+      const resp = await daemonRequest({ type: "list" });
+      const p = resp.ptys.find((p) => p.termId === msg.termId);
+      return { type: "buffer", buffer: p ? p.buffer : null };
+    },
+  });
+
   const send = (channel, ...args) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, ...args);
@@ -1343,6 +1420,10 @@ app.on("before-quit", () => {
   }
   for (const entry of pendingPolls) entry.cancel();
   pendingPolls.clear();
+  // Clean up API socket
+  try {
+    fs.unlinkSync(API_SOCKET);
+  } catch {}
 });
 
 app.on("window-all-closed", () => {
