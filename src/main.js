@@ -5,6 +5,7 @@ const os = require("os");
 
 const INTENTIONS_DIR = path.join(os.homedir(), ".intentions");
 const SESSION_PIDS_DIR = path.join(os.homedir(), ".claude", "session-pids");
+const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
@@ -28,6 +29,42 @@ function createWindow() {
   mainWindow.webContents.on("console-message", (_e, level, message) => {
     console.log(`[renderer] ${message}`);
   });
+}
+
+function getCwdFromJsonl(sessionId) {
+  try {
+    const { execSync } = require("child_process");
+    const jsonlPath = execSync(
+      `find ${JSON.stringify(CLAUDE_PROJECTS_DIR)} -name "${sessionId}.jsonl" 2>/dev/null | head -1`,
+      { encoding: "utf-8" },
+    ).trim();
+    if (!jsonlPath) return null;
+
+    const tail = execSync(`tail -100 ${JSON.stringify(jsonlPath)}`, {
+      encoding: "utf-8",
+    });
+    let cwd = "";
+    for (const line of tail.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.cwd) cwd = obj.cwd;
+      } catch {}
+    }
+    return cwd || null;
+  } catch {
+    return null;
+  }
+}
+
+function getIntentionHeading(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const match = content.match(/^#\s+(.+)$/m);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 function getSessions() {
@@ -61,8 +98,19 @@ function getSessions() {
       } catch {}
     }
 
+    // Refine CWD via JSONL when spawned from $HOME
+    if (cwd === os.homedir()) {
+      const refined = getCwdFromJsonl(sessionId);
+      if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
+        cwd = refined;
+      }
+    }
+
     const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
     const hasIntention = fs.existsSync(intentionFile);
+    const intentionHeading = hasIntention
+      ? getIntentionHeading(intentionFile)
+      : null;
 
     sessions.push({
       pid,
@@ -71,6 +119,7 @@ function getSessions() {
       cwd,
       project: cwd ? path.basename(cwd) : null,
       hasIntention,
+      intentionHeading,
     });
   }
 

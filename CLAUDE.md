@@ -1,27 +1,20 @@
 # Claude Sessions
 
-Electron app for managing Claude Code session intentions.
+Electron app + Claude Code plugin for session intention tracking.
 
 ## Architecture
 
-- `src/main.js` — Main process: window, IPC, file watching
+- `src/main.js` — Main process: window, IPC, file watching, session discovery
 - `src/preload.js` — Context bridge (`api` object)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, Catppuccin dark theme
-
-## External dependencies
-
-This app reads data written by **Claude Code hooks** (not part of this repo):
-
-- **`session-pid-map.sh`** (SessionStart hook) — writes `~/.claude/session-pids/<PID>` containing the session ID. Without this, the app has no sessions to show.
-- **`session-intention.sh`** (SessionStart hook) — creates empty `~/.intentions/<session_id>.md` on session start.
-
-See `docs/hooks.md` for hook setup details.
+- `hooks/` — Claude Code plugin hooks (SessionStart → PID mapping)
+- `.claude-plugin/plugin.json` — Plugin manifest
 
 ## Key paths
 
-- `~/.claude/session-pids/` — PID → session ID map (read-only)
-- `~/.intentions/<session_id>.md` — Intention files (read/write)
+- `~/.claude/session-pids/<PID>` — Session ID (written by plugin hook)
+- `~/.intentions/<session_id>.md` — Intention files (created by app on first open)
 
 ## Dev
 
@@ -32,7 +25,7 @@ npm run build   # Bundle renderer only (esbuild)
 
 ## Conventions
 
-- Electron: contextIsolation + preload, sandbox off (preload needs npm packages)
-- CodeMirror 6 for live preview editor (bundled with esbuild)
-- Auto-save with 500ms debounce
-- File watching via `fs.watchFile` (polling, 500ms — reliable on macOS)
+- Electron: contextIsolation, sandbox off (preload needs npm packages)
+- CodeMirror 6 bundled with esbuild
+- Auto-save 500ms debounce, file watching via `fs.watchFile` (polling)
+- Plugin version in `.claude-plugin/plugin.json`, marketplace in `EliasSchlie/claude-plugins`

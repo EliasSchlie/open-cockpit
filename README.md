@@ -2,7 +2,7 @@
 
 Electron app for managing [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session intentions.
 
-Session sidebar lists active Claude processes. Each session has a markdown intention file with a live preview editor (CodeMirror 6, Obsidian-style — renders inline, shows raw syntax on the active line).
+Lists active Claude sessions with a live preview markdown editor (CodeMirror 6, Obsidian-style inline rendering).
 
 ## Setup
 
@@ -11,11 +11,12 @@ npm install
 npm start
 ```
 
-Requires two Claude Code hooks to be configured — see [docs/hooks.md](docs/hooks.md).
+## Plugin
 
-## Features
+This repo includes a Claude Code plugin that maps session PIDs to IDs (required for the app to discover sessions).
 
-- Session sidebar (auto-refreshes, shows alive/dead status)
-- Live preview markdown editor
-- Auto-save (500ms debounce)
-- External change detection (updates when Claude writes to the file)
+```bash
+claude plugin install claude-sessions@elias-tools
+```
+
+The plugin adds a `SessionStart` hook that writes `~/.claude/session-pids/<PID>` → session ID.

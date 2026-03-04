@@ -336,12 +336,15 @@ async function loadSessions() {
   for (const s of sessions) {
     const li = document.createElement("li");
     li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}`;
+    li.dataset.sessionId = s.sessionId;
+    const heading = s.intentionHeading || "No intention yet";
+    const displayPath = s.cwd || "~";
     li.innerHTML = `
       <div class="session-project">
         <span class="session-status ${s.alive ? "alive" : "dead"}"></span>
-        ${s.project || "~"}
+        ${heading}
       </div>
-      <div class="session-id">${s.sessionId.slice(0, 8)}…</div>
+      <div class="session-cwd">${displayPath}</div>
     `;
     li.addEventListener("click", () => selectSession(s));
     sessionList.appendChild(li);
@@ -352,12 +355,7 @@ async function selectSession(session) {
   currentSessionId = session.sessionId;
 
   document.querySelectorAll(".session-item").forEach((el) => {
-    el.classList.toggle(
-      "active",
-      el
-        .querySelector(".session-id")
-        .textContent.startsWith(session.sessionId.slice(0, 8)),
-    );
+    el.classList.toggle("active", el.dataset.sessionId === session.sessionId);
   });
 
   emptyState.classList.add("hidden");

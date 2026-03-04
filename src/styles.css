@@ -121,11 +121,13 @@ body {
   opacity: 0.5;
 }
 
-.session-id {
+.session-cwd {
   font-size: 11px;
   color: var(--text-dim);
-  font-family: "SF Mono", "Menlo", monospace;
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Editor area */
