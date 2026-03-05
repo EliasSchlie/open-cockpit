@@ -528,7 +528,9 @@ async function sendCommandToTerminal(
   await new Promise((r) => setTimeout(r, escDelay));
   daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
   await new Promise((r) => setTimeout(r, clearDelay));
-  daemonSend({ type: "write", termId, data: command + "\r" });
+  daemonSend({ type: "write", termId, data: command });
+  await new Promise((r) => setTimeout(r, 50));
+  daemonSend({ type: "write", termId, data: "\r" });
 }
 
 // Create a fresh idle signal file for a pool slot
