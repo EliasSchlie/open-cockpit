@@ -133,6 +133,7 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - [docs/theme.md](docs/theme.md) — Color scheme, directory color coding, user overrides
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI helper)
+- [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference + how to add new ones
 
 ## Session origin tags
 
@@ -183,6 +184,7 @@ fresh → processing → idle → offloaded (graceful /clear, snapshot saved)
 
 ## Conventions
 
+- **Every user-facing action must have a keyboard shortcut.** See [docs/shortcuts.md](docs/shortcuts.md) for the full list and how to add new ones.
 - Electron: contextIsolation, sandbox off (preload needs npm packages)
 - CodeMirror 6 bundled with esbuild
 - Auto-save 500ms debounce, file watching via `fs.watchFile` (polling)

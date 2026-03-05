@@ -20,6 +20,8 @@ const channels = [
   "focus-terminal",
   "toggle-command-palette",
   "toggle-pane-focus",
+  "jump-recent-idle",
+  "archive-current-session",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
@@ -116,4 +118,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("toggle-command-palette", () => callback()),
   onTogglePaneFocus: (callback) =>
     ipcRenderer.on("toggle-pane-focus", () => callback()),
+  onJumpRecentIdle: (callback) =>
+    ipcRenderer.on("jump-recent-idle", () => callback()),
+  onArchiveCurrentSession: (callback) =>
+    ipcRenderer.on("archive-current-session", () => callback()),
 });
