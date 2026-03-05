@@ -6,7 +6,10 @@
 # IMPORTANT: Idle signals must have NO FALSE POSITIVES. A session must only
 # be marked idle when it is truly waiting for user input. The "stop" trigger
 # defers writing for IDLE_VERIFY_DELAY seconds and verifies the transcript
-# hasn't changed (which would indicate a re-prompt from another Stop hook).
+# size hasn't changed (which would indicate a re-prompt from another Stop hook).
+# Uses file SIZE (not mtime) because Claude keeps the JSONL file handle open,
+# causing mtime updates even without new content, and writes system entries
+# (stop_hook_summary, turn_duration) after the Stop hook fires.
 #
 # Usage: idle-signal.sh write [stop|tool|permission]
 #        idle-signal.sh clear
@@ -39,9 +42,9 @@ json_get() {
     echo "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
-# Cross-platform file mtime in epoch seconds (macOS uses -f, Linux uses -c)
-file_mtime() {
-    stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+# Cross-platform file size in bytes (macOS uses -f, Linux uses -c)
+file_size() {
+    stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null || echo 0
 }
 
 case "${1:-}" in
@@ -85,26 +88,32 @@ case "${1:-}" in
             (
                 trap 'rm -f "$pending"' EXIT
 
+                # Wait for system entries (stop_hook_summary, turn_duration)
+                # to finish writing — they're appended within ~1s of Stop.
+                sleep 2
+
+                # Abort early if pending was invalidated during system-entry wait
+                [ ! -f "$pending" ] && exit 0
+                [ "$(cat "$pending" 2>/dev/null)" != "$$" ] && exit 0
+
+                # Record file size AFTER system entries are done.
+                # A re-prompt would add new content (tool calls, assistant text).
                 before=""
                 if [ -n "$transcript" ] && [ -f "$transcript" ]; then
-                    before=$(file_mtime "$transcript")
+                    before=$(file_size "$transcript")
                 fi
 
-                i=0
-                while [ "$i" -lt "$IDLE_VERIFY_DELAY" ]; do
-                    sleep 1
-                    i=$((i + 1))
+                sleep "$IDLE_VERIFY_DELAY"
 
-                    # Abort if our pending claim was invalidated (clear or new stop)
-                    [ ! -f "$pending" ] && exit 0
-                    [ "$(cat "$pending" 2>/dev/null)" != "$$" ] && exit 0
+                # Abort if our pending claim was invalidated (clear or new stop)
+                [ ! -f "$pending" ] && exit 0
+                [ "$(cat "$pending" 2>/dev/null)" != "$$" ] && exit 0
 
-                    # Abort if transcript changed (re-prompt or user input)
-                    if [ -n "$before" ] && [ -f "$transcript" ]; then
-                        after=$(file_mtime "$transcript")
-                        [ "$before" != "$after" ] && exit 0
-                    fi
-                done
+                # Abort if transcript grew (re-prompt or user input added content)
+                if [ -n "$before" ] && [ -f "$transcript" ]; then
+                    after=$(file_size "$transcript")
+                    [ "$before" != "$after" ] && exit 0
+                fi
 
                 # Session is truly idle — write signal (re-check pending to close TOCTOU race)
                 if [ "$(cat "$pending" 2>/dev/null)" = "$$" ]; then
