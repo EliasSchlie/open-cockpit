@@ -69,7 +69,9 @@ function debugLog(tag, ...args) {
       fs.closeSync(debugLogFd);
       try {
         fs.renameSync(DEBUG_LOG_FILE, DEBUG_LOG_FILE + ".1");
-      } catch {}
+      } catch {
+        /* rename may fail if file was already rotated */
+      }
       debugLogFd = fs.openSync(DEBUG_LOG_FILE, "a", 0o600);
       debugLogSize = 0;
     }
@@ -83,7 +85,9 @@ function closeDebugLog() {
   if (debugLogFd !== null) {
     try {
       fs.closeSync(debugLogFd);
-    } catch {}
+    } catch {
+      /* best-effort close */
+    }
     debugLogFd = null;
   }
 }
@@ -267,6 +271,7 @@ async function getJsonlSize(sessionId) {
     const stat = await fs.promises.stat(jsonlPath);
     return stat.size;
   } catch {
+    /* ENOENT expected — file may have been removed between find and stat */
     jsonlPathCache.delete(sessionId);
     return null;
   }
@@ -287,10 +292,13 @@ async function getCwdFromJsonl(sessionId) {
       try {
         const obj = JSON.parse(line);
         if (obj.cwd) cwd = obj.cwd;
-      } catch {}
+      } catch {
+        /* malformed JSONL lines expected */
+      }
     }
     return cwd || null;
-  } catch {
+  } catch (err) {
+    debugLog("main", "getCwdFromJsonl failed for", sessionId, err.message);
     return null;
   }
 }
@@ -301,6 +309,7 @@ function getIntentionHeading(filePath) {
     const match = content.match(/^#\s+(.+)$/m);
     return match ? match[1].trim() : null;
   } catch {
+    /* ENOENT expected — intention file may not exist yet */
     return null;
   }
 }
@@ -314,6 +323,7 @@ function getIdleSignal(pid) {
     parsed.signalMtimeMs = stat.mtimeMs;
     return parsed;
   } catch {
+    /* ENOENT expected — no idle signal means session is processing */
     return null;
   }
 }
@@ -343,6 +353,7 @@ function hasUserInput(transcriptPath) {
     }
     return false;
   } catch {
+    /* ENOENT expected — transcript may not exist yet */
     return false;
   }
 }
@@ -392,7 +403,14 @@ function getOffloadedSessions() {
         hasSnapshot,
         origin: meta.origin || null,
       });
-    } catch {}
+    } catch (err) {
+      debugLog(
+        "main",
+        "getOffloadedSessions: failed to read session",
+        dir,
+        err.message,
+      );
+    }
   }
   return sessions;
 }
@@ -408,7 +426,9 @@ function findGitRoot(cwd) {
         gitRootCache.set(cwd, dir);
         return dir;
       }
-    } catch {}
+    } catch {
+      /* ENOENT expected — .git doesn't exist at this level */
+    }
     dir = path.dirname(dir);
   }
   gitRootCache.set(cwd, null);
@@ -458,6 +478,7 @@ async function getSessionsUncached() {
         process.kill(Number(pid), 0);
         alive = true;
       } catch {
+        /* ESRCH expected — process doesn't exist */
         alive = false;
       }
 
@@ -586,7 +607,14 @@ async function getSessionsUncached() {
     // Remove dominated PID file from disk
     try {
       fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(dominated.pid)));
-    } catch {}
+    } catch (err) {
+      debugLog(
+        "main",
+        "failed to remove dominated PID file",
+        dominated.pid,
+        err.message,
+      );
+    }
   }
   const dedupedSessions = [...bySessionId.values()];
   sessions.length = 0;
@@ -644,7 +672,9 @@ async function getSessionsUncached() {
     // Clean up stale PID file
     try {
       fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(s.pid)));
-    } catch {}
+    } catch (err) {
+      debugLog("main", "failed to remove dead PID file", s.pid, err.message);
+    }
 
     sessions.splice(i, 1);
   }
@@ -709,7 +739,9 @@ function computeDirFingerprint() {
         try {
           const st = fs.statSync(path.join(SESSION_PIDS_DIR, f));
           parts.push(`p:${f}:${st.mtimeMs}`);
-        } catch {}
+        } catch {
+          /* ENOENT — file removed between readdir and stat */
+        }
       }
     }
     // Idle signal files
@@ -719,19 +751,25 @@ function computeDirFingerprint() {
         try {
           const st = fs.statSync(path.join(IDLE_SIGNALS_DIR, f));
           parts.push(`i:${f}:${st.mtimeMs}`);
-        } catch {}
+        } catch {
+          /* ENOENT — file removed between readdir and stat */
+        }
       }
     }
     // Offloaded dir mtime (catches new archives)
     try {
       const st = fs.statSync(OFFLOADED_DIR);
       parts.push(`o:${st.mtimeMs}`);
-    } catch {}
+    } catch {
+      /* ENOENT — dir may not exist yet */
+    }
     // Pool state changes (new slots, killed sessions)
     try {
       const st = fs.statSync(POOL_FILE);
       parts.push(`pool:${st.mtimeMs}`);
-    } catch {}
+    } catch {
+      /* ENOENT — pool may not be initialized */
+    }
     return parts.join("|");
   } catch {
     return null; // Force refresh on error
@@ -787,6 +825,7 @@ async function readTerminalBuffer(termId) {
     const resp = await daemonRequest({ type: "read-buffer", termId });
     return resp.buffer || "";
   } catch {
+    /* daemon may be disconnected — return empty buffer */
     return "";
   }
 }
@@ -878,13 +917,17 @@ async function offloadSession(
     const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
     try {
       fs.unlinkSync(idleSignalFile);
-    } catch {}
+    } catch {
+      /* ENOENT race — signal may already be removed */
+    }
     // Remove stale PID file so the old session doesn't appear as a live "idle"
     // ghost while /clear is in flight. The SessionStart hook will recreate it
     // with the new session UUID once /clear completes.
     try {
       fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(pid)));
-    } catch {}
+    } catch {
+      /* ENOENT race — PID file may already be removed */
+    }
   }
 
   // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
@@ -1091,7 +1134,9 @@ function removeOffloadData(sessionId) {
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
   try {
     fs.rmSync(offloadDir, { recursive: true });
-  } catch {}
+  } catch (err) {
+    debugLog("main", "removeOffloadData failed for", sessionId, err.message);
+  }
 }
 
 // Read offload snapshot
@@ -1101,6 +1146,7 @@ function readOffloadSnapshot(sessionId) {
   try {
     return fs.readFileSync(snapshotFile, "utf-8");
   } catch {
+    /* ENOENT expected — snapshot may not exist */
     return null;
   }
 }
@@ -1112,6 +1158,7 @@ function readOffloadMeta(sessionId) {
   try {
     return JSON.parse(fs.readFileSync(metaFile, "utf-8"));
   } catch {
+    /* ENOENT expected — meta may not exist, or JSON may be corrupted */
     return null;
   }
 }
@@ -1124,7 +1171,9 @@ function resolveClaudePath() {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-  } catch {}
+  } catch {
+    /* `which` fails if claude not in PATH — fall through to candidates */
+  }
   const candidates = [
     path.join(os.homedir(), ".claude", "local", "bin", "claude"),
     "/usr/local/bin/claude",
@@ -1170,7 +1219,8 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
     try {
       buffer = await readBuffer();
     } catch {
-      return false; // Daemon gone
+      /* daemon disconnected — terminal no longer reachable */
+      return false;
     }
 
     if (bufferHasTrustPrompt(buffer)) {
@@ -1185,6 +1235,7 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
             const newBuffer = await readBuffer();
             if (!bufferHasTrustPrompt(newBuffer)) return true; // Confirmed
           } catch {
+            /* daemon disconnected during verify */
             return false;
           }
         }
@@ -1400,6 +1451,7 @@ async function getPoolHealth() {
       process.kill(Number(pid), 0);
       return true;
     } catch {
+      /* ESRCH expected — process existence check */
       return false;
     }
   });
@@ -1464,7 +1516,9 @@ async function reconcilePool() {
         if (slot.pid) {
           try {
             process.kill(slot.pid, "SIGTERM");
-          } catch {}
+          } catch {
+            /* ESRCH expected — process may already be dead */
+          }
         }
         // Auto-restart dead slot
         try {
@@ -1557,7 +1611,9 @@ async function killSlotProcess(slot) {
     if (slot.pid) {
       try {
         process.kill(slot.pid, "SIGTERM");
-      } catch {}
+      } catch {
+        /* ESRCH expected — process may already be dead */
+      }
     }
   }
 }
@@ -1572,7 +1628,9 @@ async function poolDestroy() {
     }
     try {
       fs.unlinkSync(POOL_FILE);
-    } catch {}
+    } catch (err) {
+      debugLog("main", "poolDestroy: failed to unlink pool.json:", err.message);
+    }
   });
 }
 
@@ -1813,6 +1871,7 @@ function focusExternalTerminal(pid) {
       encoding: "utf-8",
     }).trim();
   } catch {
+    /* process may have exited — can't determine TTY */
     return { focused: false };
   }
   if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty))
@@ -1906,6 +1965,7 @@ function isDaemonRunning() {
     process.kill(pid, 0); // signal 0 = check if alive
     return true;
   } catch {
+    /* ENOENT/ESRCH expected — PID file missing or daemon dead */
     return false;
   }
 }
@@ -2137,6 +2197,7 @@ app.whenReady().then(async () => {
     try {
       files = fs.readdirSync(SESSION_PIDS_DIR);
     } catch {
+      /* ENOENT — dir may have been removed */
       return;
     }
     const currentFiles = new Set(files);
@@ -2150,6 +2211,7 @@ app.whenReady().then(async () => {
         process.kill(Number(pid), 0);
         knownAlivePids.add(pid);
       } catch {
+        /* ESRCH expected — process existence check */
         if (knownAlivePids.has(pid)) {
           knownAlivePids.delete(pid);
           anyDied = true;
@@ -2166,6 +2228,7 @@ app.whenReady().then(async () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
     } catch {
+      /* ENOENT expected — colors.json is optional */
       return {};
     }
   });
@@ -2276,6 +2339,7 @@ app.whenReady().then(async () => {
         .filter((f) => !f.startsWith("."))
         .sort();
     } catch {
+      /* ENOENT — setup-scripts dir may not exist */
       return [];
     }
   });
@@ -2284,6 +2348,7 @@ app.whenReady().then(async () => {
     try {
       return fs.readFileSync(filePath, "utf-8");
     } catch {
+      /* ENOENT expected — script may have been deleted */
       return null;
     }
   });
@@ -2779,7 +2844,9 @@ app.on("before-quit", () => {
   // Clean up API socket
   try {
     fs.unlinkSync(API_SOCKET);
-  } catch {}
+  } catch {
+    /* ENOENT expected — socket may not exist */
+  }
 });
 
 app.on("window-all-closed", () => {
