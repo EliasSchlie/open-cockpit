@@ -13,9 +13,11 @@ send_api() {
   else
     node -e "
       const net = require('net');
+      let buf = '';
       const sock = net.createConnection(process.argv[1]);
       sock.on('connect', () => { sock.write(process.argv[2] + '\n'); });
-      sock.on('data', (d) => { process.stdout.write(d); sock.destroy(); process.exit(0); });
+      sock.on('data', (d) => { buf += d; const i = buf.indexOf('\n'); if (i !== -1) { process.stdout.write(buf.slice(0, i + 1)); sock.destroy(); } });
+      sock.on('end', () => { if (buf) process.stdout.write(buf); process.exit(0); });
       sock.on('error', (e) => { console.error(e.message); process.exit(1); });
       setTimeout(() => { console.error('timeout'); process.exit(1); }, ${timeout}000);
     " "$SOCKET" "$json"
@@ -199,7 +201,7 @@ case "$CMD" in
   pty-list)     json="{\"type\":\"pty-list\",\"id\":1}"; send_api "$json" ;;
   pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%s' "${2:?data required}" | jq -Rs .)}"; send_api "$json" ;;
   pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
-  pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":\"${1:?cwd required}\",\"cmd\":\"${2:?cmd required}\",\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
+  pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":$(printf '%s' "${1:?cwd required}" | jq -Rs .),\"cmd\":$(printf '%s' "${2:?cmd required}" | jq -Rs .),\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
   pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
   ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
 
