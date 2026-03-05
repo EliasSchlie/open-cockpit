@@ -264,7 +264,7 @@ const darkTheme = EditorView.theme(
       color: "#e0e0e0",
       height: "100%",
     },
-    ".cm-cursor": { borderLeftColor: "#ff1a1a" },
+    ".cm-cursor": { borderLeftColor: "#c0c0c0" },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
       backgroundColor: "#2a0808",
     },
@@ -279,11 +279,17 @@ const darkTheme = EditorView.theme(
 // --- xterm.js theme (minimal — let shell theme handle ANSI colors) ---
 const TERM_THEME = {
   background: "#0a0a0a",
-  cursor: "#ff1a1a",
-  cursorAccent: "#0a0a0a",
-  selectionBackground: "rgba(255, 26, 26, 0.25)",
-  selectionForeground: "#ffffff",
 };
+
+function createTerminal(extraOpts = {}) {
+  return new Terminal({
+    theme: TERM_THEME,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: false,
+    ...extraOpts,
+  });
+}
 
 // --- Directory color coding ---
 // Neon-friendly palette for directory indicators
@@ -441,12 +447,7 @@ async function spawnTerminal(cwd, cmd, args) {
   container.style.cssText = "width:100%;height:100%;display:none;";
   terminalMount.appendChild(container);
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-  });
+  const term = createTerminal();
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -516,12 +517,7 @@ async function attachPoolTerminal(poolTermId) {
   container.style.cssText = "width:100%;height:100%;display:none;";
   terminalMount.appendChild(container);
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-  });
+  const term = createTerminal();
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -588,6 +584,7 @@ function switchToTerminal(index) {
       const entry = terminals[index];
       if (!entry) return;
       entry.fitAddon.fit();
+      entry.term.refresh(0, entry.term.rows - 1);
       entry.term.focus();
       window.api.ptyResize(entry.termId, entry.term.cols, entry.term.rows);
     });
@@ -1880,12 +1877,8 @@ async function reconnectTerminal(ptyInfo) {
   container.style.cssText = "width:100%;height:100%;display:none;";
   terminalMount.appendChild(container);
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-    // Match the PTY's current dimensions so replay buffer renders correctly
+  // Match the PTY's current dimensions so replay buffer renders correctly
+  const term = createTerminal({
     ...(ptyInfo.cols && { cols: ptyInfo.cols }),
     ...(ptyInfo.rows && { rows: ptyInfo.rows }),
   });
@@ -2056,12 +2049,7 @@ async function openSlotTerminalPopup(slot) {
   const mountEl = overlay.querySelector(".slot-terminal-mount");
   const closeBtn = overlay.querySelector(".slot-terminal-close");
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-  });
+  const term = createTerminal();
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
