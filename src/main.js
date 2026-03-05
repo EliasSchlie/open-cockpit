@@ -122,11 +122,14 @@ const gitRootCache = new Map();
 // Cache JSONL path lookups (sessionId -> path)
 const jsonlPathCache = new Map();
 
-// If a "processing" session's transcript hasn't been written to in this long, treat as idle
+// If a "processing" session's transcript size hasn't changed in this long, treat as idle
 const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
 
 // Track stale sessions to detect transitions (stale → not-stale)
 const staleLoggedSessions = new Set();
+
+// Track last-seen JSONL file sizes and when they last changed (sessionId -> { size, changedAt })
+const jsonlSizeTracker = new Map();
 
 // Cache hasUserInput results (transcript -> true, once true stays true)
 const userInputCache = new Map();
@@ -253,13 +256,16 @@ async function findJsonlPath(sessionId) {
   }
 }
 
-async function getJsonlMtime(sessionId) {
+// Use file SIZE (not mtime) for stale detection. Claude keeps the JSONL file
+// handle open, causing periodic mtime updates without new content. Size only
+// changes when actual entries are appended.
+async function getJsonlSize(sessionId) {
   let jsonlPath = jsonlPathCache.get(sessionId);
   if (!jsonlPath) jsonlPath = await findJsonlPath(sessionId);
   if (!jsonlPath) return null;
   try {
     const stat = await fs.promises.stat(jsonlPath);
-    return stat.mtimeMs;
+    return stat.size;
   } catch {
     jsonlPathCache.delete(sessionId);
     return null;
@@ -507,17 +513,31 @@ async function getSessionsUncached() {
         status = "idle";
       }
     } else {
-      // Fallback: if transcript hasn't been written to in a while, treat as idle
-      const mtime = await getJsonlMtime(sessionId);
-      if (mtime && Date.now() - mtime > STALE_PROCESSING_MS) {
+      // Fallback: if transcript size hasn't changed in a while, treat as idle.
+      // Uses file SIZE (not mtime) because Claude keeps the JSONL file handle open,
+      // causing mtime updates even without new content.
+      const size = await getJsonlSize(sessionId);
+      const now = Date.now();
+      let unchangedSince = now;
+
+      if (size != null) {
+        const tracked = jsonlSizeTracker.get(sessionId);
+        if (tracked && tracked.size === size) {
+          unchangedSince = tracked.changedAt;
+        } else {
+          jsonlSizeTracker.set(sessionId, { size, changedAt: now });
+        }
+      }
+
+      if (size != null && now - unchangedSince > STALE_PROCESSING_MS) {
         // Always log — stale sessions indicate a hook failure and should never happen
         console.error(
-          `[main] Stale processing detected for session ${sessionId} (no activity for ${Math.round((Date.now() - mtime) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
+          `[main] Stale processing detected for session ${sessionId} (transcript size unchanged for ${Math.round((now - unchangedSince) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
         );
         staleLoggedSessions.add(sessionId);
         status = "idle";
         staleIdle = true;
-        idleTs = mtime;
+        idleTs = Math.round(unchangedSince / 1000);
       } else {
         if (staleLoggedSessions.delete(sessionId)) {
           console.log(
@@ -652,8 +672,13 @@ async function getSessionsUncached() {
     }
   }
 
-  // Add offloaded/archived sessions, skip if live session exists
+  // Prune stale tracker entries for sessions that no longer exist
   const liveIds = new Set(sessions.map((s) => s.sessionId));
+  for (const id of jsonlSizeTracker.keys()) {
+    if (!liveIds.has(id)) jsonlSizeTracker.delete(id);
+  }
+
+  // Add offloaded/archived sessions, skip if live session exists
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       if (!offloaded.origin) offloaded.origin = "pool";
