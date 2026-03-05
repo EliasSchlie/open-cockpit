@@ -13,6 +13,13 @@ hook_error() {
 }
 trap 'hook_error "unexpected failure at line $LINENO"' ERR
 
+# Skip if session-intention-intro.sh just fired (avoid redundant output on first prompt)
+JUST_FIRED="$HOME/.open-cockpit/intentions/.intro-sent/.just-fired"
+if [ -f "$JUST_FIRED" ]; then
+  rm -f "$JUST_FIRED"
+  exit 0
+fi
+
 # Resolve session_id via PID mapping (written by session-pid-map.sh)
 SESSION_PIDS_DIR="$HOME/.open-cockpit/session-pids"
 [ -f "$SESSION_PIDS_DIR/$PPID" ] || exit 0

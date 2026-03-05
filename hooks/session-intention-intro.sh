@@ -1,9 +1,9 @@
 #!/bin/bash
-# Introduces Claude to the session's intention file at session start.
+# Introduces Claude to the session's intention file on the first user prompt.
 #
-# Triggered by: SessionStart
-# Input (stdin): JSON with session_id
-# Output (stdout): Instructions injected into Claude's context
+# Triggered by: UserPromptSubmit (fires once per context window via marker file)
+# Input: none used (resolves session_id via PID mapping)
+# Output (stdout): Instructions injected into Claude's context (first prompt only)
 
 set -euo pipefail
 
@@ -13,9 +13,49 @@ hook_error() {
 }
 trap 'hook_error "unexpected failure at line $LINENO"' ERR
 
-# Read session_id from JSON stdin (async hooks may omit trailing newline)
-session_id=$(python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null) || true
-[ -z "$session_id" ] && exit 0
+# Resolve session_id via PID mapping (written by session-pid-map.sh at SessionStart)
+SESSION_PIDS_DIR="$HOME/.open-cockpit/session-pids"
+[ -f "$SESSION_PIDS_DIR/$PPID" ] || exit 0
+session_id=$(cat "$SESSION_PIDS_DIR/$PPID")
+[ -n "$session_id" ] || exit 0
+
+# Check if we already fired for this session ID (survives /clear → new session_id)
+MARKER_DIR="$HOME/.open-cockpit/intentions/.intro-sent"
+mkdir -p "$MARKER_DIR"
+
+MARKER_FILE="$MARKER_DIR/$session_id"
+if [ -f "$MARKER_FILE" ]; then
+  exit 0
+fi
+
+# Mark as sent (do this early to avoid double-firing on race)
+touch "$MARKER_FILE"
+
+# Signal to intention-change-notify.sh to skip this prompt (avoid redundant output)
+echo "$session_id" > "$MARKER_DIR/.just-fired"
+
+# Clean up markers for sessions that no longer have a live PID
+for f in "$MARKER_DIR"/*; do
+  [ -f "$f" ] || continue
+  name=$(basename "$f")
+  # Skip dotfiles (like .just-fired)
+  [[ "$name" == .* ]] && continue
+  # Skip current session
+  [ "$name" = "$session_id" ] && continue
+  # Check if any alive PID maps to this session
+  alive=false
+  for pf in "$SESSION_PIDS_DIR"/*; do
+    [ -f "$pf" ] || continue
+    pid=$(basename "$pf")
+    kill -0 "$pid" 2>/dev/null || continue
+    sid=$(cat "$pf" 2>/dev/null) || continue
+    if [ "$sid" = "$name" ]; then
+      alive=true
+      break
+    fi
+  done
+  $alive || rm -f "$f"
+done
 
 INTENTION_FILE="$HOME/.open-cockpit/intentions/${session_id}.md"
 SNAPSHOT_DIR="$HOME/.open-cockpit/intentions/.snapshots"
