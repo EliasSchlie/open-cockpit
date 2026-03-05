@@ -1195,20 +1195,8 @@ function showNotification(msg) {
 }
 
 async function selectSession(session) {
-  // If already viewing this session, re-focus its external terminal (if any)
-  if (session.sessionId === currentSessionId) {
-    if (session.alive) {
-      const result = await window.api.focusExternalTerminal(session.pid);
-      if (result.focused) {
-        saveStatus.textContent = `Focused ${result.app}`;
-        setTimeout(() => {
-          if (saveStatus.textContent === `Focused ${result.app}`)
-            saveStatus.textContent = "";
-        }, 2000);
-      }
-    }
-    return;
-  }
+  // If already viewing this session, nothing to do
+  if (session.sessionId === currentSessionId) return;
 
   hideCurrentTerminals();
 
@@ -1242,22 +1230,6 @@ async function selectSession(session) {
     colorBar.style.background = dirColor;
     colorBar.style.boxShadow = `0 0 8px ${dirColor}`;
     header.appendChild(colorBar);
-  }
-
-  // External sessions: try to focus their terminal app (iTerm/Cursor)
-  if (session.origin !== "pool" && session.alive) {
-    const result = await window.api.focusExternalTerminal(session.pid);
-    if (gen !== sessionGeneration) {
-      debugLog("session", `race abort gen=${gen} at focusExternal`);
-      return;
-    }
-    if (result.focused) {
-      saveStatus.textContent = `Focused ${result.app}`;
-      setTimeout(() => {
-        if (saveStatus.textContent === `Focused ${result.app}`)
-          saveStatus.textContent = "";
-      }, 2000);
-    }
   }
 
   // Restore cached terminals immediately (sync, no race risk)
@@ -1535,6 +1507,14 @@ function jumpToRecentIdle() {
   if (idle) selectSession(idle);
 }
 
+// --- Focus external terminal for current session ---
+async function focusCurrentExternalTerminal() {
+  const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
+  if (!session || !session.alive || session.origin === "pool") return;
+  const result = await window.api.focusExternalTerminal(session.pid);
+  if (result.focused) showNotification(`Focused ${result.app}`);
+}
+
 // --- Archive current session (then jump to recent idle) ---
 async function archiveCurrentSession() {
   if (!currentSessionId) return;
@@ -1657,6 +1637,12 @@ const COMMANDS = [
     label: "Focus Terminal",
     shortcut: "⌘`",
     action: focusTerminal,
+  },
+  {
+    id: "focus-external-terminal",
+    label: "Focus External Terminal",
+    shortcut: "⌘O",
+    action: focusCurrentExternalTerminal,
   },
   {
     id: "toggle-pane-focus",
@@ -1848,6 +1834,7 @@ window.api.onTogglePaneFocus(() => {
     focusEditor();
   }
 });
+window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
 
