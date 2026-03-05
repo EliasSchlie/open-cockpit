@@ -27,6 +27,7 @@ const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
 const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
+const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
 const DEFAULT_POOL_SIZE = 5;
 
@@ -1248,6 +1249,9 @@ function handleDaemonMessage(msg) {
 }
 
 app.whenReady().then(async () => {
+  // Ensure setup-scripts directory exists
+  fs.mkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
+
   // Start daemon connection early
   try {
     await ensureDaemon();
@@ -1359,6 +1363,26 @@ app.whenReady().then(async () => {
   ipcMain.handle("pool-health", () => getPoolHealth());
   ipcMain.handle("pool-read", () => readPool());
   ipcMain.handle("pool-destroy", async () => poolDestroy());
+
+  // Setup scripts
+  ipcMain.handle("list-setup-scripts", () => {
+    try {
+      return fs
+        .readdirSync(SETUP_SCRIPTS_DIR)
+        .filter((f) => !f.startsWith("."))
+        .sort();
+    } catch {
+      return [];
+    }
+  });
+  ipcMain.handle("read-setup-script", (_e, name) => {
+    const filePath = path.join(SETUP_SCRIPTS_DIR, path.basename(name));
+    try {
+      return fs.readFileSync(filePath, "utf-8");
+    } catch {
+      return null;
+    }
+  });
 
   // Poll for a session-pid file to appear for a given PID
   ipcMain.handle("pty-wait-session", (_e, pid) => {

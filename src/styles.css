@@ -598,6 +598,61 @@ body {
   word-break: break-word;
 }
 
+/* Setup script picker */
+.setup-script-overlay {
+  display: flex;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+.setup-script-dialog {
+  width: 360px;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  padding: 16px;
+}
+
+.setup-script-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.setup-script-subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.setup-script-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.setup-script-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.setup-script-item:hover,
+.setup-script-item.selected {
+  background: var(--accent-dim);
+}
+
 /* Pool settings */
 .pool-settings-dialog {
   width: 480px;

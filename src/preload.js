@@ -79,6 +79,10 @@ contextBridge.exposeInMainWorld("api", {
   onPtyExit: (callback) =>
     ipcRenderer.on("pty-exit", (_e, termId) => callback(termId)),
 
+  // Setup scripts
+  listSetupScripts: () => ipcRenderer.invoke("list-setup-scripts"),
+  readSetupScript: (name) => ipcRenderer.invoke("read-setup-script", name),
+
   // Menu actions
   onNewTerminalTab: (callback) =>
     ipcRenderer.on("new-terminal-tab", () => callback()),
