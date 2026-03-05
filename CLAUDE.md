@@ -49,6 +49,7 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings)
 - `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived session data (meta.json, snapshot.log)
 - `~/.open-cockpit/setup-scripts/` — Setup script files for Cmd+N picker
+- `~/.open-cockpit/debug.log` — Debug log (both main + renderer, rotates at 2 MB)
 - `~/.open-cockpit/api.sock` — Programmatic API Unix socket
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
@@ -136,6 +137,7 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI helper)
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference + how to add new ones
+- [docs/debug-logging.md](docs/debug-logging.md) — Persistent debug logging (`~/.open-cockpit/debug.log`)
 
 ## Session origin tags
 

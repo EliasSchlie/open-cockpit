@@ -26,6 +26,7 @@ const channels = [
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
 contextBridge.exposeInMainWorld("api", {
+  debugLog: (tag, ...args) => ipcRenderer.send("debug-log", tag, args),
   getDirColors: () => ipcRenderer.invoke("get-dir-colors"),
   getSessions: () => ipcRenderer.invoke("get-sessions"),
   readIntention: (sessionId) => ipcRenderer.invoke("read-intention", sessionId),
