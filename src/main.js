@@ -26,6 +26,15 @@ const {
   resolveSlot: resolveSlotInPool,
 } = require("./pool");
 
+// Secure file helpers — restrict to owner-only access
+function secureMkdirSync(dirPath, opts = {}) {
+  fs.mkdirSync(dirPath, { ...opts, mode: 0o700 });
+}
+function secureWriteFileSync(filePath, data, opts) {
+  fs.writeFileSync(filePath, data, opts);
+  fs.chmodSync(filePath, 0o600);
+}
+
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
 const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
@@ -516,7 +525,7 @@ async function getSessionsUncached() {
       let gitRoot = s.gitRoot || findGitRoot(cwd);
       const origin = poolSessionIdsForArchive.has(s.sessionId) ? "pool" : "ext";
 
-      fs.mkdirSync(offloadDir, { recursive: true });
+      secureMkdirSync(offloadDir, { recursive: true });
       const meta = {
         sessionId: s.sessionId,
         claudeSessionId: s.sessionId,
@@ -528,7 +537,7 @@ async function getSessionsUncached() {
         archived: true,
         origin,
       };
-      fs.writeFileSync(
+      secureWriteFileSync(
         path.join(offloadDir, "meta.json"),
         JSON.stringify(meta, null, 2),
       );
@@ -539,7 +548,7 @@ async function getSessionsUncached() {
         existingMeta.archived = true;
         existingMeta.archivedAt =
           existingMeta.archivedAt || new Date().toISOString();
-        fs.writeFileSync(
+        secureWriteFileSync(
           path.join(offloadDir, "meta.json"),
           JSON.stringify(existingMeta, null, 2),
         );
@@ -720,8 +729,8 @@ async function sendCommandToTerminal(termId, command) {
 
 // Create a fresh idle signal file for a pool slot
 function createFreshIdleSignal(pid, sessionId) {
-  fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-  fs.writeFileSync(
+  secureMkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+  secureWriteFileSync(
     path.join(IDLE_SIGNALS_DIR, String(pid)),
     JSON.stringify({
       cwd: os.homedir(),
@@ -827,10 +836,10 @@ function writeOffloadMeta(
 ) {
   validateSessionId(sessionId);
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
-  fs.mkdirSync(offloadDir, { recursive: true });
+  secureMkdirSync(offloadDir, { recursive: true });
 
   if (snapshot) {
-    fs.writeFileSync(path.join(offloadDir, "snapshot.log"), snapshot);
+    secureWriteFileSync(path.join(offloadDir, "snapshot.log"), snapshot);
   }
 
   const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
@@ -849,7 +858,7 @@ function writeOffloadMeta(
   };
   if (externalClear) meta.externalClear = true;
 
-  fs.writeFileSync(
+  secureWriteFileSync(
     path.join(offloadDir, "meta.json"),
     JSON.stringify(meta, null, 2),
   );
@@ -890,7 +899,7 @@ async function archiveSession(sessionId) {
     // Already offloaded — just mark as archived
     meta.archived = true;
     meta.archivedAt = meta.archivedAt || new Date().toISOString();
-    fs.writeFileSync(
+    secureWriteFileSync(
       path.join(OFFLOADED_DIR, sessionId, "meta.json"),
       JSON.stringify(meta, null, 2),
     );
@@ -919,19 +928,19 @@ async function archiveSession(sessionId) {
   if (updatedMeta) {
     updatedMeta.archived = true;
     updatedMeta.archivedAt = updatedMeta.archivedAt || new Date().toISOString();
-    fs.writeFileSync(
+    secureWriteFileSync(
       path.join(OFFLOADED_DIR, sessionId, "meta.json"),
       JSON.stringify(updatedMeta, null, 2),
     );
   } else {
     // No offload data yet — create archive-only meta
     const offloadDir = path.join(OFFLOADED_DIR, sessionId);
-    fs.mkdirSync(offloadDir, { recursive: true });
+    secureMkdirSync(offloadDir, { recursive: true });
     const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
     const intentionHeading = fs.existsSync(intentionFile)
       ? getIntentionHeading(intentionFile)
       : null;
-    fs.writeFileSync(
+    secureWriteFileSync(
       path.join(offloadDir, "meta.json"),
       JSON.stringify(
         {
@@ -959,7 +968,7 @@ function unarchiveSession(sessionId) {
   if (!meta) return;
   delete meta.archived;
   delete meta.archivedAt;
-  fs.writeFileSync(
+  secureWriteFileSync(
     path.join(OFFLOADED_DIR, sessionId, "meta.json"),
     JSON.stringify(meta, null, 2),
   );
@@ -1099,7 +1108,7 @@ function withPoolLock(fn) {
     if (_poolLockHeld) {
       throw new Error(
         "withPoolLock called while lock is held — nested calls deadlock. " +
-          "Restructure to avoid nesting (see ensureFreshSlot pattern).",
+          "Restructure to avoid nesting (see withFreshSlot pattern).",
       );
     }
     _poolLockHeld = true;
@@ -1446,9 +1455,9 @@ function readIntention(sessionId) {
 const lastWrittenContent = new Map();
 
 function writeIntention(sessionId, content) {
-  fs.mkdirSync(INTENTIONS_DIR, { recursive: true });
+  secureMkdirSync(INTENTIONS_DIR, { recursive: true });
   lastWrittenContent.set(sessionId, content);
-  fs.writeFileSync(path.join(INTENTIONS_DIR, `${sessionId}.md`), content);
+  secureWriteFileSync(path.join(INTENTIONS_DIR, `${sessionId}.md`), content);
 }
 
 async function poolClean() {
@@ -1473,7 +1482,7 @@ async function poolClean() {
     if (offloadedMeta && !offloadedMeta.archived) {
       offloadedMeta.archived = true;
       offloadedMeta.archivedAt = new Date().toISOString();
-      fs.writeFileSync(
+      secureWriteFileSync(
         path.join(OFFLOADED_DIR, slot.sessionId, "meta.json"),
         JSON.stringify(offloadedMeta, null, 2),
       );
@@ -1484,42 +1493,53 @@ async function poolClean() {
 }
 
 // Ensure a fresh pool slot exists, offloading the LRU idle session if needed.
-// Two-phase to avoid nesting withPoolLock (offloadSession uses its own lock).
-async function ensureFreshSlot() {
+// Find offload target from pool/sessions without acquiring lock.
+// Returns offload info or null if a fresh slot already exists.
+function findOffloadTarget(pool, sessionMap) {
+  const hasFresh = pool.slots.some((s) => {
+    if (s.status === "fresh") return true;
+    const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+    return session && session.status === "fresh";
+  });
+  if (hasFresh) return null;
+
+  const idleSlots = pool.slots.filter((s) => {
+    const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+    return session && session.status === "idle";
+  });
+  if (idleSlots.length === 0)
+    throw new Error("No fresh or idle slots available");
+  idleSlots.sort((a, b) => {
+    const sa = sessionMap.get(a.sessionId);
+    const sb = sessionMap.get(b.sessionId);
+    return (sa?.idleTs || 0) - (sb?.idleTs || 0);
+  });
+  const victim = idleSlots[0];
+  const vs = sessionMap.get(victim.sessionId);
+  return {
+    sessionId: victim.sessionId,
+    termId: victim.termId,
+    pid: victim.pid,
+    cwd: vs?.cwd,
+    gitRoot: vs?.gitRoot,
+  };
+}
+
+// Ensure a fresh slot exists, then atomically claim and return it.
+// The claimFn receives (pool, slot) inside the lock and should perform
+// the slot-specific work (send prompt / resume command, mark busy, etc.).
+// Returns whatever claimFn returns.
+async function withFreshSlot(claimFn) {
+  // Phase 1: check if offload is needed (inside lock)
   const needsOffload = await withPoolLock(async () => {
     const pool = readPool();
     if (!pool) throw new Error("Pool not initialized");
     const sessions = await getSessions();
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    const hasFresh = pool.slots.some((s) => {
-      if (s.status === "fresh") return true;
-      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-      return session && session.status === "fresh";
-    });
-    if (hasFresh) return null;
-
-    const idleSlots = pool.slots.filter((s) => {
-      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-      return session && session.status === "idle";
-    });
-    if (idleSlots.length === 0)
-      throw new Error("No fresh or idle slots available");
-    idleSlots.sort((a, b) => {
-      const sa = sessionMap.get(a.sessionId);
-      const sb = sessionMap.get(b.sessionId);
-      return (sa?.idleTs || 0) - (sb?.idleTs || 0);
-    });
-    const victim = idleSlots[0];
-    const vs = sessionMap.get(victim.sessionId);
-    return {
-      sessionId: victim.sessionId,
-      termId: victim.termId,
-      pid: victim.pid,
-      cwd: vs?.cwd,
-      gitRoot: vs?.gitRoot,
-    };
+    return findOffloadTarget(pool, sessionMap);
   });
 
+  // Phase 2: offload outside lock (offloadSession acquires its own lock)
   if (needsOffload) {
     await offloadSession(needsOffload.sessionId, needsOffload.termId, null, {
       cwd: needsOffload.cwd,
@@ -1528,22 +1548,8 @@ async function ensureFreshSlot() {
     });
     await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
   }
-}
 
-async function poolResume(sessionId) {
-  validateSessionId(sessionId);
-  const meta = readOffloadMeta(sessionId);
-  if (!meta) throw new Error("No offload data for session");
-  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
-  if (!claudeSessionId) throw new Error("No Claude session ID stored");
-
-  if (meta.archived) {
-    unarchiveSession(sessionId);
-  }
-
-  await ensureFreshSlot();
-
-  // Acquire fresh slot and send /resume
+  // Phase 3: claim fresh slot atomically (inside lock — no gap for races)
   return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) throw new Error("Pool not initialized");
@@ -1557,6 +1563,23 @@ async function poolResume(sessionId) {
     });
     if (!slot) throw new Error("No fresh slots available");
 
+    return claimFn(pool, slot);
+  });
+}
+
+async function poolResume(sessionId) {
+  validateSessionId(sessionId);
+  const meta = readOffloadMeta(sessionId);
+  if (!meta) throw new Error("No offload data for session");
+  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
+  if (!claudeSessionId) throw new Error("No Claude session ID stored");
+
+  if (meta.archived) {
+    unarchiveSession(sessionId);
+  }
+
+  // Atomically ensure a fresh slot and claim it for /resume
+  return withFreshSlot(async (pool, slot) => {
     const oldSlotSessionId = slot.sessionId;
 
     await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
@@ -1604,8 +1627,8 @@ function watchIntention(sessionId) {
 
   const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
   if (!fs.existsSync(file)) {
-    fs.mkdirSync(INTENTIONS_DIR, { recursive: true });
-    fs.writeFileSync(file, "");
+    secureMkdirSync(INTENTIONS_DIR, { recursive: true });
+    secureWriteFileSync(file, "");
   }
 
   // Use polling (fs.watchFile) — reliable on macOS unlike fs.watch
@@ -1861,7 +1884,7 @@ function handleDaemonMessage(msg) {
 
 app.whenReady().then(async () => {
   // Ensure setup-scripts directory exists
-  fs.mkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
+  secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
   // Start daemon connection early
   try {
@@ -1898,7 +1921,7 @@ app.whenReady().then(async () => {
     }, 200);
   }
   for (const dir of [SESSION_PIDS_DIR, IDLE_SIGNALS_DIR]) {
-    fs.mkdirSync(dir, { recursive: true });
+    secureMkdirSync(dir, { recursive: true });
     try {
       fs.watch(dir, { persistent: false }, onDirChange);
     } catch (err) {
@@ -2188,21 +2211,7 @@ app.whenReady().then(async () => {
 
     "pool-start": async (msg) => {
       if (!msg.prompt) throw new Error("prompt required");
-      await ensureFreshSlot();
-      return withPoolLock(async () => {
-        const pool = readPool();
-        if (!pool) throw new Error("Pool not initialized");
-
-        const sessions = await getSessions();
-        const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-
-        const slot = pool.slots.find((s) => {
-          if (s.status === "fresh") return true;
-          const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-          return session && session.status === "fresh";
-        });
-        if (!slot) throw new Error("No fresh slots available");
-
+      return withFreshSlot(async (pool, slot) => {
         await sendPromptToTerminal(slot.termId, msg.prompt);
         slot.status = "busy";
         writePool(pool);

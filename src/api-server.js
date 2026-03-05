@@ -1,11 +1,21 @@
 const net = require("net");
 const fs = require("fs");
 
+const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
+
 function createApiServer(socketPath, handlers) {
   const server = net.createServer((socket) => {
     let buf = "";
     socket.on("data", (chunk) => {
       buf += chunk.toString();
+      if (buf.length > MAX_BUFFER_SIZE) {
+        sendTo(socket, {
+          type: "error",
+          error: "Buffer size limit exceeded",
+        });
+        socket.destroy();
+        return;
+      }
       let idx;
       while ((idx = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, idx);
