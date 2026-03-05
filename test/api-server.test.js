@@ -193,7 +193,7 @@ describe("createApiServer", () => {
     const result = await new Promise((resolve, reject) => {
       const sock = net.createConnection(SOCKET_PATH);
       let buf = "";
-      let gotError = false;
+      let resp = null;
       sock.on("connect", () => {
         // Send >1MB without a newline to trigger buffer overflow
         const chunk = "x".repeat(64 * 1024);
@@ -204,18 +204,16 @@ describe("createApiServer", () => {
       sock.on("data", (chunk) => {
         buf += chunk.toString();
         const idx = buf.indexOf("\n");
-        if (idx !== -1) {
-          gotError = true;
-          const resp = JSON.parse(buf.slice(0, idx));
-          resolve({ resp, destroyed: sock.destroyed });
+        if (idx !== -1 && !resp) {
+          resp = JSON.parse(buf.slice(0, idx));
         }
       });
       sock.on("close", () => {
-        if (!gotError) resolve({ resp: null, destroyed: true });
+        resolve({ resp, closed: true });
       });
       sock.on("error", () => {
         // Connection reset is expected after server destroys socket
-        resolve({ resp: null, destroyed: true });
+        resolve({ resp, closed: true });
       });
       setTimeout(() => {
         sock.destroy();
@@ -223,12 +221,12 @@ describe("createApiServer", () => {
       }, 5000);
     });
 
-    // Server should send error and destroy the connection
+    // Server should send error and close the connection
     if (result.resp) {
       expect(result.resp.type).toBe("error");
       expect(result.resp.error).toMatch(/Buffer size limit/);
     }
-    expect(result.destroyed).toBe(true);
+    expect(result.closed).toBe(true);
   });
 
   it("handles concurrent connections from multiple clients", async () => {
