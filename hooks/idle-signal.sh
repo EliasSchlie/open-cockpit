@@ -56,11 +56,11 @@ print(json.dumps(d))
         # Block detection (Stop only): wait, then verify the session didn't continue.
         # Another Stop hook may have blocked → Claude gets re-prompted → not idle.
         if [ "$trigger" = "stop" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
-            saved_mtime=$(stat -f %m "$transcript" 2>/dev/null || echo 0)
+            saved_mtime=$(F="$transcript" python3 -c "import os; print(int(os.path.getmtime(os.environ['F'])))" 2>/dev/null || echo 0)
             sleep 1
             # If signal was already cleared by UserPromptSubmit/PostToolUse, stop
             [ -f "$signal_file" ] || exit 0
-            current_mtime=$(stat -f %m "$transcript" 2>/dev/null || echo 0)
+            current_mtime=$(F="$transcript" python3 -c "import os; print(int(os.path.getmtime(os.environ['F'])))" 2>/dev/null || echo 0)
             if [ "$current_mtime" -gt "$saved_mtime" ]; then
                 # JSONL was modified after signal → session continued → not idle
                 rm -f "$signal_file"
