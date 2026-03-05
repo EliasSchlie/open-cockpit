@@ -2,42 +2,98 @@
 
 Unix socket API at `~/.open-cockpit/api.sock` for external process control. Protocol: newline-delimited JSON (same as PTY daemon).
 
-## CLI Helper
+## CLI Quick Reference
+
+The CLI (`bin/cockpit-cli`) provides both high-level agent-friendly commands and low-level API access.
+
+### Targeting sessions
+
+Most commands accept a `<target>` in three formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Full UUID | `2947bf12-d307-...` | Exact session ID |
+| Prefix | `2947b` | Auto-resolves if unique match |
+| `@N` | `@0`, `@3` | Pool slot index |
+
+### Observing agents
 
 ```bash
-# Session commands (sub-claude compatible)
-bin/cockpit-cli start "fix the login bug"          # returns session ID
-bin/cockpit-cli start "fix the login bug" --block   # waits, prints output
-bin/cockpit-cli resume <id>                         # resume offloaded/archived session
-bin/cockpit-cli resume <id> --block                 # resume and wait for completion
-bin/cockpit-cli followup <id> "also add tests"      # follow up on idle session
-bin/cockpit-cli wait <id>                            # wait for session to finish
-bin/cockpit-cli wait                                 # wait for any session
-bin/cockpit-cli capture <id>                         # live terminal content
-bin/cockpit-cli capture --slot 3                     # live terminal content by slot
-bin/cockpit-cli result <id>                          # output (errors if running)
-bin/cockpit-cli input <id> "y"                       # send raw input
-bin/cockpit-cli input --slot 3 "y"                   # send raw input by slot
-bin/cockpit-cli clean                                # offload finished sessions
+cockpit-cli ls                          # List live sessions (table)
+cockpit-cli ls --processing             # Filter: only processing sessions
+cockpit-cli ls --idle                   # Filter: only idle sessions
+cockpit-cli ls --all                    # Include archived sessions
+cockpit-cli ls --json                   # Raw JSON output
 
-# Pool management
-bin/cockpit-cli pool init 5
-bin/cockpit-cli pool status
-bin/cockpit-cli pool resize 8
-bin/cockpit-cli pool destroy
+cockpit-cli screen @2                   # See slot 2's terminal (ANSI-stripped)
+cockpit-cli screen 2947b --raw          # Raw terminal with ANSI codes
+cockpit-cli watch @2                    # Follow output in real-time (Ctrl+C to stop)
+cockpit-cli watch 2947b 2               # Poll every 2 seconds
 
-# Slot access (by index, works even without sessionId)
-bin/cockpit-cli slot read 3                          # read terminal buffer
-bin/cockpit-cli slot write 3 "hello"                 # write to terminal
-bin/cockpit-cli slot status 3                        # slot details
+cockpit-cli log 2947b                   # Last 20 conversation turns
+cockpit-cli log @1 50                   # Last 50 turns
 
-# Low-level (legacy)
-bin/cockpit-cli ping
-bin/cockpit-cli get-sessions
-bin/cockpit-cli pty-list
+cockpit-cli intention 2947b             # Read intention file
+cockpit-cli intention 2947b "new text"  # Write intention file
 ```
 
-Requires `jq` for session commands. Uses `socat` or falls back to `node` for socket transport.
+### Interacting with agents
+
+```bash
+# High-level (handles timing automatically)
+cockpit-cli prompt @1 "add error handling"          # Send prompt to idle session
+cockpit-cli prompt 2947b "fix the bug" --block      # Send + wait for result
+
+# Low-level keystrokes
+cockpit-cli type @1 'hello\r'                       # Type text (interprets escapes)
+cockpit-cli key @0 enter                            # Send Enter key
+cockpit-cli key @0 ctrl-c                           # Send Ctrl+C
+cockpit-cli key @0 escape                           # Send Escape
+# Available keys: enter, escape, ctrl-c, ctrl-d, ctrl-u, ctrl-l,
+#   ctrl-a, ctrl-e, ctrl-z, tab, backspace, up, down, left, right
+```
+
+### Session lifecycle
+
+```bash
+cockpit-cli start "fix the login bug"               # Start new session
+cockpit-cli start "fix the bug" --block              # Start + wait for result
+cockpit-cli followup <id> "also add tests"           # Follow up on idle session
+cockpit-cli resume <id>                              # Resume offloaded session
+cockpit-cli wait <id>                                # Wait for session to finish
+cockpit-cli wait                                     # Wait for any session
+cockpit-cli capture <id>                             # Live terminal content (raw)
+cockpit-cli result <id>                              # Output (errors if running)
+cockpit-cli input <id> "y"                           # Send raw input
+cockpit-cli clean                                    # Offload finished sessions
+```
+
+### Pool management
+
+```bash
+cockpit-cli pool init 5                              # Initialize pool
+cockpit-cli pool status                              # Pool health report
+cockpit-cli pool resize 8                            # Resize pool
+cockpit-cli pool destroy                             # Destroy pool
+```
+
+### Slot access (by index)
+
+```bash
+cockpit-cli slot read 3                              # Read terminal buffer
+cockpit-cli slot write 3 "hello"                     # Write to terminal
+cockpit-cli slot status 3                            # Slot details
+```
+
+### Low-level
+
+```bash
+cockpit-cli ping                                     # Health check
+cockpit-cli get-sessions                             # All sessions (raw JSON)
+cockpit-cli pty-list                                 # List terminals
+```
+
+Requires `jq`. Uses `socat` or falls back to `node` for socket transport.
 
 ## Protocol
 
@@ -125,29 +181,23 @@ There are three ways to target a terminal, at different levels of abstraction:
 
 External tools (including other Claude Code sessions) can observe and interact with pool sessions through the API.
 
-### Reading terminal output
+### Recommended approach: high-level CLI commands
+
+The `screen`, `prompt`, `key`, and `type` commands handle ANSI stripping and timing automatically:
 
 ```bash
-# By session ID
-cockpit-cli capture <sessionId>
-
-# By slot index (works even without sessionId)
-cockpit-cli slot read 3
+cockpit-cli screen @2            # Clean terminal output
+cockpit-cli prompt @1 "do X"     # Handles timing, sends prompt safely
+cockpit-cli key @0 ctrl-c        # Named keys, no escape code memorization
 ```
 
-The buffer is raw terminal output with ANSI escape codes. Strip them for plain text:
-```bash
-cockpit-cli slot read 3 | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g'
-```
+### Low-level: raw terminal I/O
 
-### Sending keystrokes
+For direct terminal access, use `slot write` / `slot read` or the pool-level equivalents:
 
 ```bash
-# Type text + Enter
-cockpit-cli slot write 3 'hello\r'
-
-# Send Escape key
-cockpit-cli slot write 3 '\x1b'
+cockpit-cli slot write 3 'hello\r'    # Type text + Enter
+cockpit-cli slot write 3 '\x1b'       # Send Escape key
 ```
 
 **Timing matters:** The Claude TUI processes input asynchronously. If you send Enter (`\r`) before the TUI has rendered its prompt, the keystroke may be lost or misinterpreted. The app's internal `sendCommandToTerminal()` handles this by:
@@ -157,7 +207,7 @@ cockpit-cli slot write 3 '\x1b'
 4. Polling the buffer until the text appears
 5. Only then sending Enter
 
-For external tooling, either use `pool-start`/`pool-followup` (which handle timing automatically) or implement your own buffer polling between writes.
+For external tooling, either use `pool-start`/`pool-followup`/`prompt` (which handle timing automatically) or implement your own buffer polling between writes.
 
 ## Validation
 
