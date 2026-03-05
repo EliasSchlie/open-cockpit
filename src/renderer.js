@@ -1523,17 +1523,25 @@ async function archiveCurrentSession() {
   // Can't archive already-archived sessions
   if (session.status === "archived") return;
 
+  const archivingSessionId = currentSessionId;
+
+  // Jump away immediately — don't wait for the slow offload+/clear
+  const idle = cachedSessions.find(
+    (s) =>
+      s.sessionId !== archivingSessionId &&
+      (s.status === "idle" || s.status === "fresh"),
+  );
+  if (idle) {
+    selectSession(idle);
+  }
+
+  // Archive in background
   try {
-    await window.api.archiveSession(currentSessionId);
+    await window.api.archiveSession(archivingSessionId);
   } catch (err) {
     console.error("Failed to archive session:", err);
   }
   await loadSessions();
-  // Jump to the most recent idle session
-  const idle = cachedSessions.find((s) => s.status === "idle");
-  if (idle) {
-    selectSession(idle);
-  }
 }
 
 // --- Sidebar toggle ---
