@@ -539,6 +539,37 @@ function writePool(pool) {
   writePoolFile(POOL_FILE, pool);
 }
 
+// Poll a terminal's buffer for the trust prompt and send Enter to accept it.
+// Returns true if prompt was found and accepted, false if timed out.
+async function waitForTrustPromptAndAccept(termId, timeoutMs = 10000) {
+  const POLL_INTERVAL = 300;
+  const TRUST_PATTERNS = ["Do you trust", "trust the files"];
+  let elapsed = 0;
+  while (elapsed < timeoutMs) {
+    try {
+      const resp = await daemonRequest({ type: "list" });
+      const pty = resp.ptys.find((p) => p.termId === termId);
+      if (pty && pty.buffer) {
+        const hasTrustPrompt = TRUST_PATTERNS.some((pat) =>
+          pty.buffer.includes(pat),
+        );
+        if (hasTrustPrompt) {
+          daemonSend({ type: "write", termId, data: "\r" });
+          return true;
+        }
+      }
+    } catch {
+      // Daemon disconnected or terminal gone — stop polling
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+    elapsed += POLL_INTERVAL;
+  }
+  // Fallback: send Enter anyway in case we missed the prompt (e.g. buffer wrapped)
+  daemonSend({ type: "write", termId, data: "\r" });
+  return false;
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
   const claudePath = resolveClaudePath();
@@ -575,13 +606,10 @@ async function poolInit(size) {
   pool.slots = slots;
 
   // Accept trust prompts: Claude shows "Do you trust this folder?" even with --dangerously-skip-permissions
-  // Wait for prompt to appear, then send Enter to accept
-  await new Promise((r) => setTimeout(r, 3000));
-  for (const slot of pool.slots) {
-    daemonSend({ type: "write", termId: slot.termId, data: "\r" });
-  }
-  // Give Claude time to start after trust acceptance
-  await new Promise((r) => setTimeout(r, 2000));
+  // Poll each terminal's buffer for the prompt, then send Enter to accept
+  await Promise.all(
+    pool.slots.map((slot) => waitForTrustPromptAndAccept(slot.termId)),
+  );
 
   writePool(pool);
 
@@ -738,10 +766,8 @@ async function reconcilePool() {
         slot.status = "starting";
         slot.sessionId = null;
         changed = true;
-        // Accept trust prompt after spawning
-        setTimeout(() => {
-          daemonSend({ type: "write", termId: newSlot.termId, data: "\r" });
-        }, 3000);
+        // Accept trust prompt after spawning (runs in background, no await needed)
+        waitForTrustPromptAndAccept(newSlot.termId);
         pollForSessionId(slot.pid, 60000).then((sessionId) => {
           const p = readPool();
           if (!p) return;
