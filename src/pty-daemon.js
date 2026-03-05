@@ -207,6 +207,26 @@ function handleList(socket, msg) {
   sendTo(socket, { type: "list-result", id: msg.id, ptys });
 }
 
+function handleReadBuffer(socket, msg) {
+  const entry = terminals.get(msg.termId);
+  if (!entry) {
+    sendTo(socket, {
+      type: "read-buffer-result",
+      id: msg.id,
+      termId: msg.termId,
+      buffer: "",
+    });
+    return;
+  }
+  const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
+  sendTo(socket, {
+    type: "read-buffer-result",
+    id: msg.id,
+    termId: msg.termId,
+    buffer,
+  });
+}
+
 function handleAttach(socket, msg) {
   const entry = terminals.get(msg.termId);
   if (!entry) {
@@ -275,6 +295,8 @@ function handleMessage(socket, msg) {
       return handleKill(socket, msg);
     case "list":
       return handleList(socket, msg);
+    case "read-buffer":
+      return handleReadBuffer(socket, msg);
     case "attach":
       return handleAttach(socket, msg);
     case "detach":
