@@ -699,3 +699,64 @@ body {
   outline: none;
   border-color: var(--accent);
 }
+
+/* Clickable pool slot rows */
+.pool-slot-clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pool-slot-clickable:hover {
+  background: var(--accent-dim);
+}
+
+/* Slot terminal popup */
+.slot-terminal-dialog {
+  width: 80vw;
+  height: 70vh;
+  max-width: 1000px;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.slot-terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.slot-terminal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slot-terminal-readonly {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  background: var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.slot-terminal-mount {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+}
+
+.slot-terminal-mount .xterm {
+  height: 100%;
+}

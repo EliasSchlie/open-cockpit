@@ -716,6 +716,7 @@ function cleanupStaleTerminals(liveSessions) {
 // Find a terminal entry across all sessions (active + cached)
 // Temporary lookup for terminals being reconnected (before they're in sessionTerminals)
 const pendingTerminals = new Map(); // termId -> entry
+const popupTerminals = new Map(); // termId -> { term, ... } for slot terminal popups
 
 function findTerminalEntry(termId) {
   const active = terminals.find((t) => t.termId === termId);
@@ -731,17 +732,25 @@ function findTerminalEntry(termId) {
 window.api.onPtyData((termId, data) => {
   const entry = findTerminalEntry(termId);
   if (entry) entry.term.write(data);
+  // Also forward to popup terminal if open (may be same or different entry)
+  const popup = popupTerminals.get(termId);
+  if (popup && popup !== entry) popup.term.write(data);
 });
 
 window.api.onPtyReplay((termId, data) => {
   const entry = findTerminalEntry(termId);
   // Skip if buffer was already written directly during reconnect
   if (entry && !entry.skipReplay) entry.term.write(data);
+  // Popup always receives replay (it never has skipReplay)
+  const popup = popupTerminals.get(termId);
+  if (popup && popup !== entry) popup.term.write(data);
 });
 
 window.api.onPtyExit((termId) => {
   const entry = findTerminalEntry(termId);
   if (entry) entry.term.write("\r\n[Process exited]\r\n");
+  const popup = popupTerminals.get(termId);
+  if (popup && popup !== entry) popup.term.write("\r\n[Process exited]\r\n");
 });
 
 const STATUS_CLASSES = {
@@ -1652,6 +1661,98 @@ refreshBtn.addEventListener("click", async () => {
   loadSessions();
 });
 
+// --- Slot Terminal Popup ---
+async function openSlotTerminalPopup(slot) {
+  // Don't open popup for dead/unknown slots — no terminal to attach to
+  const status = slot.healthStatus || slot.status;
+  if (status === "dead" || !slot.termId) {
+    showNotification("Cannot open terminal for dead slot");
+    return;
+  }
+
+  // Close existing popup if any (run its cleanup)
+  const existingPopup = document.getElementById("slot-terminal-popup");
+  if (existingPopup && existingPopup._cleanup) existingPopup._cleanup();
+  else if (existingPopup) existingPopup.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "slot-terminal-popup";
+  overlay.className = "offload-menu-overlay";
+
+  const label =
+    slot.intentionHeading ||
+    slot.sessionId?.slice(0, 8) ||
+    `slot-${slot.index}`;
+
+  overlay.innerHTML = `
+    <div class="slot-terminal-dialog">
+      <div class="slot-terminal-header">
+        <span class="slot-terminal-title">${label} <span class="slot-terminal-readonly">read-only</span></span>
+        <button class="snapshot-close slot-terminal-close">\u2715</button>
+      </div>
+      <div class="slot-terminal-mount"></div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const mountEl = overlay.querySelector(".slot-terminal-mount");
+  const closeBtn = overlay.querySelector(".slot-terminal-close");
+
+  const term = new Terminal({
+    theme: TERM_THEME,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: false,
+    disableStdin: true,
+  });
+
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(mountEl);
+
+  // Register in popupTerminals so global data handlers can route data here.
+  // Data is forwarded to both the main terminal entry (if any) and the popup entry.
+  const popupEntry = { termId: slot.termId, term, fitAddon };
+  popupTerminals.set(slot.termId, popupEntry);
+
+  try {
+    await window.api.ptyAttach(slot.termId);
+  } catch (err) {
+    showNotification(`Failed to attach: ${err.message}`);
+    popupTerminals.delete(slot.termId);
+    term.dispose();
+    overlay.remove();
+    return;
+  }
+
+  // Fit after a frame so dimensions are correct
+  requestAnimationFrame(() => fitAddon.fit());
+
+  const resizeObserver = new ResizeObserver(() => fitAddon.fit());
+  resizeObserver.observe(mountEl);
+
+  // Cleanup function — also stored on overlay for programmatic close
+  const cleanup = () => {
+    resizeObserver.disconnect();
+    popupTerminals.delete(slot.termId);
+    // Only detach if there's no other terminal entry still using this termId
+    // (i.e. the session might be open in the main view)
+    const otherEntry = findTerminalEntry(slot.termId);
+    if (!otherEntry) {
+      window.api.ptyDetach(slot.termId).catch(() => {});
+    }
+    term.dispose();
+    overlay.remove();
+  };
+  overlay._cleanup = cleanup;
+
+  closeBtn.addEventListener("click", cleanup);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) cleanup();
+  });
+}
+
 // --- Pool Settings Panel ---
 const poolSettingsBtn = document.getElementById("pool-settings-btn");
 let poolSettingsInterval = null;
@@ -1679,7 +1780,7 @@ function renderPoolSlotsHtml(health) {
         slot.intentionHeading ||
         slot.sessionId?.slice(0, 8) ||
         `slot-${slot.index}`;
-      return `<div class="pool-slot-row">
+      return `<div class="pool-slot-row pool-slot-clickable" data-slot-index="${slot.index}">
         ${poolStatusDot(status)}
         <span class="pool-slot-label">${label}</span>
         <span class="pool-slot-status">${status}</span>
@@ -1774,6 +1875,15 @@ async function showPoolSettings() {
       // Ignore transient errors — next poll will retry
     }
   }, 3000);
+
+  // Slot row click → open terminal popup
+  for (const row of overlay.querySelectorAll(".pool-slot-clickable")) {
+    row.addEventListener("click", () => {
+      const slotIndex = parseInt(row.dataset.slotIndex, 10);
+      const slot = health.slots.find((s) => s.index === slotIndex);
+      if (slot) openSlotTerminalPopup(slot);
+    });
+  }
 
   // Init button
   const initBtn = overlay.querySelector(".pool-init-btn");
