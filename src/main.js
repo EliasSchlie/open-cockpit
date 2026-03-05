@@ -321,6 +321,54 @@ function getSessions() {
   sessions.length = 0;
   sessions.push(...dedupedSessions);
 
+  // Archive dead sessions that have intention files (save as offloaded without snapshot)
+  for (let i = sessions.length - 1; i >= 0; i--) {
+    const s = sessions[i];
+    if (s.status !== "dead") continue;
+    if (!s.hasIntention) continue;
+
+    const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
+    if (!fs.existsSync(offloadDir)) {
+      // Recover cwd from JSONL since lsof doesn't work on dead processes
+      let cwd = s.cwd || getCwdFromJsonl(s.sessionId);
+      let gitRoot = s.gitRoot;
+      if (cwd && !gitRoot) {
+        let dir = cwd;
+        while (dir !== path.dirname(dir)) {
+          try {
+            if (fs.statSync(path.join(dir, ".git")).isDirectory()) {
+              gitRoot = dir;
+              break;
+            }
+          } catch {}
+          dir = path.dirname(dir);
+        }
+      }
+
+      fs.mkdirSync(offloadDir, { recursive: true });
+      const meta = {
+        sessionId: s.sessionId,
+        claudeSessionId: s.sessionId,
+        cwd: cwd || null,
+        gitRoot: gitRoot || null,
+        intentionHeading: s.intentionHeading,
+        lastInteractionTs: Math.floor(Date.now() / 1000),
+        archivedAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        path.join(offloadDir, "meta.json"),
+        JSON.stringify(meta, null, 2),
+      );
+    }
+
+    // Clean up stale PID file
+    try {
+      fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(s.pid)));
+    } catch {}
+
+    sessions.splice(i, 1);
+  }
+
   // Tag sessions as pool vs external
   const pool = readPool();
   const poolSessionIds = new Set();
