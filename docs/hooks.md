@@ -44,10 +44,6 @@ Detects when sessions become idle (waiting for user input) or start processing. 
 
 The Stop hook waits 1s then checks if the JSONL transcript was modified — if so, another hook blocked and the session continued (not idle). The signal is removed.
 
-### Sub-claude exclusion
-
-The hook checks `SUB_CLAUDE=1` env var and exits early. Sub-claude sessions never write signals.
-
 ### Signal file format
 
 ```json

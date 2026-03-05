@@ -8,9 +8,6 @@
 
 set -euo pipefail
 
-# Skip sub-claude sessions
-[ "${SUB_CLAUDE:-}" = "1" ] && exit 0
-
 SIGNAL_DIR="$HOME/.open-cockpit/idle-signals"
 mkdir -p "$SIGNAL_DIR"
 

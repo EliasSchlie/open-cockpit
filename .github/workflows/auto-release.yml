@@ -1,0 +1,48 @@
+name: Auto-release plugin
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    # Skip if this commit was made by the workflow itself
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MARKETPLACE_PAT }}
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          PLUGIN_JSON=".claude-plugin/plugin.json"
+          current=$(jq -r '.version' "$PLUGIN_JSON")
+          IFS='.' read -r major minor patch <<< "$current"
+          new="${major}.${minor}.$((patch + 1))"
+          jq --arg v "$new" '.version = $v' "$PLUGIN_JSON" > tmp.json && mv tmp.json "$PLUGIN_JSON"
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "Bumped $current -> $new"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/plugin.json
+          git commit -m "Release v${{ steps.bump.outputs.version }} [skip ci]"
+          git push
+
+      - name: Update marketplace
+        run: |
+          git clone https://x-access-token:${{ secrets.MARKETPLACE_PAT }}@github.com/EliasSchlie/claude-plugins.git /tmp/marketplace
+          cd /tmp/marketplace
+          jq --arg v "${{ steps.bump.outputs.version }}" \
+            '(.plugins[] | select(.name == "open-cockpit")).version = $v' \
+            .claude-plugin/marketplace.json > tmp.json && mv tmp.json .claude-plugin/marketplace.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/marketplace.json
+          git commit -m "Bump open-cockpit to ${{ steps.bump.outputs.version }} [skip ci]"
+          git push

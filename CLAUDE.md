@@ -14,7 +14,8 @@ Electron app + Claude Code plugin for session intention tracking.
 - `bin/cockpit-cli` — CLI helper with sub-claude-compatible commands (start, followup, wait, capture, result, input, clean) + pool management + legacy API commands
 - `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection, intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
-- `release.sh` — Version bump + marketplace deployment
+- `.github/workflows/auto-release.yml` — CI auto-bumps version + updates marketplace on push
+- `release.sh` — Manual fallback for version bump + marketplace deployment
 
 ## Pool management
 
@@ -30,9 +31,9 @@ The app can manage a pool of pre-started Claude sessions. Pool state lives in `~
 
 ### Plugin update → pool reinit
 
-After releasing a plugin update (`./release.sh`), the hooks need 1–2 minutes to auto-update via the marketplace. Pool sessions started before the update have stale hooks. To pick up new hooks:
+After pushing to `main`, CI auto-bumps the version and updates the marketplace. Claude Code's auto-update picks up the new version within 1–2 minutes. Pool sessions started before the update have stale hooks. To pick up new hooks:
 
-1. Wait 1–2 minutes after release for auto-update
+1. Wait 1–2 minutes after push for CI + auto-update
 2. Destroy the pool (`pool-destroy` via API or UI)
 3. Re-initialize (`pool-init`)
 
@@ -67,12 +68,16 @@ cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-dae
 
 ## Releasing
 
-```bash
-./release.sh        # auto-increments patch (0.1.0 → 0.1.1)
-./release.sh 1.0.0  # explicit version
-```
+**Automatic (CI):** Every push to `main` triggers `.github/workflows/auto-release.yml`:
+1. Bumps patch version in `.claude-plugin/plugin.json`
+2. Commits with `[skip ci]` to prevent loops
+3. Clones `EliasSchlie/claude-plugins`, updates marketplace version, pushes
 
-Bumps version in `.claude-plugin/plugin.json` and `EliasSchlie/claude-plugins` marketplace, commits, pushes both. Marketplace has `autoUpdate: true` — new sessions pick up changes automatically. **Run after pushing any hook changes.**
+Just push your changes — CI handles version bumping and marketplace sync. For major/minor bumps, manually update `plugin.json` before pushing; CI increments from your number.
+
+**Requires:** `MARKETPLACE_PAT` secret on the repo (GitHub PAT with repo access to both `EliasSchlie/open-cockpit` and `EliasSchlie/claude-plugins`).
+
+**Manual fallback:** `./release.sh` still works for local releases if CI is unavailable.
 
 ## Dev vs production
 
