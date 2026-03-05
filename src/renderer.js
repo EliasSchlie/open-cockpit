@@ -1078,22 +1078,21 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function isFreshSlot(s) {
+  return s.status === "fresh" || s.poolStatus === "fresh";
+}
+
 // Acquire a fresh slot: prefer existing fresh, else offload LRU idle.
 // Returns the fresh session object or null if pool is fully busy.
 async function acquireFreshSlot() {
   const sessions = await window.api.getSessions();
 
-  // Sessions now carry poolStatus from main process — no separate poolRead() needed
-  const hasFreshSlot = sessions.some(
-    (s) => s.status === "fresh" || s.poolStatus === "fresh",
-  );
-  if (!hasFreshSlot && !sessions.some((s) => s.origin === "pool")) return null;
-
-  // 1. Prefer an existing fresh slot (by session status or pool status)
-  const freshSession = sessions.find(
-    (s) => s.status === "fresh" || s.poolStatus === "fresh",
-  );
+  // 1. Prefer an existing fresh slot (poolStatus is set by main process)
+  const freshSession = sessions.find(isFreshSlot);
   if (freshSession) return freshSession;
+
+  // No pool sessions at all — nothing to acquire from
+  if (!sessions.some((s) => s.origin === "pool")) return null;
 
   // 2. Offload the longest-unused idle session (LRU)
   const idleSessions = sessions
@@ -1109,7 +1108,7 @@ async function acquireFreshSlot() {
 
   const victim = idleSessions[0];
 
-  // Find the victim's terminal from pool data
+  // Find the victim's terminal from pool data (need termId for offload)
   const pool = await window.api.poolRead();
   const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
   if (!victimSlot) return null;
@@ -1144,9 +1143,7 @@ async function pollForFreshSlot(timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, 500));
     const sessions = await window.api.getSessions();
-    const fresh = sessions.find(
-      (s) => s.status === "fresh" || s.poolStatus === "fresh",
-    );
+    const fresh = sessions.find(isFreshSlot);
     if (fresh) {
       debugLog("pool", `fresh slot found: ${fresh.sessionId}`);
       return fresh;

@@ -69,7 +69,9 @@ function debugLog(tag, ...args) {
       fs.closeSync(debugLogFd);
       try {
         fs.renameSync(DEBUG_LOG_FILE, DEBUG_LOG_FILE + ".1");
-      } catch {}
+      } catch {
+        /* rename may fail if file was already rotated */
+      }
       debugLogFd = fs.openSync(DEBUG_LOG_FILE, "a", 0o600);
       debugLogSize = 0;
     }
@@ -83,7 +85,9 @@ function closeDebugLog() {
   if (debugLogFd !== null) {
     try {
       fs.closeSync(debugLogFd);
-    } catch {}
+    } catch {
+      /* best-effort close */
+    }
     debugLogFd = null;
   }
 }
@@ -267,6 +271,7 @@ async function getJsonlSize(sessionId) {
     const stat = await fs.promises.stat(jsonlPath);
     return stat.size;
   } catch {
+    /* ENOENT expected — file may have been removed between find and stat */
     jsonlPathCache.delete(sessionId);
     return null;
   }
@@ -287,10 +292,13 @@ async function getCwdFromJsonl(sessionId) {
       try {
         const obj = JSON.parse(line);
         if (obj.cwd) cwd = obj.cwd;
-      } catch {}
+      } catch {
+        /* malformed JSONL lines expected */
+      }
     }
     return cwd || null;
-  } catch {
+  } catch (err) {
+    debugLog("main", "getCwdFromJsonl failed for", sessionId, err.message);
     return null;
   }
 }
@@ -301,6 +309,7 @@ async function getIntentionHeading(filePath) {
     const match = content.match(/^#\s+(.+)$/m);
     return match ? match[1].trim() : null;
   } catch {
+    /* ENOENT expected — intention file may not exist yet */
     return null;
   }
 }
@@ -314,6 +323,7 @@ async function getIdleSignal(pid) {
     parsed.signalMtimeMs = stat.mtimeMs;
     return parsed;
   } catch {
+    /* ENOENT expected — no idle signal means session is processing */
     return null;
   }
 }
@@ -346,6 +356,7 @@ async function hasUserInput(transcriptPath) {
     }
     return false;
   } catch {
+    /* ENOENT expected — transcript may not exist yet */
     return false;
   }
 }
@@ -400,7 +411,14 @@ async function getOffloadedSessions() {
         hasSnapshot,
         origin: meta.origin || null,
       });
-    } catch {}
+    } catch (err) {
+      debugLog(
+        "main",
+        "getOffloadedSessions: failed to read session",
+        dir,
+        err.message,
+      );
+    }
   }
   return sessions;
 }
@@ -416,7 +434,9 @@ async function findGitRoot(cwd) {
         gitRootCache.set(cwd, dir);
         return dir;
       }
-    } catch {}
+    } catch {
+      /* ENOENT expected — .git doesn't exist at this level */
+    }
     dir = path.dirname(dir);
   }
   gitRootCache.set(cwd, null);
@@ -466,6 +486,7 @@ async function getSessionsUncached() {
         process.kill(Number(pid), 0);
         alive = true;
       } catch {
+        /* ESRCH expected — process doesn't exist */
         alive = false;
       }
 
@@ -593,7 +614,14 @@ async function getSessionsUncached() {
     // Remove dominated PID file from disk
     try {
       fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(dominated.pid)));
-    } catch {}
+    } catch (err) {
+      debugLog(
+        "main",
+        "failed to remove dominated PID file",
+        dominated.pid,
+        err.message,
+      );
+    }
   }
   const dedupedSessions = [...bySessionId.values()];
   sessions.length = 0;
@@ -651,7 +679,9 @@ async function getSessionsUncached() {
     // Clean up stale PID file
     try {
       fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(s.pid)));
-    } catch {}
+    } catch (err) {
+      debugLog("main", "failed to remove dead PID file", s.pid, err.message);
+    }
 
     sessions.splice(i, 1);
   }
@@ -728,7 +758,9 @@ function computeDirFingerprint() {
         try {
           const st = fs.statSync(path.join(SESSION_PIDS_DIR, f));
           parts.push(`p:${f}:${st.mtimeMs}`);
-        } catch {}
+        } catch {
+          /* ENOENT — file removed between readdir and stat */
+        }
       }
     }
     // Idle signal files
@@ -738,19 +770,25 @@ function computeDirFingerprint() {
         try {
           const st = fs.statSync(path.join(IDLE_SIGNALS_DIR, f));
           parts.push(`i:${f}:${st.mtimeMs}`);
-        } catch {}
+        } catch {
+          /* ENOENT — file removed between readdir and stat */
+        }
       }
     }
     // Offloaded dir mtime (catches new archives)
     try {
       const st = fs.statSync(OFFLOADED_DIR);
       parts.push(`o:${st.mtimeMs}`);
-    } catch {}
+    } catch {
+      /* ENOENT — dir may not exist yet */
+    }
     // Pool state changes (new slots, killed sessions)
     try {
       const st = fs.statSync(POOL_FILE);
       parts.push(`pool:${st.mtimeMs}`);
-    } catch {}
+    } catch {
+      /* ENOENT — pool may not be initialized */
+    }
     return parts.join("|");
   } catch {
     return null; // Force refresh on error
@@ -806,6 +844,7 @@ async function readTerminalBuffer(termId) {
     const resp = await daemonRequest({ type: "read-buffer", termId });
     return resp.buffer || "";
   } catch {
+    /* daemon may be disconnected — return empty buffer */
     return "";
   }
 }
@@ -897,46 +936,39 @@ async function offloadSession(
     const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
     try {
       fs.unlinkSync(idleSignalFile);
-    } catch {}
+    } catch {
+      /* ENOENT race — signal may already be removed */
+    }
     // Remove stale PID file so the old session doesn't appear as a live "idle"
     // ghost while /clear is in flight. The SessionStart hook will recreate it
     // with the new session UUID once /clear completes.
     try {
       fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(pid)));
-    } catch {}
+    } catch {
+      /* ENOENT race — PID file may already be removed */
+    }
   }
 
   // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
+  let slotRef;
   await withPoolLock(() => {
     const pool = readPool();
     if (!pool) return;
     const slot = pool.slots.find((s) => s.termId === termId);
     if (!slot) return;
-    const oldSessionId = slot.sessionId;
-    slot.status = "fresh";
+    slotRef = { termId: slot.termId, pid: slot.pid, excludeId: slot.sessionId };
+    slot.status = "starting";
     slot.sessionId = null;
     writePool(pool);
-
-    // Poll until the PID file changes from old UUID to new one
-    pollForSessionId(slot.pid, 60000, oldSessionId)
-      .then(async (newSessionId) => {
-        await withPoolLock(() => {
-          const p = readPool();
-          if (!p) return;
-          const s = p.slots.find((x) => x.termId === termId);
-          if (s) {
-            s.sessionId = newSessionId;
-            s.status = newSessionId ? "fresh" : "error";
-            writePool(p);
-            // Write idle signal so getSessions detects slot as "fresh" (no user input)
-            if (newSessionId) createFreshIdleSignal(s.pid, newSessionId);
-          }
-        });
-      })
-      .catch((err) =>
-        console.error("[main] Post-offload session poll failed:", err.message),
-      );
   });
+
+  // Track slot in background (session ID polling after /clear)
+  if (slotRef) {
+    trackNewSlot(
+      { termId: slotRef.termId, pid: slotRef.pid },
+      { excludeId: slotRef.excludeId, skipTrustPrompt: true },
+    );
+  }
 
   return meta;
 }
@@ -1114,7 +1146,9 @@ function removeOffloadData(sessionId) {
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
   try {
     fs.rmSync(offloadDir, { recursive: true });
-  } catch {}
+  } catch (err) {
+    debugLog("main", "removeOffloadData failed for", sessionId, err.message);
+  }
 }
 
 // Read offload snapshot
@@ -1124,6 +1158,7 @@ function readOffloadSnapshot(sessionId) {
   try {
     return fs.readFileSync(snapshotFile, "utf-8");
   } catch {
+    /* ENOENT expected — snapshot may not exist */
     return null;
   }
 }
@@ -1135,6 +1170,7 @@ function readOffloadMeta(sessionId) {
   try {
     return JSON.parse(fs.readFileSync(metaFile, "utf-8"));
   } catch {
+    /* ENOENT expected — meta may not exist, or JSON may be corrupted */
     return null;
   }
 }
@@ -1147,7 +1183,9 @@ function resolveClaudePath() {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-  } catch {}
+  } catch {
+    /* `which` fails if claude not in PATH — fall through to candidates */
+  }
   const candidates = [
     path.join(os.homedir(), ".claude", "local", "bin", "claude"),
     "/usr/local/bin/claude",
@@ -1193,7 +1231,8 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
     try {
       buffer = await readBuffer();
     } catch {
-      return false; // Daemon gone
+      /* daemon disconnected — terminal no longer reachable */
+      return false;
     }
 
     if (bufferHasTrustPrompt(buffer)) {
@@ -1208,6 +1247,7 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
             const newBuffer = await readBuffer();
             if (!bufferHasTrustPrompt(newBuffer)) return true; // Confirmed
           } catch {
+            /* daemon disconnected during verify */
             return false;
           }
         }
@@ -1268,7 +1308,8 @@ async function spawnPoolSlot(index) {
 
 // Initialize pool: spawn N Claude sessions via PTY daemon
 async function poolInit(size) {
-  return withPoolLock(async () => {
+  // Phase 1: spawn slots and persist pool with "starting" status (inside lock)
+  const pool = await withPoolLock(async () => {
     size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
     const existing = readPool();
     if (existing) {
@@ -1277,7 +1318,7 @@ async function poolInit(size) {
       );
     }
 
-    const pool = {
+    const p = {
       version: 1,
       poolSize: size,
       createdAt: new Date().toISOString(),
@@ -1285,38 +1326,28 @@ async function poolInit(size) {
     };
 
     // Spawn each slot as a Claude session in a daemon terminal (parallel)
-    const slots = await Promise.all(
+    p.slots = await Promise.all(
       Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
     );
-    pool.slots = slots;
 
-    // Accept trust prompts: poll terminal buffers for the prompt, then send Enter
-    await Promise.all(
-      pool.slots.map((slot) => waitForTrustPromptAndAccept(slot.termId)),
-    );
-
-    // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
-    const results = await Promise.allSettled(
-      pool.slots.map(async (slot) => {
-        const sessionId = await pollForSessionId(slot.pid, 60000);
-        slot.sessionId = sessionId;
-        slot.status = sessionId ? "fresh" : "error";
-        // Write idle signal so getSessions detects slot as "fresh" (no user input)
-        if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
-      }),
-    );
-    results.forEach((result, i) => {
-      if (result.status === "rejected") {
-        console.error(
-          `Pool slot ${i} failed to initialize:`,
-          result.reason?.message || result.reason,
-        );
-      }
-    });
-
-    writePool(pool);
-    return pool;
+    writePool(p);
+    return p;
   });
+
+  // Phase 2: track all slots (trust prompt + session ID polling) outside lock
+  const results = await Promise.allSettled(
+    pool.slots.map((slot) => trackNewSlot(slot)),
+  );
+  results.forEach((result, i) => {
+    if (result.status === "rejected") {
+      console.error(
+        `Pool slot ${i} failed to initialize:`,
+        result.reason?.message || result.reason,
+      );
+    }
+  });
+
+  return readPool();
 }
 
 // Poll for a session-pid file to appear (or change from excludeId) for a PID.
@@ -1341,6 +1372,51 @@ async function pollForSessionId(pid, timeoutMs, excludeId = null) {
   }
 }
 
+// After spawning, track the slot until it gets a session ID.
+// Runs trust prompt acceptance + session ID polling in background.
+// Updates pool.json via withPoolLock when done.
+// Returns a promise that resolves to the session ID (can be awaited or fire-and-forget).
+function trackNewSlot(
+  slot,
+  {
+    timeout = 60000,
+    excludeId = null,
+    expectedStatus = "starting",
+    skipTrustPrompt = false,
+    onResolved = null,
+  } = {},
+) {
+  if (!skipTrustPrompt) waitForTrustPromptAndAccept(slot.termId);
+  return pollForSessionId(slot.pid, timeout, excludeId)
+    .then(async (sessionId) => {
+      await withPoolLock(() => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === slot.termId);
+        if (s && s.status === expectedStatus) {
+          s.sessionId = sessionId;
+          s.status = sessionId ? "fresh" : "error";
+          writePool(p);
+          if (sessionId) createFreshIdleSignal(s.pid, sessionId);
+        }
+      });
+      if (onResolved) await onResolved(sessionId);
+      return sessionId;
+    })
+    .catch(async (err) => {
+      console.error("[main] Slot tracking failed:", err.message);
+      await withPoolLock(() => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === slot.termId);
+        if (s && s.status === expectedStatus) {
+          s.status = "error";
+          writePool(p);
+        }
+      });
+    });
+}
+
 // Resize pool: add or remove slots
 async function poolResize(newSize) {
   return withPoolLock(async () => {
@@ -1360,37 +1436,9 @@ async function poolResize(newSize) {
       );
       pool.slots.push(...newSlots);
 
-      // Resolve session IDs in background (locked to avoid clobbering)
+      // Track new slots in background (trust prompt + session ID polling)
       for (const slot of newSlots) {
-        pollForSessionId(slot.pid, 60000)
-          .then(async (sessionId) => {
-            await withPoolLock(() => {
-              const current = readPool();
-              if (!current) return;
-              const s = current.slots.find((x) => x.termId === slot.termId);
-              if (s) {
-                s.sessionId = sessionId;
-                s.status = sessionId ? "fresh" : "error";
-                writePool(current);
-              }
-            });
-          })
-          .catch(async (err) => {
-            console.error(
-              "[main] Resize session poll failed for slot %s: %s",
-              slot.termId,
-              err.message,
-            );
-            await withPoolLock(() => {
-              const current = readPool();
-              if (!current) return;
-              const s = current.slots.find((x) => x.termId === slot.termId);
-              if (s && s.status === "starting") {
-                s.status = "error";
-                writePool(current);
-              }
-            });
-          });
+        trackNewSlot(slot);
       }
     } else {
       // Shrink: kill excess slots (prefer fresh, then LRU idle)
@@ -1423,6 +1471,7 @@ async function getPoolHealth() {
       process.kill(Number(pid), 0);
       return true;
     } catch {
+      /* ESRCH expected — process existence check */
       return false;
     }
   });
@@ -1487,7 +1536,9 @@ async function reconcilePool() {
         if (slot.pid) {
           try {
             process.kill(slot.pid, "SIGTERM");
-          } catch {}
+          } catch {
+            /* ESRCH expected — process may already be dead */
+          }
         }
         // Auto-restart dead slot
         try {
@@ -1497,28 +1548,8 @@ async function reconcilePool() {
           slot.status = "starting";
           slot.sessionId = null;
           changed = true;
-          // Accept trust prompt after spawning (runs in background)
-          waitForTrustPromptAndAccept(newSlot.termId);
-          pollForSessionId(slot.pid, 60000)
-            .then(async (sessionId) => {
-              await withPoolLock(() => {
-                const p = readPool();
-                if (!p) return;
-                const s = p.slots.find((x) => x.index === slot.index);
-                if (s) {
-                  s.sessionId = sessionId;
-                  s.status = sessionId ? "fresh" : "error";
-                  writePool(p);
-                  if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
-                }
-              });
-            })
-            .catch((err) =>
-              console.error(
-                "[main] Reconcile session poll failed:",
-                err.message,
-              ),
-            );
+          // Track slot in background (trust prompt + session ID polling)
+          trackNewSlot(slot);
         } catch (err) {
           console.error(
             `[main] Failed to restart slot ${slot.index}:`,
@@ -1580,7 +1611,9 @@ async function killSlotProcess(slot) {
     if (slot.pid) {
       try {
         process.kill(slot.pid, "SIGTERM");
-      } catch {}
+      } catch {
+        /* ESRCH expected — process may already be dead */
+      }
     }
   }
 }
@@ -1595,7 +1628,9 @@ async function poolDestroy() {
     }
     try {
       fs.unlinkSync(POOL_FILE);
-    } catch {}
+    } catch (err) {
+      debugLog("main", "poolDestroy: failed to unlink pool.json:", err.message);
+    }
   });
 }
 
@@ -1632,22 +1667,20 @@ async function poolClean() {
   });
   let cleaned = 0;
   for (const slot of idleSlots) {
-    const session = sessionMap.get(slot.sessionId);
+    // Re-check status before offloading (slot may have become busy since we read)
+    const currentSessions = await getSessions();
+    const currentSession = currentSessions.find(
+      (s) => s.sessionId === slot.sessionId,
+    );
+    if (!currentSession || currentSession.status !== "idle") {
+      continue;
+    }
     await offloadSession(slot.sessionId, slot.termId, null, {
-      cwd: session?.cwd,
-      gitRoot: session?.gitRoot,
+      cwd: currentSession.cwd,
+      gitRoot: currentSession.gitRoot,
       pid: slot.pid,
     });
-    // Mark as archived so it moves to Archive section instead of staying in Recent
-    const offloadedMeta = readOffloadMeta(slot.sessionId);
-    if (offloadedMeta && !offloadedMeta.archived) {
-      offloadedMeta.archived = true;
-      offloadedMeta.archivedAt = new Date().toISOString();
-      secureWriteFileSync(
-        path.join(OFFLOADED_DIR, slot.sessionId, "meta.json"),
-        JSON.stringify(offloadedMeta, null, 2),
-      );
-    }
+    await archiveSession(slot.sessionId);
     cleaned++;
   }
   return cleaned;
@@ -1752,26 +1785,19 @@ async function poolResume(sessionId) {
     slot.status = "busy";
     writePool(pool);
 
-    // Async: poll for session ID change after /resume triggers SessionStart hook
-    pollForSessionId(slot.pid, 60000, oldSlotSessionId)
-      .then(async (newSessionId) => {
-        await withPoolLock(() => {
-          const p = readPool();
-          if (!p) return;
-          const s = p.slots.find((x) => x.termId === slot.termId);
-          if (s && newSessionId) {
-            s.sessionId = newSessionId;
-            writePool(p);
-          }
-        });
-        if (newSessionId) {
-          removeOffloadData(sessionId);
-        }
-        sessionsCache = null;
-      })
-      .catch((err) =>
-        console.error("[main] Post-resume session poll failed:", err.message),
-      );
+    // Track slot in background (session ID polling after /resume)
+    trackNewSlot(
+      { termId: slot.termId, pid: slot.pid },
+      {
+        excludeId: oldSlotSessionId,
+        expectedStatus: "busy",
+        skipTrustPrompt: true,
+        onResolved: async (newSessionId) => {
+          if (newSessionId) removeOffloadData(sessionId);
+          invalidateSessionsCache();
+        },
+      },
+    );
 
     return {
       type: "resumed",
@@ -1836,6 +1862,7 @@ function focusExternalTerminal(pid) {
       encoding: "utf-8",
     }).trim();
   } catch {
+    /* process may have exited — can't determine TTY */
     return { focused: false };
   }
   if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty))
@@ -1929,6 +1956,7 @@ function isDaemonRunning() {
     process.kill(pid, 0); // signal 0 = check if alive
     return true;
   } catch {
+    /* ENOENT/ESRCH expected — PID file missing or daemon dead */
     return false;
   }
 }
@@ -2160,6 +2188,7 @@ app.whenReady().then(async () => {
     try {
       files = fs.readdirSync(SESSION_PIDS_DIR);
     } catch {
+      /* ENOENT — dir may have been removed */
       return;
     }
     const currentFiles = new Set(files);
@@ -2173,6 +2202,7 @@ app.whenReady().then(async () => {
         process.kill(Number(pid), 0);
         knownAlivePids.add(pid);
       } catch {
+        /* ESRCH expected — process existence check */
         if (knownAlivePids.has(pid)) {
           knownAlivePids.delete(pid);
           anyDied = true;
@@ -2189,6 +2219,7 @@ app.whenReady().then(async () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
     } catch {
+      /* ENOENT expected — colors.json is optional */
       return {};
     }
   });
@@ -2299,6 +2330,7 @@ app.whenReady().then(async () => {
         .filter((f) => !f.startsWith("."))
         .sort();
     } catch {
+      /* ENOENT — setup-scripts dir may not exist */
       return [];
     }
   });
@@ -2307,6 +2339,7 @@ app.whenReady().then(async () => {
     try {
       return fs.readFileSync(filePath, "utf-8");
     } catch {
+      /* ENOENT expected — script may have been deleted */
       return null;
     }
   });
@@ -2802,7 +2835,9 @@ app.on("before-quit", () => {
   // Clean up API socket
   try {
     fs.unlinkSync(API_SOCKET);
-  } catch {}
+  } catch {
+    /* ENOENT expected — socket may not exist */
+  }
 });
 
 app.on("window-all-closed", () => {
