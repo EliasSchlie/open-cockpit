@@ -1258,6 +1258,37 @@ async function getPoolHealth() {
   });
 }
 
+// Clean up idle signal files for PIDs that no longer exist.
+// Prevents unbounded growth and false idle detection from PID reuse.
+function cleanupStaleIdleSignals() {
+  if (!fs.existsSync(IDLE_SIGNALS_DIR)) return;
+  const sessionPids = new Set(
+    fs.existsSync(SESSION_PIDS_DIR) ? fs.readdirSync(SESSION_PIDS_DIR) : [],
+  );
+  for (const filename of fs.readdirSync(IDLE_SIGNALS_DIR)) {
+    const pid = Number(filename);
+    if (isNaN(pid)) continue;
+    let alive = false;
+    try {
+      process.kill(pid, 0);
+      alive = true;
+    } catch {
+      // process doesn't exist
+    }
+    if (!alive || !sessionPids.has(filename)) {
+      try {
+        fs.unlinkSync(path.join(IDLE_SIGNALS_DIR, filename));
+        console.log(
+          `[main] Removed stale idle signal for PID ${pid}` +
+            (!alive ? " (dead)" : " (no session-pids entry)"),
+        );
+      } catch {
+        // ignore removal errors
+      }
+    }
+  }
+}
+
 // Reconcile pool.json with reality on startup.
 // Daemon terminals survive app restarts, so pool slots should still be alive.
 // Update any stale state (dead terminals, changed PIDs, etc.)
@@ -1831,6 +1862,13 @@ app.whenReady().then(async () => {
     console.error("[main] Failed to start daemon:", err.message);
   }
 
+  // Clean up stale idle signal files before reconciling pool
+  try {
+    cleanupStaleIdleSignals();
+  } catch (err) {
+    console.error("[main] Idle signal cleanup failed:", err.message);
+  }
+
   // Reconcile pool state with surviving daemon terminals
   try {
     await reconcilePool();
@@ -2203,10 +2241,14 @@ app.whenReady().then(async () => {
 
       if (msg.sessionId) {
         validateSessionId(msg.sessionId);
-        const { slot } = findSlotBySessionId(msg.sessionId);
-        await waitForSessionIdle(msg.sessionId, timeout);
-        const buffer = await getTerminalBuffer(slot.termId);
-        return { type: "result", sessionId: msg.sessionId, buffer };
+        try {
+          const { slot } = findSlotBySessionId(msg.sessionId);
+          await waitForSessionIdle(msg.sessionId, timeout);
+          const buffer = await getTerminalBuffer(slot.termId);
+          return { type: "result", sessionId: msg.sessionId, buffer };
+        } catch (err) {
+          return { type: "error", error: err.message, id: msg.id };
+        }
       }
 
       // No sessionId: wait for any busy session to become idle

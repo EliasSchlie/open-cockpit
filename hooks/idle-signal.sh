@@ -55,7 +55,21 @@ case "${1:-}" in
         fi
 
         # Escape JSON string values (handle \, ", and control chars)
-        json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'; }
+        json_esc() {
+            printf '%s' "$1" | awk '
+                BEGIN { ORS="" }
+                {
+                    if (NR > 1) printf "\\n"
+                    gsub(/\\/, "\\\\")
+                    gsub(/"/, "\\\"")
+                    gsub(/\t/, "\\t")
+                    gsub(/\r/, "\\r")
+                    gsub(/\x08/, "\\b")
+                    gsub(/\x0c/, "\\f")
+                    printf "%s", $0
+                }
+            '
+        }
 
         # Build the signal JSON (capture now, write later for deferred triggers)
         signal_json=$(printf '{"cwd":"%s","session_id":"%s","transcript":"%s","ts":%d,"trigger":"%s"}\n' \
