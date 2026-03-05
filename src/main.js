@@ -545,38 +545,20 @@ async function offloadSession(
   claudeSessionId,
   { cwd, gitRoot, pid } = {},
 ) {
-  validateSessionId(sessionId);
-  const offloadDir = path.join(OFFLOADED_DIR, sessionId);
-  fs.mkdirSync(offloadDir, { recursive: true });
-
   // Get terminal buffer as snapshot
+  let snapshot = null;
   try {
     const resp = await daemonRequest({ type: "list" });
     const pty = resp.ptys.find((p) => p.termId === termId);
-    if (pty && pty.buffer) {
-      fs.writeFileSync(path.join(offloadDir, "snapshot.log"), pty.buffer);
-    }
+    if (pty && pty.buffer) snapshot = pty.buffer;
   } catch {}
 
-  // Read intention heading
-  const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
-  const intentionHeading = fs.existsSync(intentionFile)
-    ? getIntentionHeading(intentionFile)
-    : null;
-
-  const meta = {
-    sessionId,
-    claudeSessionId: claudeSessionId || null,
-    cwd: cwd || null,
-    gitRoot: gitRoot || null,
-    intentionHeading,
-    lastInteractionTs: Math.floor(Date.now() / 1000),
-    offloadedAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(
-    path.join(offloadDir, "meta.json"),
-    JSON.stringify(meta, null, 2),
-  );
+  const meta = writeOffloadMeta(sessionId, {
+    cwd,
+    gitRoot,
+    claudeSessionId,
+    snapshot,
+  });
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
   await sendCommandToTerminal(termId, "/clear", {
@@ -632,17 +614,51 @@ function validateSessionId(sessionId) {
   }
 }
 
+// Write offload metadata (and optional snapshot) to disk for a session.
+function writeOffloadMeta(
+  sessionId,
+  { cwd, gitRoot, claudeSessionId, snapshot, externalClear } = {},
+) {
+  validateSessionId(sessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, sessionId);
+  fs.mkdirSync(offloadDir, { recursive: true });
+
+  if (snapshot) {
+    fs.writeFileSync(path.join(offloadDir, "snapshot.log"), snapshot);
+  }
+
+  const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+  const intentionHeading = fs.existsSync(intentionFile)
+    ? getIntentionHeading(intentionFile)
+    : null;
+
+  const meta = {
+    sessionId,
+    claudeSessionId: claudeSessionId || null,
+    cwd: cwd || null,
+    gitRoot: gitRoot || null,
+    intentionHeading,
+    lastInteractionTs: Math.floor(Date.now() / 1000),
+    offloadedAt: new Date().toISOString(),
+  };
+  if (externalClear) meta.externalClear = true;
+
+  fs.writeFileSync(
+    path.join(offloadDir, "meta.json"),
+    JSON.stringify(meta, null, 2),
+  );
+
+  return meta;
+}
+
 // Save offload metadata for a session that was cleared externally (e.g. /clear in terminal)
 function saveExternalClearOffload(oldSessionId, pid) {
   validateSessionId(oldSessionId);
   const offloadDir = path.join(OFFLOADED_DIR, oldSessionId);
   if (fs.existsSync(offloadDir)) return; // already offloaded
-  fs.mkdirSync(offloadDir, { recursive: true });
 
   // Gather what metadata we can
-  let cwd = null,
-    gitRoot = null,
-    intentionHeading = null;
+  let cwd = null;
   if (pid) {
     try {
       const lsof = execFileSync(
@@ -654,24 +670,8 @@ function saveExternalClearOffload(oldSessionId, pid) {
       if (m) cwd = m[1];
     } catch {}
   }
-  const intentionFile = path.join(INTENTIONS_DIR, `${oldSessionId}.md`);
-  intentionHeading = fs.existsSync(intentionFile)
-    ? getIntentionHeading(intentionFile)
-    : null;
 
-  const meta = {
-    sessionId: oldSessionId,
-    cwd,
-    gitRoot,
-    intentionHeading,
-    externalClear: true,
-    lastInteractionTs: Math.floor(Date.now() / 1000),
-    offloadedAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(
-    path.join(offloadDir, "meta.json"),
-    JSON.stringify(meta, null, 2),
-  );
+  writeOffloadMeta(oldSessionId, { cwd, externalClear: true });
 }
 
 // Remove offload data for a session (after resume)
