@@ -672,8 +672,13 @@ async function getSessionsUncached() {
     }
   }
 
-  // Add offloaded/archived sessions, skip if live session exists
+  // Prune stale tracker entries for sessions that no longer exist
   const liveIds = new Set(sessions.map((s) => s.sessionId));
+  for (const id of jsonlSizeTracker.keys()) {
+    if (!liveIds.has(id)) jsonlSizeTracker.delete(id);
+  }
+
+  // Add offloaded/archived sessions, skip if live session exists
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       if (!offloaded.origin) offloaded.origin = "pool";
