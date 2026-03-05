@@ -3,11 +3,11 @@
 #
 # Triggered by: SessionStart
 # Input (stdin): JSON with session_id
-# Output: ~/.claude/session-pids/<PID> containing the session ID
+# Output: ~/.open-cockpit/session-pids/<PID> containing the session ID
 
 set -euo pipefail
 
-SESSION_DIR="$HOME/.claude/session-pids"
+SESSION_DIR="$HOME/.open-cockpit/session-pids"
 mkdir -p "$SESSION_DIR"
 
 # Read session_id from JSON stdin (avoid python3 startup overhead)

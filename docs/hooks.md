@@ -4,7 +4,7 @@ The Claude Code plugin (`hooks/`) provides four hook scripts:
 
 ## `SessionStart` → `session-pid-map.sh`
 
-Writes the session ID to `~/.claude/session-pids/<PID>` so the app can discover active sessions and map them to their intention files.
+Writes the session ID to `~/.open-cockpit/session-pids/<PID>` so the app can discover active sessions and map them to their intention files.
 
 Stale PID entries (dead processes) are cleaned up on each session start. Also deduplicates: if another alive PID maps to the same session UUID (e.g. after `/resume`), the older file is removed.
 

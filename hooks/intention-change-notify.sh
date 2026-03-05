@@ -14,7 +14,7 @@ hook_error() {
 trap 'hook_error "unexpected failure at line $LINENO"' ERR
 
 # Resolve session_id via PID mapping (written by session-pid-map.sh)
-SESSION_PIDS_DIR="$HOME/.claude/session-pids"
+SESSION_PIDS_DIR="$HOME/.open-cockpit/session-pids"
 [ -f "$SESSION_PIDS_DIR/$PPID" ] || exit 0
 session_id=$(cat "$SESSION_PIDS_DIR/$PPID")
 [ -n "$session_id" ] || exit 0
