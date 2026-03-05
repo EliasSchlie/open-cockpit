@@ -303,9 +303,9 @@ async function getCwdFromJsonl(sessionId) {
   }
 }
 
-function getIntentionHeading(filePath) {
+async function getIntentionHeading(filePath) {
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
+    const content = await fs.promises.readFile(filePath, "utf-8");
     const match = content.match(/^#\s+(.+)$/m);
     return match ? match[1].trim() : null;
   } catch {
@@ -315,11 +315,11 @@ function getIntentionHeading(filePath) {
 }
 
 // Read idle signal for a PID. Returns {cwd, ts, trigger, session_id, signalMtimeMs} or null.
-function getIdleSignal(pid) {
+async function getIdleSignal(pid) {
   try {
     const signalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
-    const stat = fs.statSync(signalFile);
-    const parsed = JSON.parse(fs.readFileSync(signalFile, "utf-8"));
+    const stat = await fs.promises.stat(signalFile);
+    const parsed = JSON.parse(await fs.promises.readFile(signalFile, "utf-8"));
     parsed.signalMtimeMs = stat.mtimeMs;
     return parsed;
   } catch {
@@ -330,26 +330,29 @@ function getIdleSignal(pid) {
 
 // Check if a session's JSONL transcript contains any human turn.
 // Uses the transcript path from the idle signal to avoid a `find` call.
-function hasUserInput(transcriptPath) {
+async function hasUserInput(transcriptPath) {
   if (!transcriptPath) return false;
   if (userInputCache.get(transcriptPath)) return true;
   try {
     // Read in chunks — check early lines first (human turns appear near the start)
-    const fd = fs.openSync(transcriptPath, "r");
+    const fh = await fs.promises.open(transcriptPath, "r");
     const buf = Buffer.alloc(64 * 1024); // 64KB chunks
-    let bytesRead;
     let offset = 0;
     const needle = '"type":"user"';
     try {
-      while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, offset)) > 0) {
-        if (buf.toString("utf-8", 0, bytesRead).includes(needle)) {
+      let result;
+      while (
+        (result = await fh.read(buf, 0, buf.length, offset)) &&
+        result.bytesRead > 0
+      ) {
+        if (buf.toString("utf-8", 0, result.bytesRead).includes(needle)) {
           userInputCache.set(transcriptPath, true);
           return true;
         }
-        offset += bytesRead;
+        offset += result.bytesRead;
       }
     } finally {
-      fs.closeSync(fd);
+      await fh.close();
     }
     return false;
   } catch {
@@ -359,10 +362,15 @@ function hasUserInput(transcriptPath) {
 }
 
 // Read offloaded session metadata
-function getOffloadedSessions() {
-  if (!fs.existsSync(OFFLOADED_DIR)) return [];
+async function getOffloadedSessions() {
+  let dirs;
+  try {
+    dirs = await fs.promises.readdir(OFFLOADED_DIR);
+  } catch {
+    return [];
+  }
   const sessions = [];
-  for (const dir of fs.readdirSync(OFFLOADED_DIR)) {
+  for (const dir of dirs) {
     try {
       const meta = readOffloadMeta(dir);
       if (!meta) continue;
@@ -415,14 +423,14 @@ function getOffloadedSessions() {
   return sessions;
 }
 
-function findGitRoot(cwd) {
+async function findGitRoot(cwd) {
   if (!cwd) return null;
   if (gitRootCache.has(cwd)) return gitRootCache.get(cwd);
   let dir = cwd;
   while (dir !== path.dirname(dir)) {
     const dotGit = path.join(dir, ".git");
     try {
-      if (fs.statSync(dotGit).isDirectory()) {
+      if ((await fs.promises.stat(dotGit)).isDirectory()) {
         gitRootCache.set(cwd, dir);
         return dir;
       }
@@ -503,14 +511,13 @@ async function getSessionsUncached() {
 
     const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
     const hasIntention = fs.existsSync(intentionFile);
-    const intentionHeading = hasIntention
-      ? getIntentionHeading(intentionFile)
-      : null;
 
-    const gitRoot = findGitRoot(cwd);
-
-    // Determine session status: idle, processing, or fresh
-    const idleSignal = alive ? getIdleSignal(pid) : null;
+    // Run independent I/O in parallel
+    const [intentionHeading, gitRoot, idleSignal] = await Promise.all([
+      hasIntention ? getIntentionHeading(intentionFile) : null,
+      findGitRoot(cwd),
+      alive ? getIdleSignal(pid) : null,
+    ]);
     let status;
     let idleTs = 0;
     let staleIdle = false;
@@ -528,7 +535,7 @@ async function getSessionsUncached() {
         // Transcript was written after the idle signal — a Stop hook re-prompted
         // Claude and it's still processing (no new idle signal yet)
         status = "processing";
-      } else if (!hasUserInput(idleSignal.transcript)) {
+      } else if (!(await hasUserInput(idleSignal.transcript))) {
         status = "fresh";
       } else {
         status = "idle";
@@ -566,7 +573,7 @@ async function getSessionsUncached() {
           );
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
-        status = hasUserInput(jsonlPath) ? "processing" : "fresh";
+        status = (await hasUserInput(jsonlPath)) ? "processing" : "fresh";
       }
     }
 
@@ -636,7 +643,7 @@ async function getSessionsUncached() {
     if (!fs.existsSync(offloadDir)) {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
-      let gitRoot = s.gitRoot || findGitRoot(cwd);
+      let gitRoot = s.gitRoot || (await findGitRoot(cwd));
       const origin = poolSessionIdsForArchive.has(s.sessionId) ? "pool" : "ext";
 
       secureMkdirSync(offloadDir, { recursive: true });
@@ -721,7 +728,7 @@ async function getSessionsUncached() {
   }
 
   // Add offloaded/archived sessions, skip if live session exists
-  for (const offloaded of getOffloadedSessions()) {
+  for (const offloaded of await getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       if (!offloaded.origin) offloaded.origin = "pool";
       sessions.push(offloaded);
@@ -907,7 +914,7 @@ async function offloadSession(
     );
   }
 
-  const meta = writeOffloadMeta(sessionId, {
+  const meta = await writeOffloadMeta(sessionId, {
     cwd,
     gitRoot,
     claudeSessionId,
@@ -974,7 +981,7 @@ function validateSessionId(sessionId) {
 }
 
 // Write offload metadata (and optional snapshot) to disk for a session.
-function writeOffloadMeta(
+async function writeOffloadMeta(
   sessionId,
   { cwd, gitRoot, claudeSessionId, snapshot, externalClear, origin } = {},
 ) {
@@ -988,7 +995,7 @@ function writeOffloadMeta(
 
   const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
   const intentionHeading = fs.existsSync(intentionFile)
-    ? getIntentionHeading(intentionFile)
+    ? await getIntentionHeading(intentionFile)
     : null;
 
   const meta = {
@@ -1012,7 +1019,7 @@ function writeOffloadMeta(
 }
 
 // Save offload metadata for a session that was cleared externally (e.g. /clear in terminal)
-function saveExternalClearOffload(oldSessionId, pid) {
+async function saveExternalClearOffload(oldSessionId, pid) {
   validateSessionId(oldSessionId);
   const offloadDir = path.join(OFFLOADED_DIR, oldSessionId);
   if (fs.existsSync(offloadDir)) return; // already offloaded
@@ -1037,7 +1044,11 @@ function saveExternalClearOffload(oldSessionId, pid) {
     }
   }
 
-  writeOffloadMeta(oldSessionId, { cwd, externalClear: true, origin: "ext" });
+  await writeOffloadMeta(oldSessionId, {
+    cwd,
+    externalClear: true,
+    origin: "ext",
+  });
 }
 
 // Archive a session: mark its offload meta as archived.
@@ -1092,7 +1103,7 @@ async function archiveSession(sessionId) {
     secureMkdirSync(offloadDir, { recursive: true });
     const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
     const intentionHeading = fs.existsSync(intentionFile)
-      ? getIntentionHeading(intentionFile)
+      ? await getIntentionHeading(intentionFile)
       : null;
     secureWriteFileSync(
       path.join(offloadDir, "meta.json"),
@@ -1560,7 +1571,7 @@ async function reconcilePool() {
         const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
         if (sessionId && sessionId !== slot.sessionId) {
           if (slot.sessionId) {
-            saveExternalClearOffload(slot.sessionId, slot.pid);
+            await saveExternalClearOffload(slot.sessionId, slot.pid);
           }
           slot.sessionId = sessionId;
           slot.status = "fresh";
