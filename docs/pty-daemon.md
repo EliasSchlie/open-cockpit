@@ -32,6 +32,7 @@ Unix domain socket at `~/.open-cockpit/pty-daemon.sock`. Newline-delimited JSON.
 | `resize` | `termId, cols, rows` | (none) |
 | `kill` | `termId` | `killed` |
 | `list` | — | `list-result` with `ptys[]` |
+| `read-buffer` | `termId` | `read-buffer-result` with `termId, buffer` |
 | `attach` | `termId` | `attached` + `replay` with buffered output |
 | `detach` | `termId` | (none) |
 | `set-session` | `termId, sessionId` | `session-set` |

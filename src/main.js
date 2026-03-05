@@ -518,18 +518,36 @@ function invalidateSessionsCache() {
   sessionsCacheTs = 0;
 }
 
+// Read the terminal buffer for a single PTY (lightweight alternative to list)
+async function readTerminalBuffer(termId) {
+  try {
+    const resp = await daemonRequest({ type: "read-buffer", termId });
+    return resp.buffer || "";
+  } catch {
+    return "";
+  }
+}
+
+// Wait until the terminal buffer contains the given text (or timeout)
+async function waitForBufferContent(termId, text, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const buffer = await readTerminalBuffer(termId);
+    if (buffer.includes(text)) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
 // Send a command to a terminal: Escape → Ctrl-U → command + Enter
-async function sendCommandToTerminal(
-  termId,
-  command,
-  { escDelay = 200, clearDelay = 100 } = {},
-) {
+// Uses buffer polling to confirm each step rendered before proceeding.
+async function sendCommandToTerminal(termId, command) {
   daemonSend({ type: "write", termId, data: "\x1b" });
-  await new Promise((r) => setTimeout(r, escDelay));
+  await new Promise((r) => setTimeout(r, 200));
   daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
-  await new Promise((r) => setTimeout(r, clearDelay));
+  await new Promise((r) => setTimeout(r, 100));
   daemonSend({ type: "write", termId, data: command });
-  await new Promise((r) => setTimeout(r, 50));
+  await waitForBufferContent(termId, command);
   daemonSend({ type: "write", termId, data: "\r" });
 }
 
@@ -573,10 +591,7 @@ async function offloadSession(
   });
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
-  await sendCommandToTerminal(termId, "/clear", {
-    escDelay: 500,
-    clearDelay: 200,
-  });
+  await sendCommandToTerminal(termId, "/clear");
 
   // 3. Remove idle signal so session re-detects as fresh after /clear
   if (pid) {
