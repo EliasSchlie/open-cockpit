@@ -87,9 +87,17 @@ Just push your changes — CI handles version bumping and marketplace sync. For 
 - Both can run simultaneously
 - Multiple Claude sessions may run dev instances concurrently from different worktrees
 
+## Git hooks
+
+Git hooks live in `.githooks/` (version-controlled). `core.hooksPath` is set automatically via the `prepare` script in `package.json` (runs on `npm install`).
+
+- `pre-commit` — runs prettier
+- `post-checkout` — auto-installs deps + builds renderer for new worktrees
+- `post-merge` — auto-builds renderer after `git pull` (+ `npm install` if `package-lock.json` changed)
+
 ## Worktree setup
 
-A `post-checkout` git hook auto-runs `npm install` + `npm run build` when creating worktrees. No manual setup needed — just `git worktree add` and it's ready.
+Worktrees auto-setup via the `post-checkout` hook — just `git worktree add` and it's ready.
 
 ## Managing dev instances (multi-session safe)
 

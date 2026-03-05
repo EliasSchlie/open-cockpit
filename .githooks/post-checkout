@@ -1,0 +1,21 @@
+#!/bin/bash
+# Auto-setup worktrees: install deps + build renderer
+# Triggered by: git worktree add, git checkout, git switch
+
+# Only run when creating a new worktree or switching branches (not file checkouts)
+# $3 = 1 for branch checkout, 0 for file checkout
+[ "$3" = "1" ] || exit 0
+
+# Detect if we're in a worktree (not the main working tree)
+if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] && \
+   [ "$(git rev-parse --git-common-dir)" != "$(git rev-parse --git-dir)" ]; then
+
+  # Only install if node_modules is missing
+  if [ ! -d "node_modules" ] && [ -f "package.json" ]; then
+    echo "[post-checkout] Worktree detected — running npm install..."
+    npm install --no-fund --no-audit 2>&1 | tail -1
+    echo "[post-checkout] Building renderer..."
+    npm run build 2>&1 | tail -1
+    echo "[post-checkout] Worktree ready."
+  fi
+fi

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Auto-rebuild after git pull/merge on the main working tree.
+# Ensures dist/renderer.js stays in sync with src/ changes.
+
+# Skip in worktrees (they have post-checkout handling)
+if [ "$(git rev-parse --git-common-dir)" != "$(git rev-parse --git-dir)" ]; then
+  exit 0
+fi
+
+# Install deps if package-lock.json changed in this merge
+if git diff-tree -r --name-only ORIG_HEAD HEAD | grep -q '^package-lock.json$'; then
+  echo "[post-merge] package-lock.json changed — running npm install..."
+  npm install --no-fund --no-audit 2>&1 | tail -1
+fi
+
+# Always rebuild renderer
+echo "[post-merge] Building renderer..."
+npm run build 2>&1 | tail -1
+echo "[post-merge] Ready."
