@@ -1577,6 +1577,13 @@ async function poolDestroy() {
     if (!pool) return;
     for (const slot of pool.slots) {
       await killSlotProcess(slot);
+      // Clean up idle-signal and session-pid files so destroyed slots
+      // don't appear as ghost "ext fresh" sessions after pool removal.
+      for (const dir of [IDLE_SIGNALS_DIR, SESSION_PIDS_DIR]) {
+        try {
+          fs.unlinkSync(path.join(dir, String(slot.pid)));
+        } catch {}
+      }
     }
     try {
       fs.unlinkSync(POOL_FILE);
