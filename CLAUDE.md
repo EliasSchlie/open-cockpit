@@ -50,8 +50,15 @@ New sessions will have the latest hooks.
 ## Dev
 
 ```bash
-npm start       # Build + run
 npm run build   # Bundle renderer only (esbuild)
+```
+
+### Opening the production instance
+
+`npm start` launches the production instance. It exits immediately while Electron runs in the background — **running it twice stacks instances**. Always use this kill-before-launch command:
+
+```bash
+cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; nohup npm start > /dev/null 2>&1 &
 ```
 
 ## Releasing
