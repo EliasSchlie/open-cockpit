@@ -1440,54 +1440,66 @@ async function poolResume(sessionId) {
     unarchiveSession(sessionId);
   }
 
-  return withPoolLock(async () => {
+  // Phase 1: Ensure a fresh slot exists.
+  // offloadSession uses its own withPoolLock, so we can't nest it.
+  // Check + offload outside the resume lock, then re-check inside.
+  const needsOffload = await withPoolLock(async () => {
     const pool = readPool();
     if (!pool) throw new Error("Pool not initialized");
-
     const sessions = await getSessions();
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-
-    // Find a fresh slot
-    let slot = pool.slots.find((s) => {
+    const hasFresh = pool.slots.some((s) => {
       if (s.status === "fresh") return true;
       const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
       return session && session.status === "fresh";
     });
+    if (hasFresh) return null;
 
-    // If no fresh slot, offload LRU idle
-    if (!slot) {
-      const idleSlots = pool.slots.filter((s) => {
-        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-        return session && session.status === "idle";
-      });
-      if (idleSlots.length === 0)
-        throw new Error("No fresh or idle slots available");
+    // Find LRU idle victim
+    const idleSlots = pool.slots.filter((s) => {
+      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+      return session && session.status === "idle";
+    });
+    if (idleSlots.length === 0)
+      throw new Error("No fresh or idle slots available");
+    idleSlots.sort((a, b) => {
+      const sa = sessionMap.get(a.sessionId);
+      const sb = sessionMap.get(b.sessionId);
+      return (sa?.idleTs || 0) - (sb?.idleTs || 0);
+    });
+    const victim = idleSlots[0];
+    const vs = sessionMap.get(victim.sessionId);
+    return {
+      sessionId: victim.sessionId,
+      termId: victim.termId,
+      pid: victim.pid,
+      cwd: vs?.cwd,
+      gitRoot: vs?.gitRoot,
+    };
+  });
 
-      idleSlots.sort((a, b) => {
-        const sa = sessionMap.get(a.sessionId);
-        const sb = sessionMap.get(b.sessionId);
-        return (sa?.idleTs || 0) - (sb?.idleTs || 0);
-      });
-      const victim = idleSlots[0];
-      const victimSession = sessionMap.get(victim.sessionId);
-      await offloadSession(victim.sessionId, victim.termId, null, {
-        cwd: victimSession?.cwd,
-        gitRoot: victimSession?.gitRoot,
-        pid: victim.pid,
-      });
+  if (needsOffload) {
+    await offloadSession(needsOffload.sessionId, needsOffload.termId, null, {
+      cwd: needsOffload.cwd,
+      gitRoot: needsOffload.gitRoot,
+      pid: needsOffload.pid,
+    });
+    await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
+  }
 
-      const newSessionId = await pollForSessionId(
-        victim.pid,
-        30000,
-        victim.sessionId,
-      );
-      victim.sessionId = newSessionId;
-      victim.status = newSessionId ? "fresh" : "error";
-      writePool(pool);
-      slot = victim;
-      if (!newSessionId)
-        throw new Error("Slot failed to become fresh after offload");
-    }
+  // Phase 2: Acquire fresh slot and send /resume
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
+    const sessions = await getSessions();
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+
+    const slot = pool.slots.find((s) => {
+      if (s.status === "fresh") return true;
+      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+      return session && session.status === "fresh";
+    });
+    if (!slot) throw new Error("No fresh slots available");
 
     const oldSlotSessionId = slot.sessionId;
 
