@@ -59,12 +59,14 @@ New sessions will have the latest hooks.
 npm run build   # Bundle renderer only (esbuild)
 ```
 
+> ⚠️ All launch commands include `unset ELECTRON_RUN_AS_NODE` — required when launching from an app-managed terminal, where the env var makes Electron run as plain Node.js.
+
 ### Opening the production instance
 
 `npm start` launches the production instance. It exits immediately while Electron runs in the background — **running it twice stacks instances**. Always use this kill-before-launch command:
 
 ```bash
-cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; nohup npm start > /dev/null 2>&1 &
+cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm start > /dev/null 2>&1 &
 ```
 
 ## Releasing
@@ -107,7 +109,7 @@ Multiple Claude sessions may work on different worktrees simultaneously. Electro
 
 **Always use this command to launch** (kills any existing instance first — safe even on first launch):
 ```bash
-DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; nohup npm run dev > /dev/null 2>&1 &
+DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm run dev > /dev/null 2>&1 &
 ```
 
 > ⚠️ `npm run dev` exits immediately while Electron stays running in the background.
