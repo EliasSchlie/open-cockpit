@@ -254,10 +254,11 @@ function getOffloadedSessions() {
         project: meta.cwd ? path.basename(meta.cwd) : null,
         hasIntention: meta.intentionHeading != null,
         intentionHeading: meta.intentionHeading || null,
-        status: "offloaded",
+        status: meta.archived ? "archived" : "offloaded",
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
         hasSnapshot: fs.existsSync(snapshotFile),
+        origin: meta.origin || null,
       });
     } catch {}
   }
@@ -413,17 +414,24 @@ async function getSessionsUncached() {
   sessions.length = 0;
   sessions.push(...dedupedSessions);
 
-  // Archive dead sessions that have intention files (save as offloaded without snapshot)
+  // Archive dead sessions (save as archived without snapshot)
+  const poolForArchive = readPool();
+  const poolSessionIdsForArchive = new Set();
+  if (poolForArchive) {
+    for (const slot of poolForArchive.slots) {
+      if (slot.sessionId) poolSessionIdsForArchive.add(slot.sessionId);
+    }
+  }
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (s.status !== "dead") continue;
-    if (!s.hasIntention) continue;
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || findGitRoot(cwd);
+      const origin = poolSessionIdsForArchive.has(s.sessionId) ? "pool" : "ext";
 
       fs.mkdirSync(offloadDir, { recursive: true });
       const meta = {
@@ -434,6 +442,8 @@ async function getSessionsUncached() {
         intentionHeading: s.intentionHeading,
         lastInteractionTs: Math.floor(Date.now() / 1000),
         archivedAt: new Date().toISOString(),
+        archived: true,
+        origin,
       };
       fs.writeFileSync(
         path.join(offloadDir, "meta.json"),
@@ -467,11 +477,11 @@ async function getSessionsUncached() {
     }
   }
 
-  // Add offloaded sessions (always pool, skip if live session exists)
+  // Add offloaded/archived sessions, skip if live session exists
   const liveIds = new Set(sessions.map((s) => s.sessionId));
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
-      offloaded.origin = "pool";
+      if (!offloaded.origin) offloaded.origin = "pool";
       sessions.push(offloaded);
     }
   }
@@ -672,6 +682,92 @@ function saveExternalClearOffload(oldSessionId, pid) {
   }
 
   writeOffloadMeta(oldSessionId, { cwd, externalClear: true });
+}
+
+// Archive a session: mark its offload meta as archived.
+// For live pool sessions, offload first (snapshot + /clear), then mark archived.
+// For already-offloaded sessions, just flip the archived flag.
+async function archiveSession(sessionId) {
+  validateSessionId(sessionId);
+  const meta = readOffloadMeta(sessionId);
+  if (meta) {
+    // Already offloaded — just mark as archived
+    meta.archived = true;
+    meta.archivedAt = meta.archivedAt || new Date().toISOString();
+    fs.writeFileSync(
+      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+      JSON.stringify(meta, null, 2),
+    );
+    sessionsCache = null;
+    return;
+  }
+
+  // Live session — need to offload first if it's a pool session
+  const pool = readPool();
+  const slot = pool?.slots?.find((s) => s.sessionId === sessionId);
+  if (slot) {
+    // Pool session: offload it first, then mark archived
+    const sessions = await getSessionsUncached();
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    await offloadSession(sessionId, slot.termId, sessionId, {
+      cwd: session?.cwd,
+      gitRoot: session?.gitRoot,
+      pid: session?.pid,
+    });
+    // Wait a beat for offload meta to be written
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  // Mark as archived (may have been just written by offloadSession)
+  const updatedMeta = readOffloadMeta(sessionId);
+  if (updatedMeta) {
+    updatedMeta.archived = true;
+    updatedMeta.archivedAt = updatedMeta.archivedAt || new Date().toISOString();
+    fs.writeFileSync(
+      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+      JSON.stringify(updatedMeta, null, 2),
+    );
+  } else {
+    // No offload data yet — create archive-only meta
+    const offloadDir = path.join(OFFLOADED_DIR, sessionId);
+    fs.mkdirSync(offloadDir, { recursive: true });
+    const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+    const intentionHeading = fs.existsSync(intentionFile)
+      ? getIntentionHeading(intentionFile)
+      : null;
+    fs.writeFileSync(
+      path.join(offloadDir, "meta.json"),
+      JSON.stringify(
+        {
+          sessionId,
+          claudeSessionId: sessionId,
+          cwd: null,
+          gitRoot: null,
+          intentionHeading,
+          lastInteractionTs: Math.floor(Date.now() / 1000),
+          archivedAt: new Date().toISOString(),
+          archived: true,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  sessionsCache = null;
+}
+
+// Unarchive a session: remove the archived flag from its meta.
+function unarchiveSession(sessionId) {
+  validateSessionId(sessionId);
+  const meta = readOffloadMeta(sessionId);
+  if (!meta) return;
+  delete meta.archived;
+  delete meta.archivedAt;
+  fs.writeFileSync(
+    path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+    JSON.stringify(meta, null, 2),
+  );
+  sessionsCache = null;
 }
 
 // Remove offload data for a session (after resume)
@@ -1477,6 +1573,12 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle("read-offload-meta", (_e, sessionId) =>
     readOffloadMeta(sessionId),
+  );
+  ipcMain.handle("archive-session", (_e, sessionId) =>
+    archiveSession(sessionId),
+  );
+  ipcMain.handle("unarchive-session", (_e, sessionId) =>
+    unarchiveSession(sessionId),
   );
 
   // Pool management

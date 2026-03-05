@@ -761,6 +761,7 @@ const STATUS_CLASSES = {
   fresh: "fresh",
   dead: "dead",
   offloaded: "offloaded",
+  archived: "archived",
 };
 
 // Build a fingerprint for a session to detect changes
@@ -770,6 +771,7 @@ function sessionFingerprint(s) {
 
 // Track previous session fingerprints for diff-based updates
 let prevSessionFingerprints = null;
+let archiveExpanded = false;
 
 async function loadSessions() {
   const sessions = await window.api.getSessions();
@@ -781,9 +783,10 @@ async function loadSessions() {
     (s) => s.status === "idle" || s.status === "offloaded",
   );
   const processing = sessions.filter((s) => s.status === "processing");
+  const archived = sessions.filter((s) => s.status === "archived");
 
   // Build fingerprint to check if anything changed
-  const allItems = [...recent, ...processing];
+  const allItems = [...recent, ...processing, ...archived];
   const fingerprints = allItems.map(sessionFingerprint).join("\n");
   if (fingerprints === prevSessionFingerprints) {
     // Only update active class (selected session may have changed)
@@ -797,7 +800,7 @@ async function loadSessions() {
   // Full rebuild only when sessions actually changed
   sessionList.innerHTML = "";
 
-  if (recent.length === 0 && processing.length === 0) {
+  if (recent.length === 0 && processing.length === 0 && archived.length === 0) {
     sessionList.innerHTML =
       '<li style="padding: 12px; color: var(--text-dim); font-size: 13px;">No sessions found</li>';
     return;
@@ -816,11 +819,41 @@ async function loadSessions() {
 
   addSection("Recent", recent);
   addSection("Processing", processing);
+
+  // Archive section: collapsible, shows first 5 by default
+  if (archived.length > 0) {
+    const ARCHIVE_VISIBLE = 5;
+    const header = document.createElement("li");
+    header.className = "session-section-header session-section-collapsible";
+    const collapsed = archived.length > ARCHIVE_VISIBLE && !archiveExpanded;
+    header.innerHTML = `<span class="section-toggle">${archiveExpanded ? "▾" : "▸"}</span> Archive (${archived.length})`;
+    if (archived.length > ARCHIVE_VISIBLE) {
+      header.addEventListener("click", () => {
+        archiveExpanded = !archiveExpanded;
+        loadSessions();
+      });
+    }
+    sessionList.appendChild(header);
+    const visible = collapsed ? archived.slice(0, ARCHIVE_VISIBLE) : archived;
+    for (const s of visible) {
+      sessionList.appendChild(createSessionItem(s));
+    }
+    if (collapsed) {
+      const more = document.createElement("li");
+      more.className = "session-section-more";
+      more.textContent = `+${archived.length - ARCHIVE_VISIBLE} more`;
+      more.addEventListener("click", () => {
+        archiveExpanded = true;
+        loadSessions();
+      });
+      sessionList.appendChild(more);
+    }
+  }
 }
 
 function createSessionItem(s) {
   const li = document.createElement("li");
-  li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === "offloaded" ? " offloaded" : ""}`;
+  li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === "offloaded" || s.status === "archived" ? " offloaded" : ""}`;
   li.dataset.sessionId = s.sessionId;
   const heading = s.intentionHeading || "No intention yet";
   const dp = displayPath(s);
@@ -843,34 +876,94 @@ function createSessionItem(s) {
     </div>
   `;
   li.addEventListener("click", () => handleSessionClick(s));
+  li.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showSessionContextMenu(e, s);
+  });
   return li;
 }
 
-// Handle click differently for offloaded vs loaded sessions
+// Right-click context menu for sessions
+function showSessionContextMenu(e, session) {
+  const existing = document.getElementById("session-context-menu");
+  if (existing) existing.remove();
+
+  const menu = document.createElement("div");
+  menu.id = "session-context-menu";
+  menu.className = "session-context-menu";
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+
+  const isArchived = session.status === "archived";
+  const isOffloaded = session.status === "offloaded";
+
+  if (isArchived) {
+    menu.innerHTML = `
+      <div class="session-context-item" data-action="restart">Restart</div>
+      <div class="session-context-item" data-action="unarchive">Move to Recent</div>
+    `;
+  } else if (isOffloaded) {
+    menu.innerHTML = `
+      <div class="session-context-item" data-action="resume">Resume</div>
+      <div class="session-context-item" data-action="archive">Archive</div>
+    `;
+  } else {
+    menu.innerHTML = `
+      <div class="session-context-item" data-action="archive">Archive</div>
+    `;
+  }
+
+  document.body.appendChild(menu);
+
+  const close = () => menu.remove();
+  setTimeout(() => document.addEventListener("click", close, { once: true }));
+
+  menu.addEventListener("click", async (ev) => {
+    const action = ev.target.dataset.action;
+    menu.remove();
+    if (action === "archive") {
+      await window.api.archiveSession(session.sessionId);
+      await loadSessions();
+    } else if (action === "unarchive") {
+      await window.api.unarchiveSession(session.sessionId);
+      await loadSessions();
+    } else if (action === "restart") {
+      await window.api.unarchiveSession(session.sessionId);
+      await resumeOffloadedSession(session);
+    } else if (action === "resume") {
+      await resumeOffloadedSession(session);
+    }
+  });
+}
+
+// Handle click differently for offloaded/archived vs loaded sessions
 async function handleSessionClick(session) {
-  if (session.status === "offloaded") {
-    showOffloadMenu(session);
+  if (session.status === "archived" || session.status === "offloaded") {
+    showSessionResumeMenu(session);
   } else {
     selectSession(session);
   }
 }
 
-// Show menu for offloaded session: Load | View Snapshot | Cancel
-async function showOffloadMenu(session) {
-  // Remove any existing menu
+// Show resume/restart menu for offloaded or archived sessions
+async function showSessionResumeMenu(session) {
   const existing = document.getElementById("offload-menu");
   if (existing) existing.remove();
+
+  const isArchived = session.status === "archived";
+  const loadLabel = isArchived ? "Restart Session" : "Load Session";
+  const fallbackTitle = isArchived ? "Archived Session" : "Offloaded Session";
 
   const menu = document.createElement("div");
   menu.id = "offload-menu";
   menu.className = "offload-menu-overlay";
   menu.innerHTML = `
     <div class="offload-menu-dialog">
-      <div class="offload-menu-title">${escapeHtml(session.intentionHeading || "Offloaded Session")}</div>
+      <div class="offload-menu-title">${escapeHtml(session.intentionHeading || fallbackTitle)}</div>
       <div class="offload-menu-subtitle">${escapeHtml(displayPath(session))}</div>
       <div class="offload-menu-actions">
-        <button class="offload-menu-btn offload-menu-load">Load Session</button>
-        ${session.hasSnapshot !== false ? '<button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>' : ""}
+        <button class="offload-menu-btn offload-menu-load">${loadLabel}</button>
+        ${session.hasSnapshot ? '<button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>' : ""}
         <button class="offload-menu-btn offload-menu-cancel">Cancel</button>
       </div>
     </div>
@@ -878,7 +971,6 @@ async function showOffloadMenu(session) {
 
   document.body.appendChild(menu);
 
-  // Close on overlay click
   menu.addEventListener("click", (e) => {
     if (e.target === menu) menu.remove();
   });
@@ -900,6 +992,7 @@ async function showOffloadMenu(session) {
     .querySelector(".offload-menu-load")
     .addEventListener("click", async () => {
       menu.remove();
+      if (isArchived) await window.api.unarchiveSession(session.sessionId);
       await resumeOffloadedSession(session);
     });
 }

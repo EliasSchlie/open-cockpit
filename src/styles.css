@@ -172,7 +172,14 @@ body {
   height: 5px;
 }
 
-/* Offloaded sessions are dimmed */
+.session-status.archived {
+  background: var(--text-dim);
+  border: 1px solid var(--text-dim);
+  width: 5px;
+  height: 5px;
+}
+
+/* Offloaded/archived sessions are dimmed */
 .session-item.offloaded {
   opacity: 0.65;
 }
@@ -197,6 +204,30 @@ body {
   letter-spacing: 0.05em;
   color: var(--text-dim);
   cursor: default;
+}
+
+.session-section-collapsible {
+  cursor: pointer;
+}
+
+.session-section-collapsible:hover {
+  color: var(--text);
+}
+
+.section-toggle {
+  font-size: 10px;
+  margin-right: 2px;
+}
+
+.session-section-more {
+  padding: 4px 12px 4px 24px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.session-section-more:hover {
+  color: var(--text);
 }
 
 .session-origin-tag {
@@ -804,4 +835,27 @@ body {
 
 .slot-terminal-mount .xterm {
   height: 100%;
+}
+
+/* Session context menu (right-click) */
+.session-context-menu {
+  position: fixed;
+  z-index: 10000;
+  background: #1a1a1a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 140px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+
+.session-context-item {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.session-context-item:hover {
+  background: var(--accent-dim);
 }

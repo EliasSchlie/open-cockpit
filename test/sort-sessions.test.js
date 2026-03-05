@@ -28,7 +28,7 @@ describe("sortSessions", () => {
     ]);
   });
 
-  it("groups: recent → processing → fresh → dead (pool+external mixed)", () => {
+  it("groups: recent → processing → fresh → dead → archived (pool+external mixed)", () => {
     const sessions = [
       { pid: "1", status: "dead", idleTs: 0, isPool: false },
       { pid: "2", status: "fresh", idleTs: 0, isPool: true },
@@ -36,6 +36,8 @@ describe("sortSessions", () => {
       { pid: "4", status: "idle", idleTs: 1000, isPool: true },
       { pid: "5", status: "offloaded", idleTs: 500, isPool: true },
       { pid: "6", status: "idle", idleTs: 800, isPool: false },
+      { pid: "7", status: "archived", idleTs: 200, isPool: true },
+      { pid: "8", status: "archived", idleTs: 600, isPool: false },
     ];
     const result = sortSessions(sessions);
     expect(result.map((s) => s.pid)).toEqual([
@@ -45,6 +47,8 @@ describe("sortSessions", () => {
       "3", // processing
       "2", // fresh
       "1", // dead
+      "8", // archived (ts=600)
+      "7", // archived (ts=200)
     ]);
   });
 

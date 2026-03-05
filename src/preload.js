@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("read-offload-snapshot", sessionId),
   readOffloadMeta: (sessionId) =>
     ipcRenderer.invoke("read-offload-meta", sessionId),
+  archiveSession: (sessionId) =>
+    ipcRenderer.invoke("archive-session", sessionId),
+  unarchiveSession: (sessionId) =>
+    ipcRenderer.invoke("unarchive-session", sessionId),
 
   // Pool management
   poolInit: (size) => ipcRenderer.invoke("pool-init", size),

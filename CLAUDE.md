@@ -25,7 +25,7 @@ The app can manage a pool of pre-started Claude sessions. Pool state lives in `~
 - **Init**: via UI or API (`pool-init` with size). Spawns Claude sessions via the PTY daemon using `resolveClaudePath()` (finds `claude` binary via `which` + fallback paths). Trust prompt is accepted via buffer polling (not hardcoded delay).
 - **Dead slots**: `reconcilePool()` auto-restarts dead slots on app startup. Orphaned processes are killed by PID as fallback when daemon termIds are stale.
 - **Offloading**: Idle sessions get offloaded (snapshot + `/clear`). External `/clear` is also detected and saved as offloaded.
-- **Archiving**: Dead sessions with intention files are auto-archived (meta.json without snapshot) and resumable.
+- **Archiving**: All dead sessions are auto-archived (`archived: true` in meta.json). Any session can be manually archived via right-click. Pool sessions auto-offload before archiving.
 - **Destroy**: `pool-destroy` kills all slots and removes `pool.json`. Uses `killSlotProcess()` (daemon + PID fallback) to prevent orphans.
 - **Write locking**: All pool.json read-modify-write cycles use `withPoolLock()` to prevent concurrent write races.
 - **Settings UI**: Auto-refreshes every 3s. Clicking a slot row opens an interactive terminal popup attached to the live PTY.
@@ -159,8 +159,10 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 ```
 fresh → processing → idle → offloaded (graceful /clear, snapshot saved)
+                       ↓         ↓
+                     dead    archived (manual or auto)
                        ↓
-                     dead → archived (process died, no snapshot)
+                   archived (auto on death)
 ```
 
 - **fresh** — pool slot with Claude ready, no user interaction yet
@@ -168,9 +170,16 @@ fresh → processing → idle → offloaded (graceful /clear, snapshot saved)
 - **idle** — Claude finished, waiting for user input
 - **offloaded** — session `/clear`'d, conversation saved (meta.json + snapshot.log), slot reused
 - **dead** — Claude process exited unexpectedly
-- **archived** — dead session with intention file on disk, resumable via `/resume <uuid>`
+- **archived** — stored session (meta.json `archived: true`), shown in Archive section, resumable
 
-Both offloaded and archived sessions can be resumed by clicking them in the sidebar (auto-runs `/resume` in a pool slot).
+### Archiving
+
+- **Auto-archive**: All dead sessions (including external) are auto-archived. Previously only dead sessions with intentions were archived.
+- **Manual archive**: Right-click any session → "Archive". Pool sessions are auto-offloaded (snapshot + `/clear`) before archiving.
+- **Sidebar**: Archive section appears below Processing. Archived sessions are dimmed.
+- **Resume**: Click an archived session → "Restart Session" dialog → acquires a fresh pool slot, runs `/resume <uuid>`, moves back to Recent.
+- **Unarchive**: Right-click archived session → "Move to Recent" moves it back to offloaded (no restart).
+- **Data**: `archived: true` flag in `~/.open-cockpit/offloaded/<id>/meta.json`.
 
 ## Conventions
 
