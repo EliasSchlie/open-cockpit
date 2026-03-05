@@ -185,4 +185,132 @@ describe("createApiServer", () => {
     // Check owner-only permissions (0600 = rw-------)
     expect(stats.mode & 0o777).toBe(0o600);
   });
+
+  it("destroys socket when buffer exceeds 1MB limit", async () => {
+    server = createApiServer(SOCKET_PATH, {});
+    await new Promise((r) => server.on("listening", r));
+
+    const result = await new Promise((resolve, reject) => {
+      const sock = net.createConnection(SOCKET_PATH);
+      let buf = "";
+      let gotError = false;
+      sock.on("connect", () => {
+        // Send >1MB without a newline to trigger buffer overflow
+        const chunk = "x".repeat(64 * 1024);
+        for (let i = 0; i < 17; i++) {
+          if (sock.writable) sock.write(chunk);
+        }
+      });
+      sock.on("data", (chunk) => {
+        buf += chunk.toString();
+        const idx = buf.indexOf("\n");
+        if (idx !== -1) {
+          gotError = true;
+          const resp = JSON.parse(buf.slice(0, idx));
+          resolve({ resp, destroyed: sock.destroyed });
+        }
+      });
+      sock.on("close", () => {
+        if (!gotError) resolve({ resp: null, destroyed: true });
+      });
+      sock.on("error", () => {
+        // Connection reset is expected after server destroys socket
+        resolve({ resp: null, destroyed: true });
+      });
+      setTimeout(() => {
+        sock.destroy();
+        reject(new Error("timeout"));
+      }, 5000);
+    });
+
+    // Server should send error and destroy the connection
+    if (result.resp) {
+      expect(result.resp.type).toBe("error");
+      expect(result.resp.error).toMatch(/Buffer size limit/);
+    }
+    expect(result.destroyed).toBe(true);
+  });
+
+  it("handles concurrent connections from multiple clients", async () => {
+    let callCount = 0;
+    server = createApiServer(SOCKET_PATH, {
+      ping: async () => {
+        callCount++;
+        return { type: "pong" };
+      },
+    });
+    await new Promise((r) => server.on("listening", r));
+
+    // Send messages from 5 concurrent clients
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        sendMessage(SOCKET_PATH, { type: "ping", id: i }),
+      ),
+    );
+
+    expect(results).toHaveLength(5);
+    results.forEach((resp, i) => {
+      expect(resp.type).toBe("pong");
+      expect(resp.id).toBe(i);
+    });
+    expect(callCount).toBe(5);
+  });
+
+  it("skips empty lines between messages", async () => {
+    server = createApiServer(SOCKET_PATH, {
+      ping: async () => ({ type: "pong" }),
+    });
+    await new Promise((r) => server.on("listening", r));
+
+    const resp = await new Promise((resolve, reject) => {
+      const sock = net.createConnection(SOCKET_PATH);
+      let buf = "";
+      sock.on("connect", () => {
+        // Send empty lines before and between the real message
+        sock.write("\n\n" + JSON.stringify({ type: "ping", id: 99 }) + "\n");
+      });
+      sock.on("data", (chunk) => {
+        buf += chunk.toString();
+        const idx = buf.indexOf("\n");
+        if (idx !== -1) {
+          sock.destroy();
+          resolve(JSON.parse(buf.slice(0, idx)));
+        }
+      });
+      sock.on("error", reject);
+      setTimeout(() => {
+        sock.destroy();
+        reject(new Error("timeout"));
+      }, 5000);
+    });
+
+    expect(resp).toEqual({ type: "pong", id: 99 });
+  });
+
+  it("does not write to destroyed sockets", async () => {
+    server = createApiServer(SOCKET_PATH, {
+      slow: async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return { type: "done" };
+      },
+    });
+    await new Promise((r) => server.on("listening", r));
+
+    // Connect, send message, then immediately disconnect
+    await new Promise((resolve) => {
+      const sock = net.createConnection(SOCKET_PATH);
+      sock.on("connect", () => {
+        sock.write(JSON.stringify({ type: "slow", id: 1 }) + "\n");
+        // Disconnect before handler completes
+        sock.destroy();
+        // Give the handler time to try writing back
+        setTimeout(resolve, 200);
+      });
+      sock.on("error", () => {});
+    });
+
+    // Server should still be alive and accept new connections
+    const resp = await sendMessage(SOCKET_PATH, { type: "slow", id: 2 });
+    expect(resp).toEqual({ type: "done", id: 2 });
+  });
 });

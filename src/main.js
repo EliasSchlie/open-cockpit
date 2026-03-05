@@ -124,7 +124,11 @@ async function batchDetectOrigins(pids) {
         originCache.set(pid, origin);
         results.set(pid, origin);
       }
-    } catch {
+    } catch (err) {
+      console.error(
+        "[main] Failed to detect session origins via ps:",
+        err.message,
+      );
       for (const pid of uncached) {
         originCache.set(pid, "ext");
         results.set(pid, "ext");
@@ -205,7 +209,12 @@ async function findJsonlPath(sessionId) {
     const jsonlPath = findOut.split("\n")[0].trim();
     if (jsonlPath) jsonlPathCache.set(sessionId, jsonlPath);
     return jsonlPath || null;
-  } catch {
+  } catch (err) {
+    console.error(
+      "[main] Failed to find JSONL path for session",
+      sessionId,
+      err.message,
+    );
     return null;
   }
 }
@@ -368,7 +377,9 @@ async function batchGetCwds(pids) {
         cwdMap.set(currentPid, line.slice(1));
       }
     }
-  } catch {}
+  } catch (err) {
+    console.error("[main] lsof failed to resolve session cwds:", err.message);
+  }
   return cwdMap;
 }
 
@@ -757,7 +768,13 @@ async function offloadSession(
     const resp = await daemonRequest({ type: "list" });
     const pty = resp.ptys.find((p) => p.termId === termId);
     if (pty && pty.buffer) snapshot = pty.buffer;
-  } catch {}
+  } catch (err) {
+    console.error(
+      "[main] Failed to get terminal snapshot for offload of session",
+      sessionId,
+      err.message,
+    );
+  }
 
   const meta = writeOffloadMeta(sessionId, {
     cwd,
@@ -883,7 +900,13 @@ function saveExternalClearOffload(oldSessionId, pid) {
       );
       const m = lsof.match(/^n(.+)$/m);
       if (m) cwd = m[1];
-    } catch {}
+    } catch (err) {
+      console.error(
+        "[main] lsof failed to resolve cwd for PID",
+        pid,
+        err.message,
+      );
+    }
   }
 
   writeOffloadMeta(oldSessionId, { cwd, externalClear: true });
@@ -1066,7 +1089,7 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
     if (bufferHasTrustPrompt(buffer)) {
       // Trust prompt detected — send Enter and verify it was accepted
       for (let _attempt = 0; _attempt < MAX_RETRIES; _attempt++) {
-        daemonSend({ type: "write", termId, data: "\r" });
+        daemonSendSafe({ type: "write", termId, data: "\r" });
         // Verify the prompt disappeared
         const verifyStart = Date.now();
         while (Date.now() - verifyStart < VERIFY_TIMEOUT) {
@@ -1094,7 +1117,7 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
     elapsed += POLL_INTERVAL;
   }
   // Fallback: send Enter in case prompt appeared but wasn't pattern-matched
-  daemonSend({ type: "write", termId, data: "\r" });
+  daemonSendSafe({ type: "write", termId, data: "\r" });
   return false;
 }
 
@@ -1163,7 +1186,7 @@ async function poolInit(size) {
     );
 
     // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       pool.slots.map(async (slot) => {
         const sessionId = await pollForSessionId(slot.pid, 60000);
         slot.sessionId = sessionId;
@@ -1172,6 +1195,14 @@ async function poolInit(size) {
         if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
       }),
     );
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        console.error(
+          `Pool slot ${i} failed to initialize:`,
+          result.reason?.message || result.reason,
+        );
+      }
+    });
 
     writePool(pool);
     return pool;
@@ -1234,9 +1265,22 @@ async function poolResize(newSize) {
               }
             });
           })
-          .catch((err) =>
-            console.error("[main] Resize session poll failed:", err.message),
-          );
+          .catch(async (err) => {
+            console.error(
+              "[main] Resize session poll failed for slot %s: %s",
+              slot.termId,
+              err.message,
+            );
+            await withPoolLock(() => {
+              const current = readPool();
+              if (!current) return;
+              const s = current.slots.find((x) => x.termId === slot.termId);
+              if (s && s.status === "starting") {
+                s.status = "error";
+                writePool(current);
+              }
+            });
+          });
       }
     } else {
       // Shrink: kill excess slots (prefer fresh, then LRU idle)
@@ -1414,8 +1458,15 @@ async function syncPoolStatuses(sessions) {
 async function killSlotProcess(slot) {
   try {
     await daemonRequest({ type: "kill", termId: slot.termId });
-  } catch {
+  } catch (err) {
     // Daemon kill failed (stale termId or daemon down) — kill by PID directly
+    console.error(
+      "[main] Daemon kill failed for slot",
+      slot.index,
+      "termId",
+      slot.termId,
+      err.message,
+    );
     if (slot.pid) {
       try {
         process.kill(slot.pid, "SIGTERM");
@@ -1642,7 +1693,13 @@ function watchIntention(sessionId) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("intention-changed", content);
       }
-    } catch {}
+    } catch (err) {
+      console.error(
+        "[main] Failed to read intention file on change",
+        file,
+        err.message,
+      );
+    }
   });
 
   fileWatchers.set("current", file);
@@ -1699,7 +1756,12 @@ end tell`,
       { encoding: "utf-8", timeout: EXEC_TIMEOUT },
     ).trim();
     if (result === "focused") return { focused: true, app: "iTerm" };
-  } catch {}
+  } catch (err) {
+    console.error(
+      "[main] iTerm focus check via osascript failed:",
+      err.message,
+    );
+  }
 
   // Try Cursor / VS Code: walk process tree to find terminal app ancestor
   const TERMINAL_APPS = [
@@ -1733,7 +1795,13 @@ end tell`,
       }
       checkPid = ppid;
     }
-  } catch {}
+  } catch (err) {
+    console.error(
+      "[main] Terminal focus process tree walk failed for PID",
+      pid,
+      err.message,
+    );
+  }
 
   return { focused: false };
 }
@@ -1839,6 +1907,20 @@ function daemonSend(msg) {
     throw new Error("Daemon socket is not connected");
   }
   daemonSocket.write(JSON.stringify(msg) + "\n");
+}
+
+// Safe wrapper for fire-and-forget daemonSend calls that should not crash
+// the app if the daemon socket is disconnected.
+async function daemonSendSafe(msg) {
+  try {
+    return await daemonSend(msg);
+  } catch (err) {
+    console.error(
+      "daemonSend failed (daemon may be disconnected):",
+      err.message,
+    );
+    return null;
+  }
 }
 
 async function daemonRequest(msg) {
@@ -1969,12 +2051,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("pty-write", async (_e, termId, data) => {
     await ensureDaemon();
-    daemonSend({ type: "write", termId, data });
+    daemonSendSafe({ type: "write", termId, data });
   });
 
   ipcMain.handle("pty-resize", async (_e, termId, cols, rows) => {
     await ensureDaemon();
-    daemonSend({ type: "resize", termId, cols, rows });
+    daemonSendSafe({ type: "resize", termId, cols, rows });
   });
 
   ipcMain.handle("pty-kill", async (_e, termId) => {
@@ -1993,7 +2075,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("pty-detach", async (_e, termId) => {
     await ensureDaemon();
-    daemonSend({ type: "detach", termId });
+    daemonSendSafe({ type: "detach", termId });
   });
 
   ipcMain.handle("pty-set-session", async (_e, termId, sessionId) => {
@@ -2183,7 +2265,7 @@ app.whenReady().then(async () => {
     },
     "pty-write": async (msg) => {
       validateTermId(msg.termId);
-      daemonSend({ type: "write", termId: msg.termId, data: msg.data });
+      daemonSendSafe({ type: "write", termId: msg.termId, data: msg.data });
       return { type: "ok" };
     },
     "pty-spawn": async (msg) => {
@@ -2327,7 +2409,7 @@ app.whenReady().then(async () => {
     "pool-input": async (msg) => {
       if (msg.data === undefined) throw new Error("data required");
       const { slot } = resolveSlot(msg);
-      daemonSend({ type: "write", termId: slot.termId, data: msg.data });
+      daemonSendSafe({ type: "write", termId: slot.termId, data: msg.data });
       return { type: "ok" };
     },
 
@@ -2352,7 +2434,7 @@ app.whenReady().then(async () => {
     "slot-write": async (msg) => {
       if (msg.data === undefined) throw new Error("data required");
       const { slot } = findSlotByIndex(msg.slotIndex);
-      daemonSend({ type: "write", termId: slot.termId, data: msg.data });
+      daemonSendSafe({ type: "write", termId: slot.termId, data: msg.data });
       return { type: "ok" };
     },
 

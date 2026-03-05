@@ -105,8 +105,10 @@ case "${1:-}" in
                     fi
                 done
 
-                # Session is truly idle — write signal
-                printf '%s\n' "$signal_json" > "$signal_file"
+                # Session is truly idle — write signal (re-check pending to close TOCTOU race)
+                if [ "$(cat "$pending" 2>/dev/null)" = "$$" ]; then
+                    printf '%s\n' "$signal_json" > "$signal_file"
+                fi
             ) &
             disown
         else

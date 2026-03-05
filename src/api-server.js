@@ -28,7 +28,12 @@ function createApiServer(socketPath, handlers) {
         }
       }
     });
-    socket.on("error", () => {});
+    socket.on("error", (err) => {
+      if (err.code !== "ECONNRESET" && err.code !== "EPIPE") {
+        const addr = socket.remoteAddress || "unix";
+        console.error(`API socket error [${addr}]:`, err.message);
+      }
+    });
   });
 
   async function handleMessage(socket, msg) {
