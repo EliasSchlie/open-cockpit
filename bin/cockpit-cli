@@ -3,6 +3,14 @@ set -euo pipefail
 
 SOCKET="$HOME/.open-cockpit/api.sock"
 
+# Validate that a slot index is a non-negative integer
+validate_slot() {
+  if ! [[ "$1" =~ ^[0-9]+$ ]]; then
+    echo "Error: slot index must be a non-negative integer, got '$1'" >&2
+    exit 1
+  fi
+}
+
 # Send JSON to API socket. Args: <json> [timeout_seconds]
 send_api() {
   local json="$1"
@@ -16,7 +24,7 @@ send_api() {
       let buf = '';
       const sock = net.createConnection(process.argv[1]);
       sock.on('connect', () => { sock.write(process.argv[2] + '\n'); });
-      sock.on('data', (d) => { buf += d; const i = buf.indexOf('\n'); if (i !== -1) { process.stdout.write(buf.slice(0, i + 1)); sock.destroy(); } });
+      sock.on('data', (d) => { buf += d; const i = buf.indexOf('\n'); if (i !== -1) { process.stdout.write(buf.slice(0, i + 1)); sock.destroy(); process.exit(0); } });
       sock.on('end', () => { if (buf) process.stdout.write(buf); process.exit(0); });
       sock.on('error', (e) => { console.error(e.message); process.exit(1); });
       setTimeout(() => { console.error('timeout'); process.exit(1); }, ${timeout}000);
@@ -124,26 +132,46 @@ case "$CMD" in
     ;;
 
   capture)
-    SESSION_ID="${1:?sessionId required}"
-    json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    SESSION_ID="${1:?sessionId or --slot required}"
+    if [[ "$SESSION_ID" == "--slot" ]]; then
+      SLOT="${2:?slot index required}"
+      validate_slot "$SLOT"
+      json="{\"type\":\"pool-capture\",\"id\":1,\"slotIndex\":$SLOT}"
+    else
+      json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     json_field "$RESULT" "buffer"
     ;;
 
   result)
-    SESSION_ID="${1:?sessionId required}"
-    json="{\"type\":\"pool-result\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    SESSION_ID="${1:?sessionId or --slot required}"
+    if [[ "$SESSION_ID" == "--slot" ]]; then
+      SLOT="${2:?slot index required}"
+      validate_slot "$SLOT"
+      json="{\"type\":\"pool-result\",\"id\":1,\"slotIndex\":$SLOT}"
+    else
+      json="{\"type\":\"pool-result\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     json_field "$RESULT" "buffer"
     ;;
 
   input)
-    SESSION_ID="${1:?sessionId required}"
-    TEXT="${2:?text required}"
-    DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
-    json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"data\":$DATA_JSON}"
+    SESSION_ID="${1:?sessionId or --slot required}"
+    if [[ "$SESSION_ID" == "--slot" ]]; then
+      SLOT="${2:?slot index required}"
+      validate_slot "$SLOT"
+      TEXT="${3:?text required}"
+      DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+      json="{\"type\":\"pool-input\",\"id\":1,\"slotIndex\":$SLOT,\"data\":$DATA_JSON}"
+    else
+      TEXT="${2:?text required}"
+      DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+      json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"data\":$DATA_JSON}"
+    fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     ;;
@@ -188,6 +216,43 @@ case "$CMD" in
     esac
     ;;
 
+  # --- Slot subcommand (direct slot access by index) ---
+
+  slot)
+    SUBCMD="${1:?subcommand required (read|write|status)}"
+    shift
+    case "$SUBCMD" in
+      read)
+        SLOT="${1:?slot index required}"
+        validate_slot "$SLOT"
+        json="{\"type\":\"slot-read\",\"id\":1,\"slotIndex\":$SLOT}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        json_field "$RESULT" "buffer"
+        ;;
+      write)
+        SLOT="${1:?slot index required}"
+        validate_slot "$SLOT"
+        TEXT="${2:?data required}"
+        DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+        json="{\"type\":\"slot-write\",\"id\":1,\"slotIndex\":$SLOT,\"data\":$DATA_JSON}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        ;;
+      status)
+        SLOT="${1:?slot index required}"
+        validate_slot "$SLOT"
+        json="{\"type\":\"slot-status\",\"id\":1,\"slotIndex\":$SLOT}"
+        send_api "$json"
+        ;;
+      *)
+        echo "Unknown slot subcommand: $SUBCMD" >&2
+        echo "Available: read, write, status" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
   # --- Legacy flat commands (backward compatible) ---
 
   pool-init)    json="{\"type\":\"pool-init\",\"id\":1,\"size\":${1:-5}}"; send_api "$json" 120 ;;
@@ -215,8 +280,11 @@ Session commands (sub-claude compatible):
   followup <id> <prompt> [--block]  Follow up on idle session
   wait [id]                    Wait for session to finish, print output
   capture <id>                 Show live terminal content
+  capture --slot <index>       Show live terminal content by slot index
   result <id>                  Print output (error if still running)
+  result --slot <index>        Print output by slot index
   input <id> <text>            Send raw input to terminal
+  input --slot <index> <text>  Send raw input by slot index
   clean                        Free slots occupied by finished sessions
 
 Pool management:
@@ -224,6 +292,11 @@ Pool management:
   pool status                  Pool health report
   pool resize <size>           Resize pool
   pool destroy                 Destroy pool
+
+Slot access (by index, works even without sessionId):
+  slot read <index>            Read terminal buffer
+  slot write <index> <data>    Write to terminal
+  slot status <index>          Slot details (status, sessionId, termId, pid)
 
 Low-level:
   ping                         Health check
