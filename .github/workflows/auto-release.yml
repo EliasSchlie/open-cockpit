@@ -23,6 +23,16 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies and run tests
+        run: |
+          npm ci
+          npm test
+
       - name: Bump patch version
         id: bump
         run: |
