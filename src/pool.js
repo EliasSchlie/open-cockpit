@@ -133,6 +133,43 @@ function syncStatuses(pool, sessions) {
   return changed ? pool : null;
 }
 
+/**
+ * Find a pool slot by session ID. Validates format.
+ * Returns { pool, slot } or throws.
+ */
+function findSlotBySessionId(pool, sessionId) {
+  if (!pool) throw new Error("Pool not initialized");
+  if (!/^[a-f0-9-]+$/i.test(sessionId))
+    throw new Error("Invalid session ID format");
+  const slot = pool.slots.find((s) => s.sessionId === sessionId);
+  if (!slot) throw new Error(`No slot found for session ${sessionId}`);
+  return { pool, slot };
+}
+
+/**
+ * Find a pool slot by index. Validates type.
+ * Returns { pool, slot } or throws.
+ */
+function findSlotByIndex(pool, slotIndex) {
+  if (!pool) throw new Error("Pool not initialized");
+  if (typeof slotIndex !== "number" || !Number.isFinite(slotIndex))
+    throw new Error("slotIndex must be a number");
+  const slot = pool.slots.find((s) => s.index === slotIndex);
+  if (!slot) throw new Error(`No slot at index ${slotIndex}`);
+  return { pool, slot };
+}
+
+/**
+ * Resolve a slot from a message that has either sessionId or slotIndex.
+ * slotIndex takes precedence when both are provided.
+ * Returns { pool, slot } or throws.
+ */
+function resolveSlot(pool, msg) {
+  if (msg.slotIndex !== undefined) return findSlotByIndex(pool, msg.slotIndex);
+  if (msg.sessionId) return findSlotBySessionId(pool, msg.sessionId);
+  throw new Error("sessionId or slotIndex required");
+}
+
 module.exports = {
   readPool,
   writePool,
@@ -140,4 +177,7 @@ module.exports = {
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,
+  findSlotBySessionId,
+  findSlotByIndex,
+  resolveSlot,
 };

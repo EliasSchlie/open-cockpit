@@ -21,6 +21,9 @@ const {
   syncStatuses,
   createSlot,
   selectShrinkCandidates,
+  findSlotBySessionId: findSlotBySessionIdInPool,
+  findSlotByIndex: findSlotByIndexInPool,
+  resolveSlot: resolveSlotInPool,
 } = require("./pool");
 
 const IS_DEV = process.argv.includes("--dev");
@@ -1865,12 +1868,15 @@ app.whenReady().then(async () => {
   // --- Pool interaction helpers (used by API commands) ---
 
   function findSlotBySessionId(sessionId) {
-    validateSessionId(sessionId);
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const slot = pool.slots.find((s) => s.sessionId === sessionId);
-    if (!slot) throw new Error(`No slot found for session ${sessionId}`);
-    return { pool, slot };
+    return findSlotBySessionIdInPool(readPool(), sessionId);
+  }
+
+  function findSlotByIndex(slotIndex) {
+    return findSlotByIndexInPool(readPool(), slotIndex);
+  }
+
+  function resolveSlot(msg) {
+    return resolveSlotInPool(readPool(), msg);
   }
 
   async function getTerminalBuffer(termId) {
@@ -2074,27 +2080,34 @@ app.whenReady().then(async () => {
     },
 
     "pool-capture": async (msg) => {
-      if (!msg.sessionId) throw new Error("sessionId required");
-      const { slot } = findSlotBySessionId(msg.sessionId);
+      const { slot } = resolveSlot(msg);
       const buffer = await getTerminalBuffer(slot.termId);
-      return { type: "buffer", sessionId: msg.sessionId, buffer };
+      return {
+        type: "buffer",
+        sessionId: slot.sessionId,
+        slotIndex: slot.index,
+        buffer,
+      };
     },
 
     "pool-result": async (msg) => {
-      if (!msg.sessionId) throw new Error("sessionId required");
-      const { slot } = findSlotBySessionId(msg.sessionId);
+      const { slot } = resolveSlot(msg);
       const status = await getEffectiveSlotStatus(slot);
       if (status === "busy" || status === "processing") {
         throw new Error("Session is still running");
       }
       const buffer = await getTerminalBuffer(slot.termId);
-      return { type: "result", sessionId: msg.sessionId, buffer };
+      return {
+        type: "result",
+        sessionId: slot.sessionId,
+        slotIndex: slot.index,
+        buffer,
+      };
     },
 
     "pool-input": async (msg) => {
-      if (!msg.sessionId) throw new Error("sessionId required");
       if (msg.data === undefined) throw new Error("data required");
-      const { slot } = findSlotBySessionId(msg.sessionId);
+      const { slot } = resolveSlot(msg);
       daemonSend({ type: "write", termId: slot.termId, data: msg.data });
       return { type: "ok" };
     },
@@ -2102,6 +2115,45 @@ app.whenReady().then(async () => {
     "pool-clean": async () => {
       const cleaned = await poolClean();
       return { type: "cleaned", count: cleaned };
+    },
+
+    // --- Slot access commands (by index, works without sessionId) ---
+
+    "slot-read": async (msg) => {
+      const { slot } = findSlotByIndex(msg.slotIndex);
+      const buffer = await getTerminalBuffer(slot.termId);
+      return {
+        type: "buffer",
+        slotIndex: slot.index,
+        sessionId: slot.sessionId,
+        buffer,
+      };
+    },
+
+    "slot-write": async (msg) => {
+      if (msg.data === undefined) throw new Error("data required");
+      const { slot } = findSlotByIndex(msg.slotIndex);
+      daemonSend({ type: "write", termId: slot.termId, data: msg.data });
+      return { type: "ok" };
+    },
+
+    "slot-status": async (msg) => {
+      const { slot } = findSlotByIndex(msg.slotIndex);
+      const healthStatus = slot.sessionId
+        ? await getEffectiveSlotStatus(slot)
+        : slot.status;
+      return {
+        type: "slot",
+        slot: {
+          index: slot.index,
+          termId: slot.termId,
+          pid: slot.pid,
+          status: slot.status,
+          sessionId: slot.sessionId,
+          healthStatus,
+          createdAt: slot.createdAt,
+        },
+      };
     },
   });
 
