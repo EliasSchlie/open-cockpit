@@ -3,7 +3,14 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const net = require("net");
-const { spawn: spawnChild, execFileSync, execSync } = require("child_process");
+const {
+  spawn: spawnChild,
+  execFile,
+  execFileSync,
+  execSync,
+} = require("child_process");
+const { promisify } = require("util");
+const execFileAsync = promisify(execFile);
 const { sortSessions } = require("./sort-sessions");
 const { createApiServer } = require("./api-server");
 const {
@@ -53,17 +60,17 @@ const gitRootCache = new Map();
 const userInputCache = new Map();
 
 // Detect session origin by reading process environment via ps eww (macOS)
-function detectOrigin(pid) {
+async function detectOrigin(pid) {
   if (originCache.has(String(pid))) return originCache.get(String(pid));
   let origin = "ext";
   try {
-    const out = execFileSync("ps", ["eww", "-p", String(pid)], {
+    const { stdout } = await execFileAsync("ps", ["eww", "-p", String(pid)], {
       encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
+      timeout: 3000,
     });
-    if (/\bOPEN_COCKPIT_POOL=1\b/.test(out)) {
+    if (/\bOPEN_COCKPIT_POOL=1\b/.test(stdout)) {
       origin = "pool";
-    } else if (/\bSUB_CLAUDE=1\b/.test(out)) {
+    } else if (/\bSUB_CLAUDE=1\b/.test(stdout)) {
       origin = "sub-claude";
     }
   } catch {}
@@ -131,19 +138,18 @@ function createWindow() {
   });
 }
 
-function getCwdFromJsonl(sessionId) {
+async function getCwdFromJsonl(sessionId) {
   if (cwdFromJsonlCache.has(sessionId)) return cwdFromJsonlCache.get(sessionId);
   try {
-    const jsonlPath = execFileSync(
+    const { stdout: findOut } = await execFileAsync(
       "find",
       [CLAUDE_PROJECTS_DIR, "-name", `${sessionId}.jsonl`],
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], timeout: 5000 },
-    )
-      .split("\n")[0]
-      .trim();
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    const jsonlPath = findOut.split("\n")[0].trim();
     if (!jsonlPath) return null;
 
-    const tail = execFileSync("tail", ["-100", jsonlPath], {
+    const { stdout: tail } = await execFileAsync("tail", ["-100", jsonlPath], {
       encoding: "utf-8",
       timeout: 3000,
     });
@@ -260,19 +266,19 @@ function findGitRoot(cwd) {
   return null;
 }
 
-// Batch lsof: get CWDs for all PIDs in one call
-function batchGetCwds(pids) {
+// Batch lsof: get CWDs for all PIDs in one call (async, non-blocking)
+async function batchGetCwds(pids) {
   const cwdMap = new Map();
   if (pids.length === 0) return cwdMap;
   try {
-    const lsof = execFileSync(
+    const { stdout } = await execFileAsync(
       "lsof",
       ["-a", "-p", pids.join(","), "-d", "cwd", "-F", "pn"],
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], timeout: 5000 },
+      { encoding: "utf-8", timeout: 5000 },
     );
     // Parse lsof -F pn output: lines starting with 'p' = PID, 'n' = path
     let currentPid = null;
-    for (const line of lsof.split("\n")) {
+    for (const line of stdout.split("\n")) {
       if (line.startsWith("p")) {
         currentPid = line.slice(1);
       } else if (line.startsWith("n") && currentPid) {
@@ -283,7 +289,7 @@ function batchGetCwds(pids) {
   return cwdMap;
 }
 
-function getSessionsUncached() {
+async function getSessionsUncached() {
   const sessions = [];
 
   // Live sessions from session-pids
@@ -310,14 +316,14 @@ function getSessionsUncached() {
 
   // Batch lsof for all alive PIDs (single subprocess instead of N)
   const alivePids = pidEntries.filter((e) => e.alive).map((e) => e.pid);
-  const cwdMap = batchGetCwds(alivePids);
+  const cwdMap = await batchGetCwds(alivePids);
 
   for (const { pid, sessionId, alive } of pidEntries) {
     let cwd = alive ? cwdMap.get(String(pid)) || null : null;
 
     // Refine CWD via JSONL when spawned from $HOME
     if (cwd === os.homedir()) {
-      const refined = getCwdFromJsonl(sessionId);
+      const refined = await getCwdFromJsonl(sessionId);
       if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
         cwd = refined;
       }
@@ -400,7 +406,7 @@ function getSessionsUncached() {
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
-      let cwd = s.cwd || getCwdFromJsonl(s.sessionId);
+      let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || findGitRoot(cwd);
 
       fs.mkdirSync(offloadDir, { recursive: true });
@@ -439,7 +445,7 @@ function getSessionsUncached() {
     if (poolSessionIds.has(s.sessionId)) {
       s.origin = "pool";
     } else if (s.alive) {
-      s.origin = detectOrigin(s.pid);
+      s.origin = await detectOrigin(s.pid);
     } else {
       s.origin = "ext";
     }
@@ -460,14 +466,27 @@ function getSessionsUncached() {
   return sortSessions(sessions);
 }
 
-function getSessions() {
+// In-flight promise to prevent concurrent getSessions() calls from spawning
+// duplicate subprocesses. Second caller reuses the first's result.
+let sessionsInFlight = null;
+
+async function getSessions() {
   const now = Date.now();
   if (sessionsCache && now - sessionsCacheTs < SESSIONS_CACHE_TTL) {
     return sessionsCache;
   }
-  sessionsCache = getSessionsUncached();
-  sessionsCacheTs = now;
-  return sessionsCache;
+  // Deduplicate concurrent calls
+  if (sessionsInFlight) return sessionsInFlight;
+  sessionsInFlight = getSessionsUncached()
+    .then((result) => {
+      sessionsCache = result;
+      sessionsCacheTs = Date.now();
+      return result;
+    })
+    .finally(() => {
+      sessionsInFlight = null;
+    });
+  return sessionsInFlight;
 }
 
 // Invalidate sessions cache (call after mutations like offload, pool changes)
@@ -870,9 +889,9 @@ async function poolResize(newSize) {
 }
 
 // Get pool health: enrich pool.json slots with live session data
-function getPoolHealth() {
+async function getPoolHealth() {
   const pool = readPool();
-  const sessions = getSessions();
+  const sessions = await getSessions();
   return computePoolHealth(pool, sessions, (pid) => {
     try {
       process.kill(Number(pid), 0);
@@ -1340,8 +1359,8 @@ app.whenReady().then(async () => {
       return {};
     }
   });
-  ipcMain.handle("get-sessions", () => {
-    const sessions = getSessions();
+  ipcMain.handle("get-sessions", async () => {
+    const sessions = await getSessions();
     syncPoolStatuses(sessions);
     return sessions;
   });
@@ -1427,7 +1446,7 @@ app.whenReady().then(async () => {
   // Pool management
   ipcMain.handle("pool-init", async (_e, size) => poolInit(size));
   ipcMain.handle("pool-resize", async (_e, newSize) => poolResize(newSize));
-  ipcMain.handle("pool-health", () => getPoolHealth());
+  ipcMain.handle("pool-health", () => getPoolHealth()); // getPoolHealth is async, returns promise — ipcMain.handle awaits it
   ipcMain.handle("pool-read", () => readPool());
   ipcMain.handle("pool-destroy", async () => poolDestroy());
 
@@ -1510,8 +1529,8 @@ app.whenReady().then(async () => {
     daemonSend({ type: "write", termId, data: prompt + "\r" });
   }
 
-  function getEffectiveSlotStatus(slot) {
-    const sessions = getSessions();
+  async function getEffectiveSlotStatus(slot) {
+    const sessions = await getSessions();
     const session = sessions.find((s) => s.sessionId === slot.sessionId);
     if (!session) return slot.status;
     if (session.status === "idle") return "idle";
@@ -1523,24 +1542,34 @@ app.whenReady().then(async () => {
   function waitForSessionIdle(sessionId, timeoutMs = 300000) {
     return new Promise((resolve, reject) => {
       let elapsed = 0;
+      let settled = false;
       const interval = 1000;
-      const check = () => {
-        const sessions = getSessions();
-        const session = sessions.find((s) => s.sessionId === sessionId);
-        if (session && session.status === "idle") {
-          resolve();
-          return;
+      const check = async () => {
+        if (settled) return;
+        try {
+          const sessions = await getSessions();
+          const session = sessions.find((s) => s.sessionId === sessionId);
+          if (session && session.status === "idle") {
+            settled = true;
+            resolve();
+            return;
+          }
+          if (session && !session.alive) {
+            settled = true;
+            reject(new Error("Session process died"));
+            return;
+          }
+          elapsed += interval;
+          if (elapsed >= timeoutMs) {
+            settled = true;
+            reject(new Error("Timeout waiting for session to become idle"));
+            return;
+          }
+          setTimeout(check, interval);
+        } catch (err) {
+          settled = true;
+          reject(err);
         }
-        if (session && !session.alive) {
-          reject(new Error("Session process died"));
-          return;
-        }
-        elapsed += interval;
-        if (elapsed >= timeoutMs) {
-          reject(new Error("Timeout waiting for session to become idle"));
-          return;
-        }
-        setTimeout(check, interval);
       };
       setTimeout(check, interval);
     });
@@ -1551,7 +1580,7 @@ app.whenReady().then(async () => {
     ping: async () => ({ type: "pong" }),
     "get-sessions": async () => ({
       type: "sessions",
-      sessions: getSessions(),
+      sessions: await getSessions(),
     }),
     "pool-init": async (msg) => ({
       type: "pool",
@@ -1563,7 +1592,7 @@ app.whenReady().then(async () => {
     }),
     "pool-health": async () => ({
       type: "health",
-      health: getPoolHealth(),
+      health: await getPoolHealth(),
     }),
     "pool-read": async () => ({
       type: "pool",
@@ -1620,7 +1649,7 @@ app.whenReady().then(async () => {
         const pool = readPool();
         if (!pool) throw new Error("Pool not initialized");
 
-        const sessions = getSessions();
+        const sessions = await getSessions();
         const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
         // Find first fresh slot
@@ -1650,7 +1679,7 @@ app.whenReady().then(async () => {
       return withPoolLock(async () => {
         const { pool, slot } = findSlotBySessionId(msg.sessionId);
 
-        const status = getEffectiveSlotStatus(slot);
+        const status = await getEffectiveSlotStatus(slot);
         if (status !== "idle")
           throw new Error(`Session is ${status}, expected idle`);
 
@@ -1687,24 +1716,33 @@ app.whenReady().then(async () => {
 
       const finished = await new Promise((resolve, reject) => {
         let elapsed = 0;
+        let settled = false;
         const interval = 1000;
-        const check = () => {
-          const sessions = getSessions();
-          for (const s of busySlots) {
-            const session = sessions.find(
-              (sess) => sess.sessionId === s.sessionId,
-            );
-            if (session && session.status === "idle") {
-              resolve(s);
+        const check = async () => {
+          if (settled) return;
+          try {
+            const sessions = await getSessions();
+            for (const s of busySlots) {
+              const session = sessions.find(
+                (sess) => sess.sessionId === s.sessionId,
+              );
+              if (session && session.status === "idle") {
+                settled = true;
+                resolve(s);
+                return;
+              }
+            }
+            elapsed += interval;
+            if (elapsed >= timeout) {
+              settled = true;
+              reject(new Error("Timeout waiting for session to become idle"));
               return;
             }
+            setTimeout(check, interval);
+          } catch (err) {
+            settled = true;
+            reject(err);
           }
-          elapsed += interval;
-          if (elapsed >= timeout) {
-            reject(new Error("Timeout waiting for session to become idle"));
-            return;
-          }
-          setTimeout(check, interval);
         };
         setTimeout(check, interval);
       });
@@ -1723,7 +1761,7 @@ app.whenReady().then(async () => {
     "pool-result": async (msg) => {
       if (!msg.sessionId) throw new Error("sessionId required");
       const { slot } = findSlotBySessionId(msg.sessionId);
-      const status = getEffectiveSlotStatus(slot);
+      const status = await getEffectiveSlotStatus(slot);
       if (status === "busy" || status === "processing") {
         throw new Error("Session is still running");
       }
@@ -1743,7 +1781,7 @@ app.whenReady().then(async () => {
       const pool = readPool();
       if (!pool) throw new Error("Pool not initialized");
 
-      const sessions = getSessions();
+      const sessions = await getSessions();
       const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
       const idleSlots = pool.slots.filter((s) => {
