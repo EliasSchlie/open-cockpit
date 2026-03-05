@@ -532,34 +532,6 @@ body {
   padding-top: 80px;
 }
 
-.offload-menu-dialog {
-  width: 360px;
-  background: #161616;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
-  padding: 20px;
-}
-
-.offload-menu-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-
-.offload-menu-subtitle {
-  font-size: 12px;
-  color: var(--text-dim);
-  margin-bottom: 16px;
-}
-
-.offload-menu-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .offload-menu-btn {
   width: 100%;
   padding: 8px 12px;
@@ -581,10 +553,6 @@ body {
 .offload-menu-load {
   color: var(--accent);
   border-color: rgba(255, 26, 26, 0.3);
-}
-
-.offload-menu-cancel {
-  color: var(--text-dim);
 }
 
 /* Snapshot viewer */
@@ -632,6 +600,50 @@ body {
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Inline snapshot (offloaded/archived sessions in terminal pane) */
+#inline-snapshot {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inline-snapshot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.inline-snapshot-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.inline-snapshot-restart {
+  padding: 4px 14px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid rgba(255, 26, 26, 0.3);
+  color: var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.inline-snapshot-restart:hover {
+  background: var(--accent-dim);
+}
+
+.inline-snapshot-content {
+  flex: 1;
+  min-height: 0;
+  color: var(--text-dim);
+  margin: 0;
 }
 
 /* Setup script picker */

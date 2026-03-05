@@ -651,6 +651,7 @@ function renderTerminalTabs() {
 
 // Hide current session's terminals (preserve them in cache)
 function hideCurrentTerminals() {
+  removeInlineSnapshot();
   if (currentSessionId && terminals.length > 0) {
     sessionTerminals.set(currentSessionId, {
       terminals: [...terminals],
@@ -890,7 +891,9 @@ function createSessionItem(s) {
   const indicatorStyle = dirColor
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
     : "background: transparent";
-  const originTag = s.origin
+  const showOrigin =
+    s.origin && s.status !== "offloaded" && s.status !== "archived";
+  const originTag = showOrigin
     ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
     : "";
   const staleTag = s.staleIdle
@@ -907,7 +910,7 @@ function createSessionItem(s) {
       <div class="session-cwd">${escapeHtml(dp)}</div>
     </div>
   `;
-  li.addEventListener("click", () => handleSessionClick(s));
+  li.addEventListener("click", () => selectSession(s));
   li.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     showSessionContextMenu(e, s);
@@ -980,79 +983,6 @@ function showSessionContextMenu(e, session) {
   });
 }
 
-// Handle click differently for offloaded/archived vs loaded sessions
-async function handleSessionClick(session) {
-  if (session.status === "archived" || session.status === "offloaded") {
-    showSessionResumeMenu(session);
-  } else {
-    selectSession(session);
-  }
-}
-
-// Show resume/restart menu for offloaded or archived sessions
-async function showSessionResumeMenu(session) {
-  const existing = document.getElementById("offload-menu");
-  if (existing) existing.remove();
-
-  const isArchived = session.status === "archived";
-  const loadLabel = isArchived ? "Restart Session" : "Load Session";
-  const fallbackTitle = isArchived ? "Archived Session" : "Offloaded Session";
-
-  const menu = document.createElement("div");
-  menu.id = "offload-menu";
-  menu.className = "offload-menu-overlay";
-  menu.innerHTML = `
-    <div class="offload-menu-dialog">
-      <div class="offload-menu-title">${escapeHtml(session.intentionHeading || fallbackTitle)}</div>
-      <div class="offload-menu-subtitle">${escapeHtml(displayPath(session))}</div>
-      <div class="offload-menu-actions">
-        <button class="offload-menu-btn offload-menu-load">${loadLabel}</button>
-        ${session.hasSnapshot ? '<button class="offload-menu-btn offload-menu-snapshot">View Snapshot</button>' : ""}
-        <button class="offload-menu-btn offload-menu-cancel">Cancel</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(menu);
-
-  menu.addEventListener("click", (e) => {
-    if (e.target === menu) menu.remove();
-  });
-
-  menu.querySelector(".offload-menu-cancel").addEventListener("click", () => {
-    menu.remove();
-  });
-
-  const snapshotBtn = menu.querySelector(".offload-menu-snapshot");
-  if (snapshotBtn) {
-    snapshotBtn.addEventListener("click", async () => {
-      menu.remove();
-      let snapshot;
-      try {
-        snapshot = await window.api.readOffloadSnapshot(session.sessionId);
-      } catch (err) {
-        console.error("Failed to read offload snapshot:", err);
-        snapshot = null;
-      }
-      showSnapshotViewer(session, snapshot);
-    });
-  }
-
-  menu
-    .querySelector(".offload-menu-load")
-    .addEventListener("click", async () => {
-      menu.remove();
-      if (isArchived) {
-        try {
-          await window.api.unarchiveSession(session.sessionId);
-        } catch (err) {
-          console.error("Failed to unarchive session:", err);
-        }
-      }
-      await resumeOffloadedSession(session);
-    });
-}
-
 // Show read-only snapshot viewer
 function showSnapshotViewer(session, snapshotText) {
   const existing = document.getElementById("snapshot-viewer");
@@ -1078,6 +1008,66 @@ function showSnapshotViewer(session, snapshotText) {
   viewer.querySelector(".snapshot-close").addEventListener("click", () => {
     viewer.remove();
   });
+}
+
+// Show snapshot content inline in the terminal pane for offloaded/archived sessions
+async function showInlineSnapshot(session, gen) {
+  const terminalPane = document.getElementById("terminal-pane");
+  const isArchived = session.status === "archived";
+  const btnLabel = isArchived ? "Restart" : "Resume";
+
+  let snapshotText = null;
+  if (session.hasSnapshot) {
+    try {
+      snapshotText = await window.api.readOffloadSnapshot(session.sessionId);
+    } catch (err) {
+      debugLog("snapshot", `failed to read snapshot: ${err.message}`);
+    }
+    if (gen !== sessionGeneration) return;
+  }
+
+  // Hide terminal tabs and mount, replace with snapshot view
+  terminalTabList.style.display = "none";
+  newTermBtn.style.display = "none";
+  terminalMount.style.display = "none";
+
+  // Remove any previous inline snapshot
+  const prev = document.getElementById("inline-snapshot");
+  if (prev) prev.remove();
+
+  const container = document.createElement("div");
+  container.id = "inline-snapshot";
+  container.innerHTML = `
+    <div class="inline-snapshot-header">
+      <span class="inline-snapshot-label">${isArchived ? "Archived" : "Offloaded"} Session</span>
+      <button class="inline-snapshot-restart">${btnLabel}</button>
+    </div>
+    <pre class="snapshot-content inline-snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
+  `;
+  terminalPane.appendChild(container);
+
+  container
+    .querySelector(".inline-snapshot-restart")
+    .addEventListener("click", async () => {
+      if (isArchived) {
+        try {
+          await window.api.unarchiveSession(session.sessionId);
+        } catch (err) {
+          debugLog("snapshot", `unarchive failed: ${err.message}`);
+        }
+      }
+      await resumeOffloadedSession(session);
+    });
+}
+
+// Clean up inline snapshot when switching away from an offloaded/archived session
+function removeInlineSnapshot() {
+  const snap = document.getElementById("inline-snapshot");
+  if (!snap) return;
+  snap.remove();
+  terminalTabList.style.display = "";
+  newTermBtn.style.display = "";
+  terminalMount.style.display = "";
 }
 
 function displayPath(session) {
@@ -1176,15 +1166,61 @@ async function pollForFreshSlot(timeoutMs) {
 
 // Resume an offloaded session into a fresh slot
 async function resumeOffloadedSession(session) {
+  let result;
   try {
-    const result = await window.api.poolResume(session.sessionId);
+    result = await window.api.poolResume(session.sessionId);
     showNotification(`Resuming session in slot ${result.slotIndex}…`);
   } catch (err) {
     debugLog("pool", `resume failed session=${session.sessionId}`, err.message);
     showNotification(`Resume failed: ${err.message}`);
     return;
   }
+
+  // Transition: remove inline snapshot, attach to the live slot terminal
+  removeInlineSnapshot();
+  try {
+    await attachPoolTerminal(result.termId);
+  } catch (err) {
+    debugLog("pool", `attach after resume failed: ${err.message}`);
+  }
+
+  // Poll until the slot gets its new session ID, then update our state
+  const oldSessionId = session.sessionId;
+  const newSession = await pollForResumedSession(result.termId, 60000);
+  if (newSession) {
+    currentSessionId = newSession.sessionId;
+    currentSessionCwd = newSession.cwd;
+    // Move terminal cache from old to new session ID
+    sessionTerminals.delete(oldSessionId);
+    if (terminals.length > 0) {
+      sessionTerminals.set(newSession.sessionId, {
+        terminals: [...terminals],
+        activeTermIndex,
+        lastAccessed: Date.now(),
+      });
+    }
+  }
   await loadSessions();
+}
+
+// Poll getSessions until we find the session in a given pool slot
+async function pollForResumedSession(termId, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const pool = await window.api.poolRead();
+    if (!pool) continue;
+    const slot = pool.slots.find(
+      (s) => s.termId === termId && s.status !== "fresh",
+    );
+    if (slot?.sessionId) {
+      const sessions = await window.api.getSessions();
+      const match = sessions.find((s) => s.sessionId === slot.sessionId);
+      if (match) return match;
+    }
+  }
+  debugLog("pool", `poll for resumed session timed out after ${timeoutMs}ms`);
+  return null;
 }
 
 function showNotification(msg) {
@@ -1232,8 +1268,11 @@ async function selectSession(session) {
     header.appendChild(colorBar);
   }
 
-  // Restore cached terminals immediately (sync, no race risk)
-  if (!restoreSessionTerminals(session.sessionId)) {
+  // Offloaded/archived: show snapshot inline instead of a terminal
+  if (session.status === "offloaded" || session.status === "archived") {
+    showInlineSnapshot(session, gen);
+  } else if (!restoreSessionTerminals(session.sessionId)) {
+    // Restore cached terminals immediately (sync, no race risk)
     if (session.origin === "pool") {
       // Pool session: attach to the pool slot's existing Claude TUI
       const pool = await window.api.poolRead();
