@@ -592,6 +592,20 @@ async function poolInit(size) {
       const sessionId = await pollForSessionId(slot.pid, 60000);
       slot.sessionId = sessionId;
       slot.status = sessionId ? "fresh" : "error";
+      // Write idle signal so getSessions detects slot as "fresh" (no user input)
+      if (sessionId) {
+        fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+        fs.writeFileSync(
+          path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
+          JSON.stringify({
+            cwd: os.homedir(),
+            session_id: sessionId,
+            transcript: "",
+            ts: Math.floor(Date.now() / 1000),
+            trigger: "pool-init",
+          }),
+        );
+      }
     }),
   );
 
@@ -732,6 +746,19 @@ async function reconcilePool() {
             s.sessionId = sessionId;
             s.status = sessionId ? "fresh" : "error";
             writePool(p);
+            if (sessionId) {
+              fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+              fs.writeFileSync(
+                path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
+                JSON.stringify({
+                  cwd: os.homedir(),
+                  session_id: sessionId,
+                  transcript: "",
+                  ts: Math.floor(Date.now() / 1000),
+                  trigger: "pool-init",
+                }),
+              );
+            }
           }
         });
       } catch (err) {
