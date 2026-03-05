@@ -844,6 +844,8 @@ function watchIntention(sessionId) {
     fs.unwatchFile(fileWatchers.get("current"));
     fileWatchers.delete("current");
   }
+  // Reset change-detection state so we don't suppress notifications for new session
+  lastWrittenContent = null;
 
   const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
   if (!fs.existsSync(file)) {
@@ -1128,13 +1130,18 @@ app.whenReady().then(async () => {
     syncPoolStatuses(sessions);
     return sessions;
   });
-  ipcMain.handle("read-intention", (_e, sessionId) => readIntention(sessionId));
-  ipcMain.handle("write-intention", (_e, sessionId, content) =>
-    writeIntention(sessionId, content),
-  );
-  ipcMain.handle("watch-intention", (_e, sessionId) =>
-    watchIntention(sessionId),
-  );
+  ipcMain.handle("read-intention", (_e, sessionId) => {
+    validateSessionId(sessionId);
+    return readIntention(sessionId);
+  });
+  ipcMain.handle("write-intention", (_e, sessionId, content) => {
+    validateSessionId(sessionId);
+    return writeIntention(sessionId, content);
+  });
+  ipcMain.handle("watch-intention", (_e, sessionId) => {
+    validateSessionId(sessionId);
+    return watchIntention(sessionId);
+  });
 
   // PTY IPC handlers — all forwarded to daemon
 
