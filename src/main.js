@@ -2156,6 +2156,17 @@ app.whenReady().then(async () => {
         },
         { type: "separator" },
         {
+          label: "Jump to Recent Idle",
+          accelerator: "CmdOrCtrl+J",
+          click: () => send("jump-recent-idle"),
+        },
+        {
+          label: "Archive Current Session",
+          accelerator: "CmdOrCtrl+D",
+          click: () => send("archive-current-session"),
+        },
+        { type: "separator" },
+        {
           label: "Command Palette",
           accelerator: "CmdOrCtrl+/",
           click: () => send("toggle-command-palette"),

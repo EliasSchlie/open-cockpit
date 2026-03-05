@@ -1478,6 +1478,31 @@ function switchSession(direction) {
   selectSession(navigable[nextIndex]);
 }
 
+// --- Jump to most recent idle session ---
+function jumpToRecentIdle() {
+  const idle = cachedSessions.find(
+    (s) => s.status === "idle" && s.sessionId !== currentSessionId,
+  );
+  if (idle) selectSession(idle);
+}
+
+// --- Archive current session (then jump to recent idle) ---
+async function archiveCurrentSession() {
+  if (!currentSessionId) return;
+  const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
+  if (!session) return;
+  // Can't archive already-archived sessions
+  if (session.status === "archived") return;
+
+  await window.api.archiveSession(currentSessionId);
+  await loadSessions();
+  // Jump to the most recent idle session
+  const idle = cachedSessions.find((s) => s.status === "idle");
+  if (idle) {
+    selectSession(idle);
+  }
+}
+
 // --- Sidebar toggle ---
 function toggleSidebar() {
   sidebar.classList.toggle("collapsed");
@@ -1549,6 +1574,18 @@ const COMMANDS = [
           (activeTermIndex - 1 + terminals.length) % terminals.length,
         );
     },
+  },
+  {
+    id: "jump-recent-idle",
+    label: "Jump to Recent Idle",
+    shortcut: "⌘J",
+    action: jumpToRecentIdle,
+  },
+  {
+    id: "archive-current-session",
+    label: "Archive Current Session",
+    shortcut: "⌘D",
+    action: archiveCurrentSession,
   },
   {
     id: "toggle-sidebar",
@@ -1758,6 +1795,8 @@ window.api.onTogglePaneFocus(() => {
     focusEditor();
   }
 });
+window.api.onJumpRecentIdle(jumpToRecentIdle);
+window.api.onArchiveCurrentSession(archiveCurrentSession);
 
 // Reconnect a single PTY from daemon (after app restart or reload)
 async function reconnectTerminal(ptyInfo) {
