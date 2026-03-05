@@ -122,7 +122,7 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - **External sessions** (started outside the app): First tab is a fresh shell, since the app doesn't own their terminal.
 - **Additional tabs** (via "+" in the tab bar): Always fresh shells at the session's cwd.
 
-**Not yet implemented** — see [#28](https://github.com/EliasSchlie/open-cockpit/issues/28). Currently all first tabs are fresh shells.
+Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach on close (don't kill the daemon PTY). Falls back to fresh shell if pool slot not found or attach fails.
 
 ## Session lifecycle
 
