@@ -724,14 +724,16 @@ function createSessionItem(s) {
   const indicatorStyle = dirColor
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
     : "background: transparent";
-  const extTag = s.isPool ? "" : '<span class="session-ext-tag">ext</span>';
+  const originTag = s.origin
+    ? `<span class="session-origin-tag session-origin-${s.origin}">${s.origin}</span>`
+    : "";
   li.innerHTML = `
     <div class="session-dir-indicator" style="${indicatorStyle}"></div>
     <div class="session-item-content">
       <div class="session-project">
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
         ${escapeHtml(heading)}
-        ${extTag}
+        ${originTag}
       </div>
       <div class="session-cwd">${escapeHtml(dp)}</div>
     </div>

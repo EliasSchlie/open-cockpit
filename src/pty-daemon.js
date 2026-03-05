@@ -104,6 +104,11 @@ function handleSpawn(socket, msg) {
   delete cleanEnv.CLAUDE_CODE_SESSION_ID;
   cleanEnv.PATH = [...EXTRA_PATH_DIRS, process.env.PATH || ""].join(":");
 
+  // Merge caller-provided env overrides (e.g. OPEN_COCKPIT_POOL for origin tagging)
+  if (msg.env && typeof msg.env === "object") {
+    Object.assign(cleanEnv, msg.env);
+  }
+
   const proc = pty.spawn(shell, args, {
     name: "xterm-256color",
     cols: msg.cols || 80,

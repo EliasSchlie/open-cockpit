@@ -34,6 +34,28 @@ const DEFAULT_POOL_SIZE = 5;
 const fileWatchers = new Map();
 let mainWindow = null;
 
+// Cache origin per PID (never changes during a process's lifetime)
+const originCache = new Map();
+
+// Detect session origin by reading process environment via ps eww (macOS)
+function detectOrigin(pid) {
+  if (originCache.has(String(pid))) return originCache.get(String(pid));
+  let origin = "ext";
+  try {
+    const out = execFileSync("ps", ["eww", "-p", String(pid)], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    if (/\bOPEN_COCKPIT_POOL=1\b/.test(out)) {
+      origin = "pool";
+    } else if (/\bSUB_CLAUDE=1\b/.test(out)) {
+      origin = "sub-claude";
+    }
+  } catch {}
+  originCache.set(String(pid), origin);
+  return origin;
+}
+
 // --- PTY Daemon Client ---
 let daemonSocket = null;
 let daemonConnecting = null; // Promise while connection in progress
@@ -369,7 +391,7 @@ function getSessions() {
     sessions.splice(i, 1);
   }
 
-  // Tag sessions as pool vs external
+  // Tag sessions with origin: pool, sub-claude, or ext
   const pool = readPool();
   const poolSessionIds = new Set();
   if (pool) {
@@ -378,7 +400,15 @@ function getSessions() {
     }
   }
   for (const s of sessions) {
-    s.isPool = poolSessionIds.has(s.sessionId);
+    if (poolSessionIds.has(s.sessionId)) {
+      s.origin = "pool";
+    } else if (s.alive) {
+      s.origin = detectOrigin(s.pid);
+    } else {
+      s.origin = "ext";
+    }
+    // Keep isPool for backward compat (used by offload logic)
+    s.isPool = s.origin === "pool";
   }
 
   // Add offloaded sessions (always pool, skip if live session exists)
@@ -386,6 +416,7 @@ function getSessions() {
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       offloaded.isPool = true;
+      offloaded.origin = "pool";
       sessions.push(offloaded);
     }
   }
@@ -637,6 +668,7 @@ async function spawnPoolSlot(index) {
     cwd: os.homedir(),
     cmd: claudePath,
     args: ["--dangerously-skip-permissions"],
+    env: { OPEN_COCKPIT_POOL: "1" },
   });
   return createSlot(index, resp.termId, resp.pid);
 }

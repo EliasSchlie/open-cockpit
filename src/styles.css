@@ -199,16 +199,29 @@ body {
   cursor: default;
 }
 
-.session-ext-tag {
+.session-origin-tag {
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-dim);
-  background: var(--border);
   padding: 1px 4px;
   border-radius: 3px;
   margin-left: 4px;
   vertical-align: middle;
+}
+
+.session-origin-pool {
+  color: var(--green);
+  background: rgba(0, 255, 65, 0.1);
+}
+
+.session-origin-sub-claude {
+  color: var(--mauve);
+  background: rgba(255, 0, 255, 0.1);
+}
+
+.session-origin-ext {
+  color: var(--text-dim);
+  background: var(--border);
 }
 
 .session-cwd {
