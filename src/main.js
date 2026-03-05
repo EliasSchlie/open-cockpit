@@ -1770,28 +1770,29 @@ function watchIntention(sessionId) {
   lastWrittenContent.delete(sessionId);
 
   const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
-  if (!fs.existsSync(file)) {
-    secureMkdirSync(INTENTIONS_DIR, { recursive: true });
-    secureWriteFileSync(file, "");
-  }
+  secureMkdirSync(INTENTIONS_DIR, { recursive: true });
 
-  // Use polling (fs.watchFile) — reliable on macOS unlike fs.watch
+  // Use polling (fs.watchFile) — reliable on macOS unlike fs.watch.
+  // Works on non-existent files too (detects when file appears).
   fs.watchFile(file, { interval: 500 }, () => {
+    let content;
     try {
-      const content = fs.readFileSync(file, "utf-8");
-      // Skip if this is content we wrote ourselves
-      if (content === lastWrittenContent.get(sessionId)) return;
-      lastWrittenContent.set(sessionId, content);
-      console.log("[main] External file change detected, sending to renderer");
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("intention-changed", content);
-      }
+      content = fs.readFileSync(file, "utf-8");
     } catch (err) {
+      if (err.code === "ENOENT") return; // File not yet created
       console.error(
         "[main] Failed to read intention file on change",
         file,
         err.message,
       );
+      return;
+    }
+    // Skip if this is content we wrote ourselves
+    if (content === lastWrittenContent.get(sessionId)) return;
+    lastWrittenContent.set(sessionId, content);
+    console.log("[main] External file change detected, sending to renderer");
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("intention-changed", content);
     }
   });
 

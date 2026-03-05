@@ -59,13 +59,8 @@ if [ -f "$INTENTION_FILE" ]; then
   cp "$INTENTION_FILE" "$SNAPSHOT_DIR/${session_id}.md"
 fi
 
-EMPTY_NOTE=""
-if [ ! -f "$INTENTION_FILE" ] || [ ! -s "$INTENTION_FILE" ]; then
-  EMPTY_NOTE=" (currently empty)"
-fi
-
 cat <<EOF
-Describe this session at: ${INTENTION_FILE}${EMPTY_NOTE}
+Your first action should be to describe this session at: ${INTENTION_FILE}
 
 Write a descriptive heading, then short bullet points about what you're working on together. Add more detail below as needed.
 EOF
