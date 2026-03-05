@@ -574,6 +574,7 @@ async function closeTerminal(index) {
   if (index < 0 || index >= terminals.length) return;
 
   const entry = terminals[index];
+  if (entry.isPoolTui) return; // Can't close the main Claude terminal
   await window.api.ptyDetach(entry.termId).catch(() => {});
   // Don't kill pool TUI terminals — the Claude process must stay alive in the pool
   if (!entry.isPoolTui) {
@@ -605,10 +606,12 @@ function renderTerminalTabs() {
     tab.className = `terminal-tab${i === activeTermIndex ? " active" : ""}`;
     const label = t.isPoolTui ? "Claude" : `Terminal ${++shellCount}`;
     tab.textContent = `${label} `;
-    const closeBtn = document.createElement("span");
-    closeBtn.className = "terminal-tab-close";
-    closeBtn.textContent = "\u2715";
-    tab.appendChild(closeBtn);
+    if (!t.isPoolTui) {
+      const closeBtn = document.createElement("span");
+      closeBtn.className = "terminal-tab-close";
+      closeBtn.textContent = "\u2715";
+      tab.appendChild(closeBtn);
+    }
     tab.addEventListener("click", (e) => {
       if (e.target.classList.contains("terminal-tab-close")) {
         closeTerminal(i);
