@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOCKET="$HOME/.open-cockpit/api.sock"
+SOCKET="${COCKPIT_SOCKET:-$HOME/.open-cockpit/api.sock}"
+CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
 # Validate that a value is a non-negative integer. Args: <value> [label]
 validate_int() {
@@ -52,9 +53,88 @@ check_error() {
   local err
   err=$(echo "$resp" | jq -r '.error // empty' 2>/dev/null) || true
   if [[ -n "$err" ]]; then
-    echo "Error: $err" >&2
+    if [[ "$err" == *"No slot found"* ]]; then
+      echo "Error: session is external (not managed by the pool)." >&2
+      echo "Only pool sessions support this operation." >&2
+    else
+      echo "Error: $err" >&2
+    fi
     exit 1
   fi
+}
+
+# Strip ANSI escape codes and render terminal buffer to plain text.
+# Uses node to properly handle cursor movement, line wrapping, etc.
+strip_ansi() {
+  node -e '
+    let buf = "";
+    process.stdin.setEncoding("utf-8");
+    process.stdin.on("data", d => buf += d);
+    process.stdin.on("end", () => {
+      // Strip all escape sequences
+      buf = buf.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+      buf = buf.replace(/\x1b\][^\x07]*\x07/g, "");
+      buf = buf.replace(/\x1b[()][AB012]/g, "");
+      buf = buf.replace(/\x1b\[?\??[0-9;]*[a-zA-Z]/g, "");
+      buf = buf.replace(/\x1b[>=]/g, "");
+      buf = buf.replace(/\r\n/g, "\n");
+      buf = buf.replace(/\r/g, "\n");
+      // Collapse excessive blank lines
+      buf = buf.replace(/\n{4,}/g, "\n\n");
+      // Trim trailing whitespace per line
+      buf = buf.split("\n").map(l => l.trimEnd()).join("\n").trim();
+      process.stdout.write(buf + "\n");
+    });
+  '
+}
+
+# Resolve a session target: accepts sessionId, slot index (prefixed with @), or short prefix
+# Sets RESOLVED_TYPE ("sessionId" or "slotIndex") and RESOLVED_VALUE
+resolve_target() {
+  local target="$1"
+
+  # @N → slot index
+  if [[ "$target" =~ ^@([0-9]+)$ ]]; then
+    RESOLVED_TYPE="slotIndex"
+    RESOLVED_VALUE="${BASH_REMATCH[1]}"
+    return
+  fi
+
+  # Full UUID
+  if [[ "$target" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
+    RESOLVED_TYPE="sessionId"
+    RESOLVED_VALUE="$target"
+    return
+  fi
+
+  # Short prefix match against live sessions
+  local sessions
+  sessions=$(send_api '{"type":"get-sessions","id":1}')
+  local matches
+  matches=$(echo "$sessions" | jq -r --arg p "$target" '[.sessions[] | select(.sessionId | startswith($p)) | .sessionId] | .[]')
+
+  if [[ -z "$matches" ]]; then
+    echo "Error: no session matching '$target'" >&2
+    exit 1
+  fi
+
+  local count
+  count=$(echo "$matches" | wc -l | tr -d ' ')
+
+  if [[ "$count" -eq 1 ]]; then
+    RESOLVED_TYPE="sessionId"
+    RESOLVED_VALUE="$matches"
+  else
+    echo "Error: ambiguous prefix '$target' matches $count sessions:" >&2
+    echo "$matches" >&2
+    exit 1
+  fi
+}
+
+# Find JSONL transcript path for a session ID
+find_jsonl() {
+  local session_id="$1"
+  find "$CLAUDE_PROJECTS_DIR" -name "${session_id}.jsonl" -type f 2>/dev/null | head -1
 }
 
 CMD="${1:-help}"
@@ -62,7 +142,374 @@ shift 2>/dev/null || true
 
 case "$CMD" in
 
-  # --- Sub-claude compatible commands ---
+  # ==========================================================================
+  # OBSERVE — see what agents are doing
+  # ==========================================================================
+
+  ls|list)
+    # List sessions in a human-readable table
+    SHOW_ALL=false
+    SHOW_JSON=false
+    FILTER_STATUS=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --all|-a) SHOW_ALL=true; shift ;;
+        --json|-j) SHOW_JSON=true; shift ;;
+        --processing) FILTER_STATUS="processing"; shift ;;
+        --idle) FILTER_STATUS="idle"; shift ;;
+        --fresh) FILTER_STATUS="fresh"; shift ;;
+        *) echo "Unknown flag: $1" >&2; exit 1 ;;
+      esac
+    done
+
+    RESULT=$(send_api '{"type":"get-sessions","id":1}')
+    check_error "$RESULT"
+
+    if $SHOW_JSON; then
+      echo "$RESULT" | jq '.sessions'
+      exit 0
+    fi
+
+    # Also fetch pool health for slot index mapping
+    POOL_RESULT=$(send_api '{"type":"pool-health","id":1}' 2>/dev/null) || POOL_RESULT='{}'
+
+    echo "$RESULT" | jq -r --arg all "$SHOW_ALL" --arg filter "$FILTER_STATUS" --argjson pool "$POOL_RESULT" '
+      # Build sessionId→slotIndex map from pool health
+      ($pool | .health?.slots // [] | map({(.sessionId // ""): .index}) | add // {}) as $slotMap |
+      .sessions
+      | if $all == "false" then [.[] | select(.status != "archived")] else . end
+      | if $filter != "" then [.[] | select(.status == $filter)] else . end
+      | if length == 0 then "No sessions found." else
+        (["SLOT", "STATUS", "ORIGIN", "PROJECT", "INTENTION", "SESSION_ID"] | @tsv),
+        "---\t---\t---\t---\t---\t---",
+        (.[] |
+          ($slotMap[.sessionId] // null) as $slot |
+          [
+            (if $slot != null then ("@" + ($slot | tostring)) else "-" end),
+            .status,
+            (.origin // "?"),
+            (.project // "-"),
+            (if .intentionHeading then (.intentionHeading | .[0:50]) else "-" end),
+            (.sessionId | .[0:8])
+          ] | @tsv
+        )
+      end
+    ' | column -t -s $'\t'
+    ;;
+
+  screen)
+    # Show what is currently on an agent's terminal screen (ANSI-stripped)
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    RAW=false
+    [[ "${2:-}" == "--raw" ]] && RAW=true
+
+    resolve_target "$TARGET"
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"slot-read\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
+    else
+      json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    fi
+    RESULT=$(send_api "$json")
+
+    # Check if session is external (not in pool)
+    ERR=$(echo "$RESULT" | jq -r '.error // empty' 2>/dev/null) || true
+    if [[ -n "$ERR" && "$ERR" == *"No slot found"* ]]; then
+      echo "Error: session $RESOLVED_VALUE is external (not managed by the pool)." >&2
+      echo "Only pool sessions have readable terminal buffers." >&2
+      echo "Use 'cockpit-cli log $TARGET' to read its conversation history instead." >&2
+      exit 1
+    fi
+    check_error "$RESULT"
+    BUFFER=$(json_field "$RESULT" "buffer")
+
+    if $RAW; then
+      printf '%s' "$BUFFER"
+    else
+      printf '%s' "$BUFFER" | strip_ansi
+    fi
+    ;;
+
+  watch)
+    # Follow an agent's terminal output in real-time (polls every 1s)
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    INTERVAL="${2:-1}"
+
+    resolve_target "$TARGET"
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"slot-read\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
+    else
+      json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    fi
+
+    # Verify session is accessible before entering loop
+    FIRST=$(send_api "$json" 2>/dev/null) || { echo "Error: cannot connect to API" >&2; exit 1; }
+    FIRST_ERR=$(echo "$FIRST" | jq -r '.error // empty' 2>/dev/null) || true
+    if [[ -n "$FIRST_ERR" && "$FIRST_ERR" == *"No slot found"* ]]; then
+      echo "Error: session is external (not managed by the pool). Cannot watch terminal." >&2
+      echo "Use 'cockpit-cli log $TARGET' to read conversation history instead." >&2
+      exit 1
+    fi
+    [[ -n "$FIRST_ERR" ]] && { echo "Error: $FIRST_ERR" >&2; exit 1; }
+
+    echo "Watching ${RESOLVED_TYPE}=${RESOLVED_VALUE} (Ctrl+C to stop)..." >&2
+    # Use node for robust line-based diffing (handles buffer wraps/scrolls)
+    node -e '
+      const net = require("net");
+      const interval = parseInt(process.argv[1]) * 1000;
+      const json = process.argv[2];
+      const sock = process.argv[3];
+
+      function stripAnsi(s) {
+        return s
+          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+          .replace(/\x1b\][^\x07]*\x07/g, "")
+          .replace(/\x1b[()][AB012]/g, "")
+          .replace(/\x1b\[?\??[0-9;]*[a-zA-Z]/g, "")
+          .replace(/\x1b[>=]/g, "")
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n");
+      }
+
+      function query() {
+        return new Promise((resolve, reject) => {
+          let buf = "";
+          const c = net.createConnection(sock);
+          c.on("connect", () => c.write(json + "\n"));
+          c.on("data", d => {
+            buf += d;
+            const i = buf.indexOf("\n");
+            if (i !== -1) { c.destroy(); resolve(buf.slice(0, i)); }
+          });
+          c.on("error", reject);
+          setTimeout(() => { c.destroy(); reject(new Error("timeout")); }, 5000);
+        });
+      }
+
+      let prevLines = [];
+      async function poll() {
+        try {
+          const resp = JSON.parse(await query());
+          if (resp.error) { process.stderr.write("Error: " + resp.error + "\n"); process.exit(1); }
+          const raw = resp.buffer || "";
+          const clean = stripAnsi(raw).split("\n").map(l => l.trimEnd());
+
+          if (prevLines.length === 0) {
+            // First poll: print everything
+            process.stdout.write(clean.join("\n") + "\n");
+          } else {
+            // Find longest suffix of prevLines that matches a suffix of clean
+            // This handles both appended lines AND buffer scroll/wrap
+            let matchLen = 0;
+            for (let tryLen = Math.min(prevLines.length, clean.length); tryLen > 0; tryLen--) {
+              const prevSuffix = prevLines.slice(-tryLen).join("\n");
+              // Search for this suffix in clean
+              for (let start = 0; start <= clean.length - tryLen; start++) {
+                if (clean.slice(start, start + tryLen).join("\n") === prevSuffix) {
+                  const newStart = start + tryLen;
+                  if (newStart < clean.length) {
+                    matchLen = tryLen;
+                    const newLines = clean.slice(newStart);
+                    process.stdout.write(newLines.join("\n") + "\n");
+                  }
+                  // Found best match
+                  prevLines = clean;
+                  return;
+                }
+              }
+            }
+            // No overlap found — buffer completely changed, print all
+            if (matchLen === 0 && clean.join("\n") !== prevLines.join("\n")) {
+              process.stdout.write("\n--- buffer changed ---\n" + clean.join("\n") + "\n");
+            }
+          }
+          prevLines = clean;
+        } catch (e) {
+          process.stderr.write("Connection lost: " + e.message + "\n");
+          process.exit(1);
+        }
+      }
+
+      poll();
+      setInterval(poll, interval);
+    ' "$INTERVAL" "$json" "$SOCKET"
+    ;;
+
+  log)
+    # Read conversation history from JSONL transcript
+    TARGET="${1:?target required (sessionId or prefix)}"
+    TAIL_N="${2:-20}"
+    resolve_target "$TARGET"
+
+    JSONL_PATH=$(find_jsonl "$RESOLVED_VALUE")
+    if [[ -z "$JSONL_PATH" ]]; then
+      echo "Error: no transcript found for session $RESOLVED_VALUE" >&2
+      exit 1
+    fi
+
+    tail -"$TAIL_N" "$JSONL_PATH" | jq -r '
+      if .type == "user" then
+        (.message.content // .message) as $c |
+        if ($c | type) == "string" then
+          if ($c | length) > 0 then "\n>>> USER:\n" + $c else empty end
+        elif ($c | type) == "array" then
+          ([.message.content[] | select(.type == "text") | .text] | join("\n")) as $text |
+          if ($text | length) > 0 then "\n>>> USER:\n" + $text else empty end
+        else
+          empty
+        end
+      elif .type == "assistant" then
+        (.message.content // []) as $c |
+        if ($c | type) == "array" then
+          ($c | map(select(.type == "text") | .text) | join("\n")) as $text |
+          if ($text | length) > 0 then "\n<<< ASSISTANT:\n" + $text else empty end
+        else
+          empty
+        end
+      else
+        empty
+      end
+    '
+    ;;
+
+  intention)
+    # Read or write a session's intention file
+    TARGET="${1:?target required (sessionId or prefix)}"
+    resolve_target "$TARGET"
+
+    if [[ $# -ge 2 ]]; then
+      # Write mode
+      shift
+      CONTENT="$*"
+      CONTENT_JSON=$(printf '%s' "$CONTENT" | jq -Rs .)
+      json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"content\":$CONTENT_JSON}"
+      RESULT=$(send_api "$json")
+      check_error "$RESULT"
+      echo "Intention updated."
+    else
+      # Read mode
+      json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+      RESULT=$(send_api "$json")
+      check_error "$RESULT"
+      json_field "$RESULT" "content"
+    fi
+    ;;
+
+  # ==========================================================================
+  # INTERACT — send prompts and keystrokes to agents
+  # ==========================================================================
+
+  prompt)
+    # Send a prompt to an idle session (high-level, handles timing)
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    shift
+    BLOCK=false
+    PROMPT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --block) BLOCK=true; shift ;;
+        *) PROMPT="$1"; shift ;;
+      esac
+    done
+    if [[ -z "$PROMPT" ]]; then
+      echo "Usage: cockpit-cli prompt <target> <text> [--block]" >&2
+      exit 1
+    fi
+
+    resolve_target "$TARGET"
+    PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
+
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      # Get sessionId from slot
+      json="{\"type\":\"slot-status\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
+      SLOT_RESULT=$(send_api "$json")
+      check_error "$SLOT_RESULT"
+      SID=$(echo "$SLOT_RESULT" | jq -r '.slot.sessionId // empty')
+      if [[ -z "$SID" ]]; then
+        echo "Error: slot $RESOLVED_VALUE has no session" >&2
+        exit 1
+      fi
+    else
+      SID="$RESOLVED_VALUE"
+    fi
+
+    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SID\",\"prompt\":$PROMPT_JSON}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+
+    if $BLOCK; then
+      echo "$SID" >&2
+      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SID\",\"timeout\":300000}"
+      WAIT_RESULT=$(send_api "$wait_json" 310)
+      check_error "$WAIT_RESULT"
+      json_field "$WAIT_RESULT" "buffer" | strip_ansi
+    else
+      echo "Prompt sent to $SID"
+    fi
+    ;;
+
+  type)
+    # Type text into a session's terminal (interprets escape sequences)
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    TEXT="${2:?text required}"
+    TEXT=$(printf '%b' "$TEXT")
+
+    resolve_target "$TARGET"
+    DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"slot-write\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE,\"data\":$DATA_JSON}"
+    else
+      json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"data\":$DATA_JSON}"
+    fi
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    echo "Typed into $TARGET"
+    ;;
+
+  key)
+    # Send a named key to a session's terminal
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    KEY="${2:?key name required (enter, escape, ctrl-c, ctrl-u, ctrl-d, tab, up, down, left, right)}"
+
+    resolve_target "$TARGET"
+
+    case "$KEY" in
+      enter|return) DATA=$'\r' ;;
+      escape|esc)   DATA=$'\x1b' ;;
+      ctrl-c)       DATA=$'\x03' ;;
+      ctrl-d)       DATA=$'\x04' ;;
+      ctrl-u)       DATA=$'\x15' ;;
+      ctrl-l)       DATA=$'\x0c' ;;
+      ctrl-a)       DATA=$'\x01' ;;
+      ctrl-e)       DATA=$'\x05' ;;
+      ctrl-z)       DATA=$'\x1a' ;;
+      tab)          DATA=$'\t' ;;
+      backspace)    DATA=$'\x7f' ;;
+      up)           DATA=$'\x1b[A' ;;
+      down)         DATA=$'\x1b[B' ;;
+      right)        DATA=$'\x1b[C' ;;
+      left)         DATA=$'\x1b[D' ;;
+      *)
+        echo "Unknown key: $KEY" >&2
+        echo "Available: enter, escape, ctrl-c, ctrl-d, ctrl-u, ctrl-l, ctrl-a, ctrl-e, ctrl-z, tab, backspace, up, down, left, right" >&2
+        exit 1
+        ;;
+    esac
+
+    DATA_JSON=$(printf '%s' "$DATA" | jq -Rs .)
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"slot-write\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE,\"data\":$DATA_JSON}"
+    else
+      json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"data\":$DATA_JSON}"
+    fi
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    echo "Sent $KEY to $TARGET"
+    ;;
+
+  # ==========================================================================
+  # SESSION COMMANDS (sub-claude compatible)
+  # ==========================================================================
 
   start)
     BLOCK=false
@@ -220,7 +667,9 @@ case "$CMD" in
     echo "Cleaned $COUNT session(s)"
     ;;
 
-  # --- Pool management subcommand ---
+  # ==========================================================================
+  # POOL MANAGEMENT
+  # ==========================================================================
 
   pool)
     SUBCMD="${1:?subcommand required (init|status|resize|destroy)}"
@@ -260,7 +709,9 @@ case "$CMD" in
     esac
     ;;
 
-  # --- Slot subcommand (direct slot access by index) ---
+  # ==========================================================================
+  # SLOT ACCESS (by index)
+  # ==========================================================================
 
   slot)
     SUBCMD="${1:?subcommand required (read|write|status)}"
@@ -299,7 +750,9 @@ case "$CMD" in
     esac
     ;;
 
-  # --- Legacy flat commands (backward compatible) ---
+  # ==========================================================================
+  # LEGACY FLAT COMMANDS (backward compatible)
+  # ==========================================================================
 
   pool-init)    SIZE="${1:-5}"; validate_int "$SIZE" "pool size"; json="{\"type\":\"pool-init\",\"id\":1,\"size\":$SIZE}"; RESULT=$(send_api "$json" 120); check_error "$RESULT"; echo "$RESULT" ;;
   pool-resize)  SIZE="${1:?size required}"; validate_int "$SIZE" "pool size"; json="{\"type\":\"pool-resize\",\"id\":1,\"size\":$SIZE}"; RESULT=$(send_api "$json" 120); check_error "$RESULT"; echo "$RESULT" ;;
@@ -316,51 +769,96 @@ case "$CMD" in
   pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
   ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
 
+  # ==========================================================================
+  # HELP
+  # ==========================================================================
+
   help|*)
     [[ "$CMD" != "help" ]] && echo "Unknown command: $CMD" >&2
     cat >&2 <<'USAGE'
 Usage: cockpit-cli <command> [args...]
 
-Session commands (sub-claude compatible):
-  start <prompt> [--block]     Send prompt to fresh slot, return session ID
-  resume <id> [--block]        Resume offloaded/archived session into fresh slot
+Targets: Most commands accept a <target> which can be:
+  • Full session ID (UUID)        e.g. 2947bf12-d307-499c-b50c-719f253a0e54
+  • Session ID prefix             e.g. 2947b (auto-resolves if unique)
+  • Slot index with @ prefix      e.g. @0, @3
+
+─── OBSERVE ─────────────────────────────────────────────────────────────────
+
+  ls [--all] [--json]            List live sessions (table format)
+    --all/-a                     Include archived sessions
+    --json/-j                    Output raw JSON
+    --processing/--idle/--fresh  Filter by status
+
+  screen <target> [--raw]        Show agent's current terminal screen
+                                 Strips ANSI by default; --raw keeps it
+
+  watch <target> [interval]      Follow agent's output in real-time
+                                 Polls every [interval] seconds (default: 1)
+
+  log <target> [n]               Show last [n] conversation turns (default: 20)
+                                 Reads JSONL transcript, shows user/assistant
+
+  intention <target>             Read a session's intention file
+  intention <target> <text>      Write a session's intention file
+
+─── INTERACT ────────────────────────────────────────────────────────────────
+
+  prompt <target> <text> [--block]  Send a prompt to an idle session
+                                    --block waits for completion, prints result
+
+  type <target> <text>           Type text into terminal (interprets \r, \n, etc.)
+  key <target> <keyname>         Send a named key:
+                                   enter, escape, ctrl-c, ctrl-d, ctrl-u,
+                                   ctrl-l, ctrl-a, ctrl-e, ctrl-z,
+                                   tab, backspace, up, down, left, right
+
+─── SESSION COMMANDS (sub-claude compatible) ────────────────────────────────
+
+  start <prompt> [--block]       Send prompt to fresh slot, return session ID
+  resume <id> [--block]          Resume offloaded/archived session
   followup <id> <prompt> [--block]  Follow up on idle session
-  wait [id]                    Wait for session to finish, print output
-  capture <id>                 Show live terminal content
-  capture --slot <index>       Show live terminal content by slot index
-  result <id>                  Print output (error if still running)
-  result --slot <index>        Print output by slot index
-  input <id> <text>            Send raw input to terminal
-  input --slot <index> <text>  Send raw input by slot index
-  clean                        Free slots occupied by finished sessions
+  wait [id]                      Wait for session to finish, print output
+  capture <id|--slot N>          Show live terminal content (raw)
+  result <id|--slot N>           Print output (error if still running)
+  input <id|--slot N> <text>     Send raw input to terminal
+  clean                          Free slots occupied by finished sessions
 
-Pool management:
-  pool init [size]             Initialize pool (default: 5)
-  pool status                  Pool health report
-  pool resize <size>           Resize pool
-  pool destroy                 Destroy pool
+─── POOL MANAGEMENT ─────────────────────────────────────────────────────────
 
-Slot access (by index, works even without sessionId):
-  slot read <index>            Read terminal buffer
-  slot write <index> <data>    Write to terminal
-  slot status <index>          Slot details (status, sessionId, termId, pid)
+  pool init [size]               Initialize pool (default: 5)
+  pool status                    Pool health report (JSON)
+  pool resize <size>             Resize pool
+  pool destroy                   Destroy pool and kill all slots
 
-Low-level:
-  ping                         Health check
-  get-sessions                 List all sessions
-  read-intention <sessionId>   Read intention file
-  write-intention <id> <text>  Write intention file
-  pty-list                     List terminals
-  pty-write <termId> <data>    Write to terminal
-  pty-read <termId>            Read terminal buffer
-  pty-spawn <cwd> <cmd> [args] Spawn terminal
-  pty-kill <termId>            Kill terminal
+─── SLOT ACCESS ─────────────────────────────────────────────────────────────
 
-Output contract:
-  start:         session ID to stdout
-  start --block: output to stdout, session ID to stderr
-  wait:          terminal output to stdout
-  capture:       live terminal content to stdout
+  slot read <index>              Read terminal buffer
+  slot write <index> <data>      Write to terminal (interprets escape sequences)
+  slot status <index>            Slot details (status, sessionId, termId, pid)
+
+─── LOW-LEVEL ───────────────────────────────────────────────────────────────
+
+  ping                           Health check
+  get-sessions                   List all sessions (raw JSON)
+  read-intention <id>            Read intention file (raw JSON)
+  write-intention <id> <text>    Write intention file
+  pty-list                       List all terminals
+  pty-read <termId>              Read terminal buffer
+  pty-write <termId> <data>      Write to terminal
+  pty-spawn <cwd> <cmd> [args]   Spawn terminal
+  pty-kill <termId>              Kill terminal
+
+─── EXAMPLES ────────────────────────────────────────────────────────────────
+
+  cockpit-cli ls                              # See all live sessions
+  cockpit-cli ls --processing                 # See which agents are working
+  cockpit-cli screen @2                       # See slot 2's terminal
+  cockpit-cli watch 2947b                     # Follow agent output live
+  cockpit-cli log 2947b                       # Read conversation history
+  cockpit-cli prompt 2947b "add error handling" --block  # Send prompt, wait
+  cockpit-cli key @0 ctrl-c                   # Send Ctrl+C to slot 0
+  cockpit-cli type @1 'hello\r'               # Type "hello" + Enter
 USAGE
     [[ "$CMD" != "help" ]] && exit 1
     exit 0

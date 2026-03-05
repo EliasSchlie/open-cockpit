@@ -13,7 +13,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
-- `bin/cockpit-cli` — CLI helper with sub-claude-compatible commands (start, followup, wait, capture, result, input, clean) + pool management + legacy API commands
+- `bin/cockpit-cli` — CLI for observing and interacting with agents. High-level commands (`ls`, `screen`, `watch`, `log`, `prompt`, `key`, `type`) + sub-claude-compatible commands + pool management ([docs/api.md](docs/api.md))
 - `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection, intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
 - `.github/workflows/auto-release.yml` — CI auto-bumps version + updates marketplace on push
