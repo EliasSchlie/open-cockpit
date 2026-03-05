@@ -3,4 +3,4 @@ set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-source "$HOME/.config/git-hooks/pre-commit-base.sh"
+[ -f "$HOME/.config/git-hooks/pre-commit-base.sh" ] && source "$HOME/.config/git-hooks/pre-commit-base.sh" || true
