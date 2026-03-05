@@ -128,9 +128,15 @@ function buildDecorations(view) {
   const tree = syntaxTree(state);
   const processedLines = new Set();
   let orderedIndex = 0;
+  let linkDepth = 0;
+  const isLinkContainer = (n) => n === "Link" || n === "Image";
 
   tree.iterate({
+    leave(node) {
+      if (isLinkContainer(node.name)) linkDepth--;
+    },
     enter(node) {
+      if (isLinkContainer(node.name)) linkDepth++;
       const line = state.doc.lineAt(node.from);
       const isActive = activeLines.has(line.number);
 
@@ -199,7 +205,8 @@ function buildDecorations(view) {
       if (node.name === "LinkMark" && node.from < node.to) {
         decorations.push(Decoration.replace({}).range(node.from, node.to));
       }
-      if (node.name === "URL" && node.from < node.to) {
+      // Only hide URL nodes inside Link/Image (e.g. [text](url)), not standalone bare URLs
+      if (node.name === "URL" && node.from < node.to && linkDepth > 0) {
         decorations.push(Decoration.replace({}).range(node.from, node.to));
       }
 
@@ -209,7 +216,12 @@ function buildDecorations(view) {
           Decoration.mark({ class: styleClass }).range(node.from, node.to),
         );
       }
-      if (node.name === "Link" && node.from < node.to) {
+      if (
+        (node.name === "Link" ||
+          node.name === "Autolink" ||
+          (node.name === "URL" && linkDepth === 0)) &&
+        node.from < node.to
+      ) {
         decorations.push(
           Decoration.mark({ class: "cm-md-link" }).range(node.from, node.to),
         );
