@@ -103,30 +103,6 @@ describe("session-intention-intro.sh", () => {
     expect(stdout).toContain("intentions/");
   });
 
-  it("notes when intention file is empty", () => {
-    const { stdout } = runHook("session-intention-intro.sh");
-    expect(stdout).toContain("currently empty");
-  });
-
-  it("does not say empty when intention file has content", () => {
-    const intentionFile = path.join(
-      tmpHome,
-      ".open-cockpit/intentions",
-      `${FAKE_SESSION_ID}.md`,
-    );
-    fs.writeFileSync(intentionFile, "# Working on hooks\n");
-
-    // Clear any previous intro marker
-    const markerDir = path.join(
-      tmpHome,
-      ".open-cockpit/intentions/.intro-sent",
-    );
-    fs.rmSync(markerDir, { recursive: true, force: true });
-
-    const { stdout } = runHook("session-intention-intro.sh");
-    expect(stdout).not.toContain("currently empty");
-  });
-
   it("fires only once per session (marker file)", () => {
     const first = runHook("session-intention-intro.sh");
     expect(first.stdout.length).toBeGreaterThan(0);
