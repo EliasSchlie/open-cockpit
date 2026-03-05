@@ -34,9 +34,9 @@ if [ ! -f "$SNAPSHOT_FILE" ]; then
   exit 0
 fi
 
-# Compare current file to snapshot
-if ! diff -q "$SNAPSHOT_FILE" "$INTENTION_FILE" >/dev/null 2>&1; then
-  DIFF=$(diff -u "$SNAPSHOT_FILE" "$INTENTION_FILE" --label "previous" --label "current" || true)
+# Compare current file to snapshot (single diff call, check exit code)
+DIFF=$(diff -u "$SNAPSHOT_FILE" "$INTENTION_FILE" --label "previous" --label "current" 2>/dev/null) || true
+if [ -n "$DIFF" ]; then
   cp "$INTENTION_FILE" "$SNAPSHOT_FILE"
   cat <<EOF
 The user updated their intention file ($INTENTION_FILE):

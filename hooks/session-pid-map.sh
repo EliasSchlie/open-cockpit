@@ -10,8 +10,10 @@ set -euo pipefail
 SESSION_DIR="$HOME/.claude/session-pids"
 mkdir -p "$SESSION_DIR"
 
-# Read session_id from JSON stdin (async hooks may omit trailing newline)
-session_id=$(python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null) || true
+# Read session_id from JSON stdin (avoid python3 startup overhead)
+input=""
+read -t 1 -r input 2>/dev/null || true
+session_id=$(echo "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') || true
 
 [ -z "$session_id" ] && exit 0
 

@@ -38,6 +38,20 @@ let mainWindow = null;
 // Cache origin per PID (never changes during a process's lifetime)
 const originCache = new Map();
 
+// Cache getSessions() results with TTL to avoid redundant subprocess calls
+let sessionsCache = null;
+let sessionsCacheTs = 0;
+const SESSIONS_CACHE_TTL = 2000; // 2 seconds
+
+// Cache CWD from JSONL (sessionId -> cwd, rarely changes)
+const cwdFromJsonlCache = new Map();
+
+// Cache git root lookups (cwd -> gitRoot)
+const gitRootCache = new Map();
+
+// Cache hasUserInput results (transcript -> true, once true stays true)
+const userInputCache = new Map();
+
 // Detect session origin by reading process environment via ps eww (macOS)
 function detectOrigin(pid) {
   if (originCache.has(String(pid))) return originCache.get(String(pid));
@@ -118,11 +132,12 @@ function createWindow() {
 }
 
 function getCwdFromJsonl(sessionId) {
+  if (cwdFromJsonlCache.has(sessionId)) return cwdFromJsonlCache.get(sessionId);
   try {
     const jsonlPath = execFileSync(
       "find",
       [CLAUDE_PROJECTS_DIR, "-name", `${sessionId}.jsonl`],
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], timeout: 5000 },
     )
       .split("\n")[0]
       .trim();
@@ -130,6 +145,7 @@ function getCwdFromJsonl(sessionId) {
 
     const tail = execFileSync("tail", ["-100", jsonlPath], {
       encoding: "utf-8",
+      timeout: 3000,
     });
     let cwd = "";
     for (const line of tail.split("\n")) {
@@ -139,7 +155,9 @@ function getCwdFromJsonl(sessionId) {
         if (obj.cwd) cwd = obj.cwd;
       } catch {}
     }
-    return cwd || null;
+    const result = cwd || null;
+    if (result) cwdFromJsonlCache.set(sessionId, result);
+    return result;
   } catch {
     return null;
   }
@@ -170,6 +188,7 @@ function getIdleSignal(pid) {
 // Uses the transcript path from the idle signal to avoid a `find` call.
 function hasUserInput(transcriptPath) {
   if (!transcriptPath) return false;
+  if (userInputCache.get(transcriptPath)) return true;
   try {
     // Read in chunks — check early lines first (human turns appear near the start)
     const fd = fs.openSync(transcriptPath, "r");
@@ -179,7 +198,10 @@ function hasUserInput(transcriptPath) {
     const needle = '"type":"user"';
     try {
       while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, offset)) > 0) {
-        if (buf.toString("utf-8", 0, bytesRead).includes(needle)) return true;
+        if (buf.toString("utf-8", 0, bytesRead).includes(needle)) {
+          userInputCache.set(transcriptPath, true);
+          return true;
+        }
         offset += bytesRead;
       }
     } finally {
@@ -220,10 +242,52 @@ function getOffloadedSessions() {
   return sessions;
 }
 
-function getSessions() {
+function findGitRoot(cwd) {
+  if (!cwd) return null;
+  if (gitRootCache.has(cwd)) return gitRootCache.get(cwd);
+  let dir = cwd;
+  while (dir !== path.dirname(dir)) {
+    const dotGit = path.join(dir, ".git");
+    try {
+      if (fs.statSync(dotGit).isDirectory()) {
+        gitRootCache.set(cwd, dir);
+        return dir;
+      }
+    } catch {}
+    dir = path.dirname(dir);
+  }
+  gitRootCache.set(cwd, null);
+  return null;
+}
+
+// Batch lsof: get CWDs for all PIDs in one call
+function batchGetCwds(pids) {
+  const cwdMap = new Map();
+  if (pids.length === 0) return cwdMap;
+  try {
+    const lsof = execFileSync(
+      "lsof",
+      ["-a", "-p", pids.join(","), "-d", "cwd", "-F", "pn"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], timeout: 5000 },
+    );
+    // Parse lsof -F pn output: lines starting with 'p' = PID, 'n' = path
+    let currentPid = null;
+    for (const line of lsof.split("\n")) {
+      if (line.startsWith("p")) {
+        currentPid = line.slice(1);
+      } else if (line.startsWith("n") && currentPid) {
+        cwdMap.set(currentPid, line.slice(1));
+      }
+    }
+  } catch {}
+  return cwdMap;
+}
+
+function getSessionsUncached() {
   const sessions = [];
 
   // Live sessions from session-pids
+  const pidEntries = []; // {pid, sessionId}
   if (fs.existsSync(SESSION_PIDS_DIR)) {
     for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
       const pid = file;
@@ -240,81 +304,64 @@ function getSessions() {
         alive = false;
       }
 
-      let cwd = null;
-      if (alive) {
-        try {
-          const lsof = execFileSync(
-            "lsof",
-            ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
-            { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
-          );
-          const match = lsof.match(/^n(.+)$/m);
-          if (match) cwd = match[1];
-        } catch {}
-      }
-
-      // Refine CWD via JSONL when spawned from $HOME
-      if (cwd === os.homedir()) {
-        const refined = getCwdFromJsonl(sessionId);
-        if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
-          cwd = refined;
-        }
-      }
-
-      const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
-      const hasIntention = fs.existsSync(intentionFile);
-      const intentionHeading = hasIntention
-        ? getIntentionHeading(intentionFile)
-        : null;
-
-      // Find git root for color grouping
-      let gitRoot = null;
-      if (cwd) {
-        let dir = cwd;
-        while (dir !== path.dirname(dir)) {
-          const dotGit = path.join(dir, ".git");
-          try {
-            if (fs.statSync(dotGit).isDirectory()) {
-              gitRoot = dir;
-              break;
-            }
-          } catch {}
-          dir = path.dirname(dir);
-        }
-      }
-
-      // Determine session status: idle, processing, or fresh
-      const idleSignal = alive ? getIdleSignal(pid) : null;
-      let status;
-      let idleTs = 0;
-
-      if (!alive) {
-        status = "dead";
-      } else if (idleSignal) {
-        idleTs = idleSignal.ts || 0;
-        if (!hasUserInput(idleSignal.transcript)) {
-          status = "fresh";
-        } else {
-          status = "idle";
-        }
-      } else {
-        status = "processing";
-      }
-
-      sessions.push({
-        pid,
-        sessionId,
-        alive,
-        cwd,
-        home: os.homedir(),
-        gitRoot,
-        project: cwd ? path.basename(cwd) : null,
-        hasIntention,
-        intentionHeading,
-        status,
-        idleTs,
-      });
+      pidEntries.push({ pid, sessionId, alive });
     }
+  }
+
+  // Batch lsof for all alive PIDs (single subprocess instead of N)
+  const alivePids = pidEntries.filter((e) => e.alive).map((e) => e.pid);
+  const cwdMap = batchGetCwds(alivePids);
+
+  for (const { pid, sessionId, alive } of pidEntries) {
+    let cwd = alive ? cwdMap.get(String(pid)) || null : null;
+
+    // Refine CWD via JSONL when spawned from $HOME
+    if (cwd === os.homedir()) {
+      const refined = getCwdFromJsonl(sessionId);
+      if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
+        cwd = refined;
+      }
+    }
+
+    const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+    const hasIntention = fs.existsSync(intentionFile);
+    const intentionHeading = hasIntention
+      ? getIntentionHeading(intentionFile)
+      : null;
+
+    const gitRoot = findGitRoot(cwd);
+
+    // Determine session status: idle, processing, or fresh
+    const idleSignal = alive ? getIdleSignal(pid) : null;
+    let status;
+    let idleTs = 0;
+
+    if (!alive) {
+      status = "dead";
+    } else if (idleSignal) {
+      idleTs = idleSignal.ts || 0;
+      if (!hasUserInput(idleSignal.transcript)) {
+        status = "fresh";
+      } else {
+        status = "idle";
+      }
+    } else {
+      status = "processing";
+    }
+
+    sessions.push({
+      pid,
+      sessionId,
+      alive,
+      cwd,
+      home: os.homedir(),
+      gitRoot,
+      project: cwd ? path.basename(cwd) : null,
+      hasIntention,
+      intentionHeading,
+      status,
+      idleTs,
+    });
   }
 
   // Deduplicate: if multiple PIDs map to the same sessionId, keep the best one
@@ -354,19 +401,7 @@ function getSessions() {
     if (!fs.existsSync(offloadDir)) {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || getCwdFromJsonl(s.sessionId);
-      let gitRoot = s.gitRoot;
-      if (cwd && !gitRoot) {
-        let dir = cwd;
-        while (dir !== path.dirname(dir)) {
-          try {
-            if (fs.statSync(path.join(dir, ".git")).isDirectory()) {
-              gitRoot = dir;
-              break;
-            }
-          } catch {}
-          dir = path.dirname(dir);
-        }
-      }
+      let gitRoot = s.gitRoot || findGitRoot(cwd);
 
       fs.mkdirSync(offloadDir, { recursive: true });
       const meta = {
@@ -423,6 +458,22 @@ function getSessions() {
   }
 
   return sortSessions(sessions);
+}
+
+function getSessions() {
+  const now = Date.now();
+  if (sessionsCache && now - sessionsCacheTs < SESSIONS_CACHE_TTL) {
+    return sessionsCache;
+  }
+  sessionsCache = getSessionsUncached();
+  sessionsCacheTs = now;
+  return sessionsCache;
+}
+
+// Invalidate sessions cache (call after mutations like offload, pool changes)
+function invalidateSessionsCache() {
+  sessionsCache = null;
+  sessionsCacheTs = 0;
 }
 
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
@@ -623,6 +674,7 @@ function readPool() {
 
 function writePool(pool) {
   writePoolFile(POOL_FILE, pool);
+  invalidateSessionsCache();
 }
 
 // Poll a terminal's buffer for the trust prompt and send Enter to accept it.

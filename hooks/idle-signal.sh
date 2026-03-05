@@ -27,6 +27,11 @@ read_input() {
     fi
 }
 
+# Extract a JSON string value using sed (avoids python3 startup overhead)
+json_get() {
+    echo "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
 case "${1:-}" in
     write)
         trigger="${2:-unknown}"
@@ -34,30 +39,25 @@ case "${1:-}" in
         session_id=""
         transcript=""
         if [ -n "$input" ]; then
-            # Parse both fields in a single python3 call
-            parsed=$(echo "$input" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id','')+'|'+d.get('transcript_path',''))" 2>/dev/null) || true
-            session_id="${parsed%%|*}"
-            transcript="${parsed#*|}"
+            session_id=$(json_get "$input" "session_id")
+            transcript=$(json_get "$input" "transcript_path")
         fi
 
-        # Use env vars to avoid shell injection in python3 string interpolation
-        IDLE_CWD="$(pwd)" IDLE_SID="$session_id" IDLE_TR="$transcript" IDLE_TRIG="$trigger" \
-        python3 -c "
-import json, time, os
-d = {'cwd': os.environ['IDLE_CWD'], 'session_id': os.environ['IDLE_SID'],
-     'transcript': os.environ['IDLE_TR'], 'ts': int(time.time()),
-     'trigger': os.environ['IDLE_TRIG']}
-print(json.dumps(d))
-" > "$signal_file"
+        # Escape JSON string values (handle \, ", and control chars)
+        json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'; }
+
+        # Write signal file as JSON
+        printf '{"cwd":"%s","session_id":"%s","transcript":"%s","ts":%d,"trigger":"%s"}\n' \
+            "$(json_esc "$(pwd)")" "$(json_esc "$session_id")" "$(json_esc "$transcript")" "$(date +%s)" "$(json_esc "$trigger")" > "$signal_file"
 
         # Block detection (Stop only): wait, then verify the session didn't continue.
         # Another Stop hook may have blocked → Claude gets re-prompted → not idle.
         if [ "$trigger" = "stop" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
-            saved_mtime=$(F="$transcript" python3 -c "import os; print(int(os.path.getmtime(os.environ['F'])))" 2>/dev/null || echo 0)
+            saved_mtime=$(stat -f '%m' "$transcript" 2>/dev/null || echo 0)
             sleep 1
             # If signal was already cleared by UserPromptSubmit/PostToolUse, stop
             [ -f "$signal_file" ] || exit 0
-            current_mtime=$(F="$transcript" python3 -c "import os; print(int(os.path.getmtime(os.environ['F'])))" 2>/dev/null || echo 0)
+            current_mtime=$(stat -f '%m' "$transcript" 2>/dev/null || echo 0)
             if [ "$current_mtime" -gt "$saved_mtime" ]; then
                 # JSONL was modified after signal → session continued → not idle
                 rm -f "$signal_file"
