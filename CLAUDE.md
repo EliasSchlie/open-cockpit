@@ -130,6 +130,8 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - **Main process changes** (`main.js`, `preload.js`): kill and restart your dev instance (see commands above). Terminals survive (daemon keeps them alive).
 - **Daemon changes** (`pty-daemon.js`): kill daemon (`kill $(cat ~/.open-cockpit/pty-daemon.pid)`), then restart app. This kills all terminals.
 
+> ⚠️ **Avoid restarting the production instance** (`npm start`) unless the user explicitly asks. Restarting disrupts all active sessions. For testing, use `npm run dev` instead. If you must restart production, confirm with the user first.
+
 ## Further docs
 
 - [docs/pty-daemon.md](docs/pty-daemon.md) — PTY daemon architecture, protocol, debugging
