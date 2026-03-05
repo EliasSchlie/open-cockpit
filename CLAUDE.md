@@ -28,7 +28,7 @@ The app can manage a pool of pre-started Claude sessions. Pool state lives in `~
 - **Archiving**: Dead sessions with intention files are auto-archived (meta.json without snapshot) and resumable.
 - **Destroy**: `pool-destroy` kills all slots and removes `pool.json`. Uses `killSlotProcess()` (daemon + PID fallback) to prevent orphans.
 - **Write locking**: All pool.json read-modify-write cycles use `withPoolLock()` to prevent concurrent write races.
-- **Settings UI**: Auto-refreshes every 3s. Clicking a slot row opens a read-only terminal popup showing the live PTY.
+- **Settings UI**: Auto-refreshes every 3s. Clicking a slot row opens an interactive terminal popup attached to the live PTY.
 
 ### Plugin update → pool reinit
 

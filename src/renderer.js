@@ -1800,7 +1800,7 @@ refreshBtn.addEventListener("click", async () => {
   loadSessions();
 });
 
-// --- Slot Terminal Popup ---
+// --- Slot Terminal Popup (interactive) ---
 async function openSlotTerminalPopup(slot) {
   // Don't open popup for dead/unknown slots — no terminal to attach to
   const status = slot.healthStatus || slot.status;
@@ -1826,7 +1826,7 @@ async function openSlotTerminalPopup(slot) {
   overlay.innerHTML = `
     <div class="slot-terminal-dialog">
       <div class="slot-terminal-header">
-        <span class="slot-terminal-title">${label} <span class="slot-terminal-readonly">read-only</span></span>
+        <span class="slot-terminal-title">${label}</span>
         <button class="snapshot-close slot-terminal-close">\u2715</button>
       </div>
       <div class="slot-terminal-mount"></div>
@@ -1842,13 +1842,15 @@ async function openSlotTerminalPopup(slot) {
     theme: TERM_THEME,
     fontFamily: "'SF Mono', Menlo, monospace",
     fontSize: 13,
-    cursorBlink: false,
-    disableStdin: true,
+    cursorBlink: true,
   });
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   term.open(mountEl);
+
+  // Wire input to the PTY so the popup is interactive
+  term.onData((data) => window.api.ptyWrite(slot.termId, data));
 
   // Register in popupTerminals so global data handlers can route data here.
   // Data is forwarded to both the main terminal entry (if any) and the popup entry.
@@ -1866,9 +1868,15 @@ async function openSlotTerminalPopup(slot) {
   }
 
   // Fit after a frame so dimensions are correct
-  requestAnimationFrame(() => fitAddon.fit());
+  requestAnimationFrame(() => {
+    fitAddon.fit();
+    window.api.ptyResize(slot.termId, term.cols, term.rows);
+  });
 
-  const resizeObserver = new ResizeObserver(() => fitAddon.fit());
+  const resizeObserver = new ResizeObserver(() => {
+    fitAddon.fit();
+    window.api.ptyResize(slot.termId, term.cols, term.rows);
+  });
   resizeObserver.observe(mountEl);
 
   // Cleanup function — also stored on overlay for programmatic close
@@ -1878,7 +1886,14 @@ async function openSlotTerminalPopup(slot) {
     // Only detach if there's no other terminal entry still using this termId
     // (i.e. the session might be open in the main view)
     const otherEntry = findTerminalEntry(slot.termId);
-    if (!otherEntry) {
+    if (otherEntry) {
+      // Restore PTY size to the main tab's dimensions
+      window.api.ptyResize(
+        slot.termId,
+        otherEntry.term.cols,
+        otherEntry.term.rows,
+      );
+    } else {
       window.api.ptyDetach(slot.termId).catch(() => {});
     }
     term.dispose();
