@@ -1078,25 +1078,21 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function isFreshSlot(s) {
+  return s.status === "fresh" || s.poolStatus === "fresh";
+}
+
 // Acquire a fresh slot: prefer existing fresh, else offload LRU idle.
 // Returns the fresh session object or null if pool is fully busy.
 async function acquireFreshSlot() {
   const sessions = await window.api.getSessions();
-  const pool = await window.api.poolRead();
-  if (!pool) return null;
 
-  // Build set of pool-fresh sessionIds (pool says "fresh" even if getSessions says "processing")
-  const poolFreshIds = new Set(
-    pool.slots
-      .filter((s) => s.status === "fresh" && s.sessionId)
-      .map((s) => s.sessionId),
-  );
-
-  // 1. Prefer an existing fresh slot (by session status or pool status)
-  const freshSession = sessions.find(
-    (s) => s.status === "fresh" || poolFreshIds.has(s.sessionId),
-  );
+  // 1. Prefer an existing fresh slot (poolStatus is set by main process)
+  const freshSession = sessions.find(isFreshSlot);
   if (freshSession) return freshSession;
+
+  // No pool sessions at all — nothing to acquire from
+  if (!sessions.some((s) => s.origin === "pool")) return null;
 
   // 2. Offload the longest-unused idle session (LRU)
   const idleSessions = sessions
@@ -1112,8 +1108,9 @@ async function acquireFreshSlot() {
 
   const victim = idleSessions[0];
 
-  // Find the victim's terminal (from pool, not from renderer cache)
-  const victimSlot = pool.slots.find((s) => s.sessionId === victim.sessionId);
+  // Find the victim's terminal from pool data (need termId for offload)
+  const pool = await window.api.poolRead();
+  const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
   if (!victimSlot) return null;
 
   try {
@@ -1146,15 +1143,7 @@ async function pollForFreshSlot(timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, 500));
     const sessions = await window.api.getSessions();
-    const pool = await window.api.poolRead();
-    const poolFreshIds = new Set(
-      (pool?.slots || [])
-        .filter((s) => s.status === "fresh" && s.sessionId)
-        .map((s) => s.sessionId),
-    );
-    const fresh = sessions.find(
-      (s) => s.status === "fresh" || poolFreshIds.has(s.sessionId),
-    );
+    const fresh = sessions.find(isFreshSlot);
     if (fresh) {
       debugLog("pool", `fresh slot found: ${fresh.sessionId}`);
       return fresh;
@@ -2424,13 +2413,18 @@ COMMANDS.push({
 
 loadDirColors().then(async () => {
   await reconnectAllPtys();
-  const POLL_INTERVAL = 5000;
+  const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh
   let sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
   loadSessions();
 
   // Event-driven refresh: main process pushes (already debounced) when
-  // idle-signals/session-pids change.
-  window.api.onSessionsChanged(() => loadSessions());
+  // idle-signals/session-pids change. Reset poll timer on each event since
+  // polling only needs to kick in when events stop working.
+  window.api.onSessionsChanged(() => {
+    loadSessions();
+    clearInterval(sessionPollInterval);
+    sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
+  });
 
   // Pause polling when window is hidden to save CPU
   document.addEventListener("visibilitychange", () => {
