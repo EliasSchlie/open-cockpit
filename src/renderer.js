@@ -1988,6 +1988,9 @@ async function showPoolSettings() {
             </label>
             <button class="offload-menu-btn pool-resize-btn">Resize</button>
             <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
+            <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
+            <button class="offload-menu-btn pool-destroy-btn">Destroy</button>
+            <button class="offload-menu-btn pool-reinit-btn">Reinitialize</button>
           </div>
         `
             : `
@@ -2105,6 +2108,79 @@ async function showPoolSettings() {
       await loadDirColors();
       await loadSessions();
       showNotification("Sessions reloaded");
+    });
+  }
+
+  // Clean idle button
+  const cleanBtn = overlay.querySelector(".pool-clean-btn");
+  if (cleanBtn) {
+    cleanBtn.addEventListener("click", async () => {
+      cleanBtn.textContent = "Cleaning...";
+      cleanBtn.disabled = true;
+      try {
+        const cleaned = await window.api.poolClean();
+        showNotification(
+          `Cleaned ${cleaned} idle session${cleaned !== 1 ? "s" : ""}`,
+        );
+        await loadSessions();
+        showPoolSettings();
+      } catch (err) {
+        cleanBtn.textContent = "Clean Idle";
+        cleanBtn.disabled = false;
+        showNotification(`Error: ${err.message}`);
+      }
+    });
+  }
+
+  // Destroy button
+  const destroyBtn = overlay.querySelector(".pool-destroy-btn");
+  if (destroyBtn) {
+    destroyBtn.addEventListener("click", async () => {
+      destroyBtn.textContent = "Destroying...";
+      destroyBtn.disabled = true;
+      try {
+        await window.api.poolDestroy();
+        showNotification("Pool destroyed");
+        await loadSessions();
+        showPoolSettings();
+      } catch (err) {
+        destroyBtn.textContent = "Destroy";
+        destroyBtn.disabled = false;
+        showNotification(`Error: ${err.message}`);
+      }
+    });
+  }
+
+  // Reinitialize button (destroy + init)
+  const reinitBtn = overlay.querySelector(".pool-reinit-btn");
+  if (reinitBtn) {
+    reinitBtn.addEventListener("click", async () => {
+      const size = parseInt(
+        overlay.querySelector(".pool-size-input").value,
+        10,
+      );
+      if (isNaN(size) || size < 1 || size > 20) {
+        showNotification("Pool size must be between 1 and 20");
+        return;
+      }
+      reinitBtn.textContent = "Reinitializing...";
+      reinitBtn.disabled = true;
+      try {
+        await window.api.poolDestroy();
+      } catch (err) {
+        reinitBtn.textContent = "Reinitialize";
+        reinitBtn.disabled = false;
+        showNotification(`Destroy failed: ${err.message}`);
+        return;
+      }
+      try {
+        await window.api.poolInit(size);
+        showNotification(`Pool reinitialized (${size} slots)`);
+      } catch (err) {
+        showNotification(`Pool destroyed but re-init failed: ${err.message}`);
+      }
+      await loadSessions();
+      showPoolSettings();
     });
   }
 }
