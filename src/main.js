@@ -484,7 +484,8 @@ async function getSessionsUncached() {
         idleTs = mtime;
       } else {
         staleLoggedSessions.delete(sessionId);
-        status = "processing";
+        const jsonlPath = jsonlPathCache.get(sessionId);
+        status = hasUserInput(jsonlPath) ? "processing" : "fresh";
       }
     }
 
