@@ -6,13 +6,13 @@
 
 :root {
   --bg: #0a0a0a;
-  --bg-sidebar: #060606;
+  --bg-sidebar: #0e0e0e;
   --text: #e0e0e0;
-  --text-dim: #555555;
+  --text-dim: #808080;
   --accent: #ff1a1a;
   --accent-glow: #ff0033;
-  --accent-dim: #1a0000;
-  --border: #1a1a1a;
+  --accent-dim: #2a0808;
+  --border: #252525;
   --green: #00ff41;
   --red: #ff1a1a;
   --yellow: #ffff00;
@@ -38,12 +38,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #222;
+  background: #333;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #333;
+  background: #444;
 }
 
 #app {
@@ -174,11 +174,11 @@ body {
 
 /* Offloaded sessions are dimmed */
 .session-item.offloaded {
-  opacity: 0.55;
+  opacity: 0.65;
 }
 
 .session-item.offloaded:hover {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 /* Directory color indicator */
@@ -428,7 +428,7 @@ body {
 #command-palette-dialog {
   width: 480px;
   max-height: 400px;
-  background: #111;
+  background: #161616;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -498,7 +498,7 @@ body {
 
 .offload-menu-dialog {
   width: 360px;
-  background: #111;
+  background: #161616;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -555,7 +555,7 @@ body {
 .snapshot-dialog {
   width: 700px;
   max-height: 80vh;
-  background: #111;
+  background: #161616;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -612,7 +612,7 @@ body {
 
 .setup-script-dialog {
   width: 360px;
-  background: #111;
+  background: #161616;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -657,7 +657,7 @@ body {
 .pool-settings-dialog {
   width: 480px;
   max-height: 80vh;
-  background: #111;
+  background: #161616;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -770,7 +770,7 @@ body {
   width: 80vw;
   height: 70vh;
   max-width: 1000px;
-  background: #111;
+  background: #161616;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);

@@ -68,13 +68,13 @@ const livePreviewTheme = EditorView.theme({
   ".cm-md-code": {
     fontFamily: "'SF Mono', Menlo, monospace",
     fontSize: "13px",
-    background: "#1a1a1a",
+    background: "#252525",
     padding: "1px 5px",
     borderRadius: "3px",
     color: "#ff6666",
   },
   ".cm-md-link": { color: "#ff4444", textDecoration: "underline" },
-  ".cm-md-strikethrough": { textDecoration: "line-through", color: "#555555" },
+  ".cm-md-strikethrough": { textDecoration: "line-through", color: "#808080" },
   ".cm-md-bullet-char": {
     color: "#ff1a1a",
     fontWeight: "600",
@@ -88,7 +88,7 @@ const livePreviewTheme = EditorView.theme({
   },
   ".cm-md-hr": {
     display: "block",
-    borderTop: "1px solid #1a1a1a",
+    borderTop: "1px solid #252525",
     margin: "12px 0",
   },
   ".cm-md-checkbox": { marginRight: "4px" },
@@ -249,10 +249,10 @@ const darkTheme = EditorView.theme(
     },
     ".cm-cursor": { borderLeftColor: "#ff1a1a" },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-      backgroundColor: "#1a0808",
+      backgroundColor: "#2a0808",
     },
     ".cm-gutters": { display: "none" },
-    ".cm-activeLine": { backgroundColor: "#0f0f0f" },
+    ".cm-activeLine": { backgroundColor: "#121212" },
     "&.cm-focused": { outline: "none" },
     ".cm-scroller": { overflow: "auto" },
   },
