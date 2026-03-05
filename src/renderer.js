@@ -562,9 +562,16 @@ function switchToTerminal(index) {
   activeTermIndex = index;
   terminals[index].container.style.display = "block";
 
+  // Double-rAF: first ensures style change is processed, second ensures layout
+  // is computed. Then fit + resize the PTY so the daemon matches the display.
   requestAnimationFrame(() => {
-    terminals[index].fitAddon.fit();
-    terminals[index].term.focus();
+    requestAnimationFrame(() => {
+      const entry = terminals[index];
+      if (!entry) return;
+      entry.fitAddon.fit();
+      entry.term.focus();
+      window.api.ptyResize(entry.termId, entry.term.cols, entry.term.rows);
+    });
   });
 
   renderTerminalTabs();
