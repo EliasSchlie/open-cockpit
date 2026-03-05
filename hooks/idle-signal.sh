@@ -15,9 +15,8 @@
 #        idle-signal.sh clear
 
 set -euo pipefail
-source "$(dirname "$0")/log-error.sh"
+source "$(dirname "$0")/common.sh"
 
-SIGNAL_DIR="$HOME/.open-cockpit/idle-signals"
 IDLE_VERIFY_DELAY=3
 mkdir -p "$SIGNAL_DIR"
 
@@ -35,11 +34,6 @@ read_input() {
         echo "$line"
         cat 2>/dev/null
     fi
-}
-
-# Extract a JSON string value using sed (avoids python3 startup overhead)
-json_get() {
-    echo "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
 # Cross-platform file size in bytes (macOS uses -f, Linux uses -c)

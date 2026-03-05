@@ -6,16 +6,12 @@
 # Output (stdout): Instructions injected into Claude's context (first prompt only)
 
 set -euo pipefail
-source "$(dirname "$0")/log-error.sh"
+source "$(dirname "$0")/common.sh"
 
 # Resolve session_id via PID mapping (written by session-pid-map.sh at SessionStart)
-SESSION_PIDS_DIR="$HOME/.open-cockpit/session-pids"
-[ -f "$SESSION_PIDS_DIR/$PPID" ] || exit 0
-session_id=$(cat "$SESSION_PIDS_DIR/$PPID")
-[ -n "$session_id" ] || exit 0
+resolve_session_id
 
 # Check if we already fired for this session ID (survives /clear → new session_id)
-MARKER_DIR="$HOME/.open-cockpit/intentions/.intro-sent"
 mkdir -p "$MARKER_DIR"
 
 MARKER_FILE="$MARKER_DIR/$session_id"
@@ -29,31 +25,33 @@ touch "$MARKER_FILE"
 # Signal to intention-change-notify.sh to skip this prompt (avoid redundant output)
 echo "$session_id" > "$MARKER_DIR/.just-fired"
 
-# Clean up markers for sessions that no longer have a live PID
-for f in "$MARKER_DIR"/*; do
-  [ -f "$f" ] || continue
-  name=$(basename "$f")
-  # Skip dotfiles (like .just-fired)
-  [[ "$name" == .* ]] && continue
-  # Skip current session
-  [ "$name" = "$session_id" ] && continue
-  # Check if any alive PID maps to this session
-  alive=false
-  for pf in "$SESSION_PIDS_DIR"/*; do
-    [ -f "$pf" ] || continue
-    pid=$(basename "$pf")
-    kill -0 "$pid" 2>/dev/null || continue
-    sid=$(cat "$pf" 2>/dev/null) || continue
-    if [ "$sid" = "$name" ]; then
-      alive=true
-      break
-    fi
+# Clean up markers for sessions that no longer have a live PID (background, #131)
+(
+  for f in "$MARKER_DIR"/*; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    # Skip dotfiles (like .just-fired)
+    [[ "$name" == .* ]] && continue
+    # Skip current session
+    [ "$name" = "$session_id" ] && continue
+    # Check if any alive PID maps to this session
+    alive=false
+    for pf in "$SESSION_PIDS_DIR"/*; do
+      [ -f "$pf" ] || continue
+      pid=$(basename "$pf")
+      kill -0 "$pid" 2>/dev/null || continue
+      sid=$(cat "$pf" 2>/dev/null) || continue
+      if [ "$sid" = "$name" ]; then
+        alive=true
+        break
+      fi
+    done
+    $alive || rm -f "$f"
   done
-  $alive || rm -f "$f"
-done
+) &
+disown
 
-INTENTION_FILE="$HOME/.open-cockpit/intentions/${session_id}.md"
-SNAPSHOT_DIR="$HOME/.open-cockpit/intentions/.snapshots"
+INTENTION_FILE="$INTENTIONS_DIR/${session_id}.md"
 mkdir -p "$SNAPSHOT_DIR"
 
 # Create initial snapshot for change detection (used by intention-change-notify.sh)

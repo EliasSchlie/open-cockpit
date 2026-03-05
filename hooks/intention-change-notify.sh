@@ -6,23 +6,19 @@
 # Output (stdout): Always a reminder; includes diff if user edited the file
 
 set -euo pipefail
-source "$(dirname "$0")/log-error.sh"
+source "$(dirname "$0")/common.sh"
 
 # Skip if session-intention-intro.sh just fired (avoid redundant output on first prompt)
-JUST_FIRED="$HOME/.open-cockpit/intentions/.intro-sent/.just-fired"
+JUST_FIRED="$MARKER_DIR/.just-fired"
 if [ -f "$JUST_FIRED" ]; then
   rm -f "$JUST_FIRED"
   exit 0
 fi
 
 # Resolve session_id via PID mapping (written by session-pid-map.sh)
-SESSION_PIDS_DIR="$HOME/.open-cockpit/session-pids"
-[ -f "$SESSION_PIDS_DIR/$PPID" ] || exit 0
-session_id=$(cat "$SESSION_PIDS_DIR/$PPID")
-[ -n "$session_id" ] || exit 0
+resolve_session_id
 
-INTENTION_FILE="$HOME/.open-cockpit/intentions/${session_id}.md"
-SNAPSHOT_DIR="$HOME/.open-cockpit/intentions/.snapshots"
+INTENTION_FILE="$INTENTIONS_DIR/${session_id}.md"
 SNAPSHOT_FILE="$SNAPSHOT_DIR/${session_id}.md"
 
 mkdir -p "$SNAPSHOT_DIR"
