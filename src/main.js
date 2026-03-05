@@ -46,7 +46,11 @@ const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
 const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
-const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
+const OWN_POOL = process.argv.includes("--own-pool");
+const POOL_FILE = path.join(
+  OPEN_COCKPIT_DIR,
+  OWN_POOL ? "pool-dev.json" : "pool.json",
+);
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
 const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
@@ -1206,69 +1210,16 @@ function writePool(pool) {
   invalidateSessionsCache();
 }
 
-// Poll a terminal's buffer for the trust prompt and send Enter to accept it.
-// Uses read-buffer (single terminal) instead of list (all terminals) to avoid
-// socket contention when many slots poll simultaneously.
-// Verifies the prompt was actually dismissed after sending Enter.
-async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
-  const POLL_INTERVAL = 200;
-  const VERIFY_INTERVAL = 150;
-  const VERIFY_TIMEOUT = 3000;
-  const MAX_RETRIES = 3;
-  const TRUST_PATTERNS = ["Do you trust", "trust the files"];
-
-  const bufferHasTrustPrompt = (buffer) =>
-    TRUST_PATTERNS.some((pat) => buffer.includes(pat));
-
-  const readBuffer = async () => {
-    const resp = await daemonRequest({ type: "read-buffer", termId });
-    return resp.buffer || "";
-  };
-
-  let elapsed = 0;
-  while (elapsed < timeoutMs) {
-    let buffer;
-    try {
-      buffer = await readBuffer();
-    } catch {
-      /* daemon disconnected — terminal no longer reachable */
-      return false;
-    }
-
-    if (bufferHasTrustPrompt(buffer)) {
-      // Trust prompt detected — send Enter and verify it was accepted
-      for (let _attempt = 0; _attempt < MAX_RETRIES; _attempt++) {
-        daemonSendSafe({ type: "write", termId, data: "\r" });
-        // Verify the prompt disappeared
-        const verifyStart = Date.now();
-        while (Date.now() - verifyStart < VERIFY_TIMEOUT) {
-          await new Promise((r) => setTimeout(r, VERIFY_INTERVAL));
-          try {
-            const newBuffer = await readBuffer();
-            if (!bufferHasTrustPrompt(newBuffer)) return true; // Confirmed
-          } catch {
-            /* daemon disconnected during verify */
-            return false;
-          }
-        }
-        // Prompt still there — retry
-        console.warn(
-          `[pool] Trust prompt still present after Enter (termId=${termId}), retrying...`,
-        );
-      }
-      // All retries exhausted but prompt still present
-      console.error(
-        `[pool] Failed to dismiss trust prompt after ${MAX_RETRIES} retries (termId=${termId})`,
-      );
-      return false;
-    }
-
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-    elapsed += POLL_INTERVAL;
-  }
-  // Fallback: send Enter in case prompt appeared but wasn't pattern-matched
-  daemonSendSafe({ type: "write", termId, data: "\r" });
-  return false;
+// Accept Claude's trust prompt by sending Enter after a short delay.
+// The trust prompt ("Yes, I trust this folder") typically appears within ~0.5s
+// of spawn. The 1s delay provides margin for slower startups. Sending Enter
+// when there's no trust prompt is harmless (empty input in the Claude REPL is
+// a no-op). This replaces fragile buffer polling that required pattern matching
+// through ANSI escape codes and specific daemon protocol support.
+function acceptTrustPrompt(termId) {
+  setTimeout(() => {
+    daemonSendSafe({ type: "write", termId, data: "\r" });
+  }, 1000);
 }
 
 // Async mutex for pool.json read-modify-write cycles.
@@ -1293,9 +1244,16 @@ function withPoolLock(fn) {
   return p;
 }
 
+// Cached claude binary path — resolved once, reused for all spawns.
+let _cachedClaudePath = null;
+function getCachedClaudePath() {
+  if (!_cachedClaudePath) _cachedClaudePath = resolveClaudePath();
+  return _cachedClaudePath;
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
-  const claudePath = resolveClaudePath();
+  const claudePath = getCachedClaudePath();
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
@@ -1306,9 +1264,11 @@ async function spawnPoolSlot(index) {
   return createSlot(index, resp.termId, resp.pid);
 }
 
-// Initialize pool: spawn N Claude sessions via PTY daemon
+// Initialize pool: spawn N Claude sessions via PTY daemon.
+// Returns immediately after spawning — slot tracking (session ID discovery)
+// happens in the background. Slots start as "starting" and transition to
+// "fresh" once Claude is ready. The UI handles this via pool health polling.
 async function poolInit(size) {
-  // Phase 1: spawn slots and persist pool with "starting" status (inside lock)
   const pool = await withPoolLock(async () => {
     size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
     const existing = readPool();
@@ -1334,18 +1294,10 @@ async function poolInit(size) {
     return p;
   });
 
-  // Phase 2: track all slots (trust prompt + session ID polling) outside lock
-  const results = await Promise.allSettled(
-    pool.slots.map((slot) => trackNewSlot(slot)),
-  );
-  results.forEach((result, i) => {
-    if (result.status === "rejected") {
-      console.error(
-        `Pool slot ${i} failed to initialize:`,
-        result.reason?.message || result.reason,
-      );
-    }
-  });
+  // Track all slots in background (fire-and-forget, like poolResize).
+  for (const slot of pool.slots) {
+    trackNewSlot(slot);
+  }
 
   return readPool();
 }
@@ -1365,7 +1317,7 @@ async function pollForSessionId(pid, timeoutMs, excludeId = null) {
         } catch {} // File doesn't exist yet
         return null;
       },
-      { interval: 500, timeout: timeoutMs, label: `session ID for PID ${pid}` },
+      { interval: 200, timeout: timeoutMs, label: `session ID for PID ${pid}` },
     );
   } catch {
     return null; // Timeout → null (preserves original behavior)
@@ -1386,7 +1338,7 @@ function trackNewSlot(
     onResolved = null,
   } = {},
 ) {
-  if (!skipTrustPrompt) waitForTrustPromptAndAccept(slot.termId);
+  if (!skipTrustPrompt) acceptTrustPrompt(slot.termId);
   return pollForSessionId(slot.pid, timeout, excludeId)
     .then(async (sessionId) => {
       await withPoolLock(() => {
@@ -2824,7 +2776,18 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", async () => {
+  // Dev instances with --own-pool auto-destroy their pool on quit.
+  // Production instances intentionally leave the daemon and pool alive —
+  // terminals persist across app restarts so users don't lose sessions.
+  if (OWN_POOL) {
+    try {
+      await poolDestroy();
+      debugLog("main", "own-pool destroyed on quit");
+    } catch (err) {
+      debugLog("main", "own-pool destroy failed on quit:", err.message);
+    }
+  }
   closeDebugLog();
   // Disconnect from daemon (daemon keeps PTYs alive)
   if (daemonSocket && !daemonSocket.destroyed) {
