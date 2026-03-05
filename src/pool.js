@@ -115,9 +115,12 @@ function syncStatuses(pool, sessions) {
   let changed = false;
 
   for (const slot of pool.slots) {
-    if (slot.status === "dead" || slot.status === "starting") continue;
+    if (slot.status === "starting") continue;
     const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
     if (!session) continue;
+
+    // Allow dead slots to recover if their process came back alive
+    if (slot.status === "dead" && !session.alive) continue;
 
     let newStatus = slot.status;
     if (session.status === "idle") newStatus = "idle";

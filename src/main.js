@@ -964,8 +964,11 @@ async function archiveSession(sessionId) {
       gitRoot: session?.gitRoot,
       pid: session?.pid,
     });
-    // Wait a beat for offload meta to be written
-    await new Promise((r) => setTimeout(r, 500));
+    // Poll for offload meta to be written (up to 5s)
+    for (let i = 0; i < 50; i++) {
+      if (readOffloadMeta(sessionId)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
   }
 
   // Mark as archived (may have been just written by offloadSession)
@@ -1655,7 +1658,12 @@ async function poolResume(sessionId) {
   return withFreshSlot(async (pool, slot) => {
     const oldSlotSessionId = slot.sessionId;
 
-    await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
+    try {
+      await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
+    } catch (err) {
+      console.error("[main] /resume command failed:", err.message);
+      throw err; // slot stays fresh (withFreshSlot default)
+    }
     slot.status = "busy";
     writePool(pool);
 
