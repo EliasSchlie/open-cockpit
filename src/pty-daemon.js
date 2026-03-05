@@ -42,7 +42,7 @@ function isAllowedCmd(cmd) {
 
 // --- State ---
 let nextTermId = 1;
-const terminals = new Map(); // termId -> { proc, meta, buffer, clients: Set<socket> }
+const terminals = new Map(); // termId -> { proc, meta, chunks, chunksLen, clients: Set<socket> }
 const clients = new Set(); // all connected sockets
 let idleTimer = null;
 
@@ -121,16 +121,20 @@ function handleSpawn(socket, msg) {
       pid: proc.pid,
       exited: false,
     },
-    buffer: "",
+    chunks: [],
+    chunksLen: 0,
     clients: new Set(),
   };
   terminals.set(termId, entry);
 
   proc.onData((data) => {
-    // Buffer for replay
-    entry.buffer += data;
-    if (entry.buffer.length > BUFFER_SIZE) {
-      entry.buffer = entry.buffer.slice(entry.buffer.length - BUFFER_SIZE);
+    // Buffer for replay (chunked to avoid O(n) string concat per event)
+    entry.chunks.push(data);
+    entry.chunksLen += data.length;
+    if (entry.chunksLen > BUFFER_SIZE * 2) {
+      const joined = entry.chunks.join("").slice(-BUFFER_SIZE);
+      entry.chunks = [joined];
+      entry.chunksLen = joined.length;
     }
     broadcast(termId, { type: "data", termId, data });
   });
@@ -188,9 +192,10 @@ function handleKill(socket, msg) {
 function handleList(socket, msg) {
   const ptys = [];
   for (const [, entry] of terminals) {
+    const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
     ptys.push({
       ...entry.meta,
-      buffer: entry.buffer,
+      buffer,
       clientCount: entry.clients.size,
     });
   }
@@ -214,8 +219,9 @@ function handleAttach(socket, msg) {
   sendTo(socket, { type: "attached", id: msg.id, termId: msg.termId });
 
   // Then replay buffered output (no id — goes through push event path)
-  if (entry.buffer) {
-    sendTo(socket, { type: "replay", termId: msg.termId, data: entry.buffer });
+  if (entry.chunksLen > 0) {
+    const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
+    sendTo(socket, { type: "replay", termId: msg.termId, data: buffer });
   }
   if (entry.meta.exited) {
     sendTo(socket, {
