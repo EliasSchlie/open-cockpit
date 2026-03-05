@@ -125,6 +125,8 @@ function handleSpawn(socket, msg) {
       cwd,
       pid: proc.pid,
       exited: false,
+      cols: msg.cols || 80,
+      rows: msg.rows || 24,
     },
     chunks: [],
     chunksLen: 0,
@@ -177,6 +179,8 @@ function handleResize(msg) {
   const entry = terminals.get(msg.termId);
   if (entry && !entry.meta.exited) {
     entry.proc.resize(msg.cols, msg.rows);
+    entry.meta.cols = msg.cols;
+    entry.meta.rows = msg.rows;
   }
 }
 
