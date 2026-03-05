@@ -124,6 +124,23 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 
 **Not yet implemented** — see [#28](https://github.com/EliasSchlie/open-cockpit/issues/28). Currently all first tabs are fresh shells.
 
+## Session lifecycle
+
+```
+fresh → processing → idle → offloaded (graceful /clear, snapshot saved)
+                       ↓
+                     dead → archived (process died, no snapshot)
+```
+
+- **fresh** — pool slot with Claude ready, no user interaction yet
+- **processing** — Claude is actively working
+- **idle** — Claude finished, waiting for user input
+- **offloaded** — session `/clear`'d, conversation saved (meta.json + snapshot.log), slot reused
+- **dead** — Claude process exited unexpectedly
+- **archived** — dead session with intention file on disk, resumable via `/resume <uuid>`
+
+Both offloaded and archived sessions can be resumed by clicking them in the sidebar (auto-runs `/resume` in a pool slot). **Archived not yet implemented** — see [#36](https://github.com/EliasSchlie/open-cockpit/issues/36).
+
 ## Conventions
 
 - Electron: contextIsolation, sandbox off (preload needs npm packages)
