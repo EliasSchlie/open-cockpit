@@ -319,6 +319,26 @@ function getOffloadedSessions() {
       const meta = readOffloadMeta(dir);
       if (!meta) continue;
       const snapshotFile = path.join(OFFLOADED_DIR, dir, "snapshot.log");
+      const hasSnapshot = fs.existsSync(snapshotFile);
+      // Sessions without a snapshot can't be meaningfully resumed — treat as archived
+      const isArchived = meta.archived || !hasSnapshot;
+      if (!meta.archived && !hasSnapshot) {
+        // Persist the archived flag so this doesn't recompute every time
+        meta.archived = true;
+        meta.archivedAt = meta.archivedAt || new Date().toISOString();
+        try {
+          secureWriteFileSync(
+            path.join(OFFLOADED_DIR, dir, "meta.json"),
+            JSON.stringify(meta, null, 2),
+          );
+        } catch (err) {
+          console.error(
+            "[main] Failed to auto-archive stale session",
+            dir,
+            err.message,
+          );
+        }
+      }
       sessions.push({
         pid: null,
         sessionId: meta.sessionId || dir,
@@ -329,10 +349,10 @@ function getOffloadedSessions() {
         project: meta.cwd ? path.basename(meta.cwd) : null,
         hasIntention: meta.intentionHeading != null,
         intentionHeading: meta.intentionHeading || null,
-        status: meta.archived ? "archived" : "offloaded",
+        status: isArchived ? "archived" : "offloaded",
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
-        hasSnapshot: fs.existsSync(snapshotFile),
+        hasSnapshot,
         origin: meta.origin || null,
       });
     } catch {}
@@ -781,6 +801,7 @@ async function offloadSession(
     gitRoot,
     claudeSessionId,
     snapshot,
+    origin: "pool",
   });
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
@@ -849,7 +870,7 @@ function validateSessionId(sessionId) {
 // Write offload metadata (and optional snapshot) to disk for a session.
 function writeOffloadMeta(
   sessionId,
-  { cwd, gitRoot, claudeSessionId, snapshot, externalClear } = {},
+  { cwd, gitRoot, claudeSessionId, snapshot, externalClear, origin } = {},
 ) {
   validateSessionId(sessionId);
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
@@ -874,6 +895,7 @@ function writeOffloadMeta(
     offloadedAt: new Date().toISOString(),
   };
   if (externalClear) meta.externalClear = true;
+  if (origin) meta.origin = origin;
 
   secureWriteFileSync(
     path.join(offloadDir, "meta.json"),
@@ -909,7 +931,7 @@ function saveExternalClearOffload(oldSessionId, pid) {
     }
   }
 
-  writeOffloadMeta(oldSessionId, { cwd, externalClear: true });
+  writeOffloadMeta(oldSessionId, { cwd, externalClear: true, origin: "ext" });
 }
 
 // Archive a session: mark its offload meta as archived.
