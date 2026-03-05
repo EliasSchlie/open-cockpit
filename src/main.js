@@ -477,12 +477,15 @@ async function getSessions() {
   }
   // Deduplicate concurrent calls
   if (sessionsInFlight) return sessionsInFlight;
-  sessionsInFlight = getSessionsUncached().then((result) => {
-    sessionsCache = result;
-    sessionsCacheTs = Date.now();
-    sessionsInFlight = null;
-    return result;
-  });
+  sessionsInFlight = getSessionsUncached()
+    .then((result) => {
+      sessionsCache = result;
+      sessionsCacheTs = Date.now();
+      return result;
+    })
+    .finally(() => {
+      sessionsInFlight = null;
+    });
   return sessionsInFlight;
 }
 
@@ -1539,24 +1542,34 @@ app.whenReady().then(async () => {
   function waitForSessionIdle(sessionId, timeoutMs = 300000) {
     return new Promise((resolve, reject) => {
       let elapsed = 0;
+      let settled = false;
       const interval = 1000;
       const check = async () => {
-        const sessions = await getSessions();
-        const session = sessions.find((s) => s.sessionId === sessionId);
-        if (session && session.status === "idle") {
-          resolve();
-          return;
+        if (settled) return;
+        try {
+          const sessions = await getSessions();
+          const session = sessions.find((s) => s.sessionId === sessionId);
+          if (session && session.status === "idle") {
+            settled = true;
+            resolve();
+            return;
+          }
+          if (session && !session.alive) {
+            settled = true;
+            reject(new Error("Session process died"));
+            return;
+          }
+          elapsed += interval;
+          if (elapsed >= timeoutMs) {
+            settled = true;
+            reject(new Error("Timeout waiting for session to become idle"));
+            return;
+          }
+          setTimeout(check, interval);
+        } catch (err) {
+          settled = true;
+          reject(err);
         }
-        if (session && !session.alive) {
-          reject(new Error("Session process died"));
-          return;
-        }
-        elapsed += interval;
-        if (elapsed >= timeoutMs) {
-          reject(new Error("Timeout waiting for session to become idle"));
-          return;
-        }
-        setTimeout(check, interval);
       };
       setTimeout(check, interval);
     });
@@ -1703,24 +1716,33 @@ app.whenReady().then(async () => {
 
       const finished = await new Promise((resolve, reject) => {
         let elapsed = 0;
+        let settled = false;
         const interval = 1000;
         const check = async () => {
-          const sessions = await getSessions();
-          for (const s of busySlots) {
-            const session = sessions.find(
-              (sess) => sess.sessionId === s.sessionId,
-            );
-            if (session && session.status === "idle") {
-              resolve(s);
+          if (settled) return;
+          try {
+            const sessions = await getSessions();
+            for (const s of busySlots) {
+              const session = sessions.find(
+                (sess) => sess.sessionId === s.sessionId,
+              );
+              if (session && session.status === "idle") {
+                settled = true;
+                resolve(s);
+                return;
+              }
+            }
+            elapsed += interval;
+            if (elapsed >= timeout) {
+              settled = true;
+              reject(new Error("Timeout waiting for session to become idle"));
               return;
             }
+            setTimeout(check, interval);
+          } catch (err) {
+            settled = true;
+            reject(err);
           }
-          elapsed += interval;
-          if (elapsed >= timeout) {
-            reject(new Error("Timeout waiting for session to become idle"));
-            return;
-          }
-          setTimeout(check, interval);
         };
         setTimeout(check, interval);
       });
