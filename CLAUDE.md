@@ -43,7 +43,7 @@ New sessions will have the latest hooks.
 ## Key paths
 
 - `~/.open-cockpit/session-pids/<PID>` — Session ID (written by plugin hook)
-- `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created by app on first open)
+- `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created lazily: by Claude on first prompt, or by app on first user keystroke)
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
 - `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings)
