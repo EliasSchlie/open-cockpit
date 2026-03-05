@@ -456,6 +456,7 @@ async function spawnTerminal(cwd, cmd, args) {
     fitAddon,
     resizeObserver: null,
     container,
+    isPoolTui: false,
   };
   terminals.push(entry);
 
@@ -478,6 +479,65 @@ async function spawnTerminal(cwd, cmd, args) {
     if (container.style.display !== "none") {
       fitAddon.fit();
       window.api.ptyResize(termId, term.cols, term.rows);
+    }
+  });
+  resizeObserver.observe(terminalMount);
+  entry.resizeObserver = resizeObserver;
+
+  renderTerminalTabs();
+  switchToTerminal(terminals.length - 1);
+  syncSessionCache();
+
+  return entry;
+}
+
+// Attach to an existing pool slot's PTY (no spawn — the Claude TUI is already running)
+async function attachPoolTerminal(poolTermId) {
+  const container = document.createElement("div");
+  container.style.cssText = "width:100%;height:100%;display:none;";
+  terminalMount.appendChild(container);
+
+  const term = new Terminal({
+    theme: TERM_THEME,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+  });
+
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+
+  const entry = {
+    termId: poolTermId,
+    pid: null,
+    term,
+    fitAddon,
+    resizeObserver: null,
+    container,
+    isPoolTui: true,
+  };
+  terminals.push(entry);
+
+  // Register before attach so replay/data can find this terminal
+  pendingTerminals.set(poolTermId, entry);
+  try {
+    await window.api.ptyAttach(poolTermId);
+  } catch (err) {
+    terminals.splice(terminals.indexOf(entry), 1);
+    term.dispose();
+    container.remove();
+    pendingTerminals.delete(poolTermId);
+    throw err;
+  }
+  pendingTerminals.delete(poolTermId);
+
+  term.onData((data) => window.api.ptyWrite(poolTermId, data));
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (container.style.display !== "none") {
+      fitAddon.fit();
+      window.api.ptyResize(poolTermId, term.cols, term.rows);
     }
   });
   resizeObserver.observe(terminalMount);
@@ -513,7 +573,10 @@ async function closeTerminal(index) {
 
   const entry = terminals[index];
   await window.api.ptyDetach(entry.termId).catch(() => {});
-  await window.api.ptyKill(entry.termId);
+  // Don't kill pool TUI terminals — the Claude process must stay alive in the pool
+  if (!entry.isPoolTui) {
+    await window.api.ptyKill(entry.termId);
+  }
   entry.resizeObserver.disconnect();
   entry.term.dispose();
   entry.container.remove();
@@ -534,10 +597,12 @@ async function closeTerminal(index) {
 
 function renderTerminalTabs() {
   terminalTabList.innerHTML = "";
+  let shellCount = 0;
   terminals.forEach((t, i) => {
     const tab = document.createElement("button");
     tab.className = `terminal-tab${i === activeTermIndex ? " active" : ""}`;
-    tab.textContent = `Terminal ${i + 1} `;
+    const label = t.isPoolTui ? "Claude" : `Terminal ${++shellCount}`;
+    tab.textContent = `${label} `;
     const closeBtn = document.createElement("span");
     closeBtn.className = "terminal-tab-close";
     closeBtn.textContent = "\u2715";
@@ -602,7 +667,10 @@ function destroySessionTerminals(sessionId) {
   if (!cached) return;
   for (const entry of cached.terminals) {
     window.api.ptyDetach(entry.termId).catch(() => {});
-    window.api.ptyKill(entry.termId).catch(() => {});
+    // Don't kill pool TUI terminals — the Claude process must stay alive
+    if (!entry.isPoolTui) {
+      window.api.ptyKill(entry.termId).catch(() => {});
+    }
     entry.resizeObserver.disconnect();
     entry.term.dispose();
     entry.container.remove();
@@ -616,7 +684,10 @@ function killAllTerminals() {
     destroySessionTerminals(sid);
   }
   for (const entry of terminals) {
-    window.api.ptyKill(entry.termId).catch(() => {});
+    window.api.ptyDetach(entry.termId).catch(() => {});
+    if (!entry.isPoolTui) {
+      window.api.ptyKill(entry.termId).catch(() => {});
+    }
     entry.resizeObserver.disconnect();
     entry.term.dispose();
     entry.container.remove();
@@ -1007,8 +1078,8 @@ async function selectSession(session) {
     header.appendChild(colorBar);
   }
 
-  // If session is alive, try to focus its external terminal (iTerm/Cursor)
-  if (session.alive) {
+  // External sessions: try to focus their terminal app (iTerm/Cursor)
+  if (!session.isPool && session.alive) {
     const result = await window.api.focusExternalTerminal(session.pid);
     if (gen !== sessionGeneration) return;
     if (result.focused) {
@@ -1022,15 +1093,55 @@ async function selectSession(session) {
 
   // Restore cached terminals immediately (sync, no race risk)
   if (!restoreSessionTerminals(session.sessionId)) {
-    // Spawn is async — guard against stale completion
-    const entry = await spawnTerminal(session.cwd);
-    if (gen !== sessionGeneration) {
-      // Session changed while spawning — orphan cleanup
-      await window.api.ptyKill(entry.termId);
-      entry.resizeObserver.disconnect();
-      entry.term.dispose();
-      entry.container.remove();
-      return;
+    if (session.isPool) {
+      // Pool session: attach to the pool slot's existing Claude TUI
+      const pool = await window.api.poolRead();
+      if (gen !== sessionGeneration) return;
+      const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
+      if (slot) {
+        try {
+          const entry = await attachPoolTerminal(slot.termId);
+          if (gen !== sessionGeneration) {
+            // Session changed while attaching — detach and clean up
+            await window.api.ptyDetach(entry.termId).catch(() => {});
+            entry.resizeObserver.disconnect();
+            entry.term.dispose();
+            entry.container.remove();
+            return;
+          }
+        } catch {
+          // Attach failed (slot dead?) — fall back to fresh shell
+          const entry = await spawnTerminal(session.cwd);
+          if (gen !== sessionGeneration) {
+            await window.api.ptyKill(entry.termId);
+            entry.resizeObserver.disconnect();
+            entry.term.dispose();
+            entry.container.remove();
+            return;
+          }
+        }
+      } else {
+        // No pool slot found — fall back to fresh shell
+        const entry = await spawnTerminal(session.cwd);
+        if (gen !== sessionGeneration) {
+          await window.api.ptyKill(entry.termId);
+          entry.resizeObserver.disconnect();
+          entry.term.dispose();
+          entry.container.remove();
+          return;
+        }
+      }
+    } else {
+      // External session: spawn a fresh shell
+      const entry = await spawnTerminal(session.cwd);
+      if (gen !== sessionGeneration) {
+        // Session changed while spawning — orphan cleanup
+        await window.api.ptyKill(entry.termId);
+        entry.resizeObserver.disconnect();
+        entry.term.dispose();
+        entry.container.remove();
+        return;
+      }
     }
   }
 
@@ -1430,6 +1541,7 @@ async function reconnectTerminal(ptyInfo) {
     fitAddon,
     resizeObserver: null,
     container,
+    isPoolTui: !!ptyInfo.isPoolTui,
   };
 
   // Write buffered output directly (already available from ptyList response)
@@ -1467,9 +1579,19 @@ async function reconnectAllPtys() {
   const ptys = await window.api.ptyList();
   if (ptys.length === 0) return;
 
+  // Identify pool slot termIds so we can tag reconnected terminals
+  const pool = await window.api.poolRead();
+  const poolTermIds = new Set();
+  if (pool) {
+    for (const slot of pool.slots) {
+      poolTermIds.add(slot.termId);
+    }
+  }
+
   // Group by sessionId
   const bySession = new Map();
   for (const p of ptys) {
+    p.isPoolTui = poolTermIds.has(p.termId);
     const sid = p.sessionId || "__none__";
     if (!bySession.has(sid)) bySession.set(sid, []);
     bySession.get(sid).push(p);
