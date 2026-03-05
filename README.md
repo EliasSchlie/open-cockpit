@@ -16,21 +16,24 @@ The pool is shared: humans and Claude agents interact with it the same way. A hu
 
 The app provides a sidebar showing all your Claude sessions — which ones are processing, which are waiting for input, and which are idle. Clicking a session opens its Claude TUI directly in the app's terminal, so you can see what Claude is doing and respond.
 
-- **Cmd+N** — grab a fresh session from the pool (offloads the oldest idle one if needed)
-- **Session sidebar** — see status at a glance across all sessions
+- **Cmd+N** — grab a fresh session from the pool (offloads the oldest idle one if needed). Optional setup scripts auto-type commands into new sessions.
+- **Session sidebar** — see status at a glance across all sessions, with origin tags (pool, sub-claude, ext)
 - **Intention editor** — each session has a markdown file describing its goal, editable in-app
 - **Offloaded sessions** — old sessions are saved and automatically resumed when you click on them (the app runs `/resume <uuid>` in a pool slot behind the scenes)
+- **Pool inspector** — click any pool slot in settings to see its live terminal output
 
 External Claude sessions (started outside the app) also appear in the sidebar for visibility.
 
 ## For agents
 
-The app exposes a [Unix socket API](docs/api.md) and CLI (`bin/cockpit-cli`) that give agents the same pool access as humans. An agent can:
+The app exposes a [Unix socket API](docs/api.md) and CLI (`bin/cockpit-cli`) that give agents the same pool access as humans. The CLI supports sub-claude-compatible commands:
 
-- Acquire a fresh pool slot and send it a prompt
-- Wait for a session to finish
-- Read terminal output
-- Follow up on a previous conversation
+```bash
+id=$(cockpit-cli start "refactor auth module")   # fire-and-forget
+cockpit-cli wait "$id"                            # wait for result
+cockpit-cli followup "$id" "now add tests"        # multi-turn
+cockpit-cli capture "$id"                         # live terminal output
+```
 
 This enables recursive orchestration — a Claude session can dispatch work to other Claude sessions through the pool, and those can do the same.
 

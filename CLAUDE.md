@@ -11,7 +11,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
-- `bin/cockpit-cli` — CLI helper for API (socat + node fallback)
+- `bin/cockpit-cli` — CLI helper with sub-claude-compatible commands (start, followup, wait, capture, result, input, clean) + pool management + legacy API commands
 - `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection, intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
 - `release.sh` — Version bump + marketplace deployment
@@ -20,10 +20,13 @@ Electron app + Claude Code plugin for session intention tracking.
 
 The app can manage a pool of pre-started Claude sessions. Pool state lives in `~/.open-cockpit/pool.json`.
 
-- **Init**: via UI or API (`pool-init` with size). Spawns Claude sessions via the PTY daemon using `resolveClaudePath()` (finds `claude` binary via `which` + fallback paths).
-- **Dead slots**: `reconcilePool()` auto-restarts dead slots on app startup.
+- **Init**: via UI or API (`pool-init` with size). Spawns Claude sessions via the PTY daemon using `resolveClaudePath()` (finds `claude` binary via `which` + fallback paths). Trust prompt is accepted via buffer polling (not hardcoded delay).
+- **Dead slots**: `reconcilePool()` auto-restarts dead slots on app startup. Orphaned processes are killed by PID as fallback when daemon termIds are stale.
 - **Offloading**: Idle sessions get offloaded (snapshot + `/clear`). External `/clear` is also detected and saved as offloaded.
-- **Destroy**: `pool-destroy` kills all slots and removes `pool.json`.
+- **Archiving**: Dead sessions with intention files are auto-archived (meta.json without snapshot) and resumable.
+- **Destroy**: `pool-destroy` kills all slots and removes `pool.json`. Uses `killSlotProcess()` (daemon + PID fallback) to prevent orphans.
+- **Write locking**: All pool.json read-modify-write cycles use `withPoolLock()` to prevent concurrent write races.
+- **Settings UI**: Auto-refreshes every 3s. Clicking a slot row opens a read-only terminal popup showing the live PTY.
 
 ### Plugin update → pool reinit
 
@@ -42,7 +45,8 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
 - `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings)
-- `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded session data (meta.json, snapshot.log)
+- `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived session data (meta.json, snapshot.log)
+- `~/.open-cockpit/setup-scripts/` — Setup script files for Cmd+N picker
 - `~/.open-cockpit/api.sock` — Programmatic API Unix socket
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
@@ -116,6 +120,19 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI helper)
 
+## Session origin tags
+
+Sessions in the sidebar display an origin tag:
+- **pool** (green) — spawned by the pool manager (`OPEN_COCKPIT_POOL=1` env var)
+- **sub-claude** (purple) — spawned by sub-claude (`SUB_CLAUDE=1` env var)
+- **ext** (gray) — external sessions (no known env markers)
+
+Detection uses `ps eww <PID>` to read process environment. Results are cached by PID.
+
+## Setup scripts
+
+When pressing Cmd+N with scripts in `~/.open-cockpit/setup-scripts/`, a picker appears. Selected script content is auto-typed into the fresh Claude TUI. Script format: plain text, `\r` for Enter. If no scripts exist, Cmd+N opens a fresh session directly.
+
 ## Terminal tab model
 
 - **Pool sessions** (non-external): The first terminal tab shows the **live Claude TUI** from the pool slot (attached via daemon). Users interact with Claude directly through this tab.
@@ -139,7 +156,7 @@ fresh → processing → idle → offloaded (graceful /clear, snapshot saved)
 - **dead** — Claude process exited unexpectedly
 - **archived** — dead session with intention file on disk, resumable via `/resume <uuid>`
 
-Both offloaded and archived sessions can be resumed by clicking them in the sidebar (auto-runs `/resume` in a pool slot). **Archived not yet implemented** — see [#36](https://github.com/EliasSchlie/open-cockpit/issues/36).
+Both offloaded and archived sessions can be resumed by clicking them in the sidebar (auto-runs `/resume` in a pool slot).
 
 ## Conventions
 
