@@ -1530,10 +1530,54 @@ refreshBtn.addEventListener("click", async () => {
 
 // --- Pool Settings Panel ---
 const poolSettingsBtn = document.getElementById("pool-settings-btn");
+let poolSettingsInterval = null;
 
 poolSettingsBtn.addEventListener("click", () => showPoolSettings());
 
+function stopPoolSettingsPolling() {
+  if (poolSettingsInterval) {
+    clearInterval(poolSettingsInterval);
+    poolSettingsInterval = null;
+  }
+}
+
+function poolStatusDot(status) {
+  const cls = STATUS_CLASSES[status] || "dead";
+  return `<span class="session-status ${cls}" style="display:inline-block;vertical-align:middle;margin-right:6px;"></span>`;
+}
+
+function renderPoolSlotsHtml(health) {
+  if (!health.initialized) return "";
+  return health.slots
+    .map((slot) => {
+      const status = slot.healthStatus || slot.status;
+      const label =
+        slot.intentionHeading ||
+        slot.sessionId?.slice(0, 8) ||
+        `slot-${slot.index}`;
+      return `<div class="pool-slot-row">
+        ${poolStatusDot(status)}
+        <span class="pool-slot-label">${label}</span>
+        <span class="pool-slot-status">${status}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderPoolCountsHtml(health) {
+  if (!health.initialized) return "Pool not initialized";
+  return Object.entries(health.counts)
+    .map(([k, v]) => `${poolStatusDot(k)} ${k}: ${v}`)
+    .join("&nbsp;&nbsp;&nbsp;");
+}
+
+function closePoolSettings(overlay) {
+  stopPoolSettingsPolling();
+  overlay.remove();
+}
+
 async function showPoolSettings() {
+  stopPoolSettingsPolling();
   const existing = document.getElementById("pool-settings");
   if (existing) existing.remove();
 
@@ -1543,35 +1587,8 @@ async function showPoolSettings() {
   overlay.id = "pool-settings";
   overlay.className = "offload-menu-overlay";
 
-  const statusDot = (status) => {
-    const cls = STATUS_CLASSES[status] || "dead";
-    return `<span class="session-status ${cls}" style="display:inline-block;vertical-align:middle;margin-right:6px;"></span>`;
-  };
-
-  let slotsHtml = "";
-  if (health.initialized) {
-    slotsHtml = health.slots
-      .map((slot) => {
-        const status = slot.healthStatus || slot.status;
-        const label =
-          slot.intentionHeading ||
-          slot.sessionId?.slice(0, 8) ||
-          `slot-${slot.index}`;
-        const cwdDisplay = slot.cwd || "";
-        return `<div class="pool-slot-row">
-          ${statusDot(status)}
-          <span class="pool-slot-label">${label}</span>
-          <span class="pool-slot-status">${status}</span>
-        </div>`;
-      })
-      .join("");
-  }
-
-  const countsHtml = health.initialized
-    ? Object.entries(health.counts)
-        .map(([k, v]) => `${statusDot(k)} ${k}: ${v}`)
-        .join("&nbsp;&nbsp;&nbsp;")
-    : "Pool not initialized";
+  const slotsHtml = renderPoolSlotsHtml(health);
+  const countsHtml = renderPoolCountsHtml(health);
 
   overlay.innerHTML = `
     <div class="pool-settings-dialog">
@@ -1610,11 +1627,29 @@ async function showPoolSettings() {
 
   document.body.appendChild(overlay);
   overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) closePoolSettings(overlay);
   });
   overlay
     .querySelector(".pool-close")
-    .addEventListener("click", () => overlay.remove());
+    .addEventListener("click", () => closePoolSettings(overlay));
+
+  // Poll for health updates while dialog is open
+  poolSettingsInterval = setInterval(async () => {
+    // Stop polling if dialog was removed externally
+    if (!document.getElementById("pool-settings")) {
+      stopPoolSettingsPolling();
+      return;
+    }
+    try {
+      const h = await window.api.poolHealth();
+      const summaryEl = overlay.querySelector(".pool-health-summary");
+      if (summaryEl) summaryEl.innerHTML = renderPoolCountsHtml(h);
+      const slotsEl = overlay.querySelector(".pool-slots-list");
+      if (slotsEl) slotsEl.innerHTML = renderPoolSlotsHtml(h);
+    } catch {
+      // Ignore transient errors — next poll will retry
+    }
+  }, 3000);
 
   // Init button
   const initBtn = overlay.querySelector(".pool-init-btn");
@@ -1674,7 +1709,7 @@ async function showPoolSettings() {
   const reloadBtn = overlay.querySelector(".pool-reload-btn");
   if (reloadBtn) {
     reloadBtn.addEventListener("click", async () => {
-      overlay.remove();
+      closePoolSettings(overlay);
       await loadDirColors();
       await loadSessions();
       showNotification("Sessions reloaded");
