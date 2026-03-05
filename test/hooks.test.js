@@ -232,6 +232,41 @@ describe("idle-signal.sh", () => {
     const content = JSON.parse(fs.readFileSync(signalFile, "utf-8"));
     expect(content.trigger).toBe("permission");
   });
+
+  it("writes signal file on 'write session-clear' (replaces old signal)", () => {
+    // Simulate existing idle signal from before /clear
+    const signalFile = path.join(
+      tmpHome,
+      ".open-cockpit/idle-signals",
+      hookPid(),
+    );
+    fs.writeFileSync(signalFile, '{"trigger":"stop","ts":1000}');
+
+    runHook("idle-signal.sh", {
+      args: ["write", "session-clear"],
+      stdin: JSON.stringify({ session_id: FAKE_SESSION_ID }),
+    });
+    expect(fs.existsSync(signalFile)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(signalFile, "utf-8"));
+    expect(content.trigger).toBe("session-clear");
+    expect(content.session_id).toBe(FAKE_SESSION_ID);
+    expect(content.ts).toBeGreaterThan(1000);
+  });
+});
+
+describe("hooks.json - regression guards", () => {
+  it("SessionStart/clear writes idle signal (not just clears)", () => {
+    const hooksJson = JSON.parse(
+      fs.readFileSync(path.join(HOOKS_DIR, "hooks.json"), "utf-8"),
+    );
+    const clearEntry = hooksJson.hooks.SessionStart.find(
+      (e) => e.matcher === "clear",
+    );
+    expect(clearEntry).toBeDefined();
+    const cmd = clearEntry.hooks[0].command;
+    expect(cmd).toContain("idle-signal.sh write");
+    expect(cmd).not.toMatch(/idle-signal\.sh clear/);
+  });
 });
 
 describe("all hooks - robustness", () => {
