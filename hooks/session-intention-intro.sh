@@ -6,12 +6,7 @@
 # Output (stdout): Instructions injected into Claude's context (first prompt only)
 
 set -euo pipefail
-
-hook_error() {
-  echo "session-intention-intro error: $1" >&2
-  exit 2
-}
-trap 'hook_error "unexpected failure at line $LINENO"' ERR
+source "$(dirname "$0")/log-error.sh"
 
 # Resolve session_id via PID mapping (written by session-pid-map.sh at SessionStart)
 SESSION_PIDS_DIR="$HOME/.open-cockpit/session-pids"

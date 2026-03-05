@@ -6,6 +6,7 @@
 # Output: ~/.open-cockpit/session-pids/<PID> containing the session ID
 
 set -euo pipefail
+source "$(dirname "$0")/log-error.sh"
 
 SESSION_DIR="$HOME/.open-cockpit/session-pids"
 mkdir -p "$SESSION_DIR"

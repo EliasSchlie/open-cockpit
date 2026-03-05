@@ -6,12 +6,7 @@
 # Output (stdout): Always a reminder; includes diff if user edited the file
 
 set -euo pipefail
-
-hook_error() {
-  echo "intention-change-notify error: $1" >&2
-  exit 2
-}
-trap 'hook_error "unexpected failure at line $LINENO"' ERR
+source "$(dirname "$0")/log-error.sh"
 
 # Skip if session-intention-intro.sh just fired (avoid redundant output on first prompt)
 JUST_FIRED="$HOME/.open-cockpit/intentions/.intro-sent/.just-fired"

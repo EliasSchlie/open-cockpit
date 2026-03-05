@@ -12,6 +12,7 @@
 #        idle-signal.sh clear
 
 set -euo pipefail
+source "$(dirname "$0")/log-error.sh"
 
 SIGNAL_DIR="$HOME/.open-cockpit/idle-signals"
 IDLE_VERIFY_DELAY=3
