@@ -943,36 +943,25 @@ async function offloadSession(
   }
 
   // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
+  let slotRef;
   await withPoolLock(() => {
     const pool = readPool();
     if (!pool) return;
     const slot = pool.slots.find((s) => s.termId === termId);
     if (!slot) return;
-    const oldSessionId = slot.sessionId;
-    slot.status = "fresh";
+    slotRef = { termId: slot.termId, pid: slot.pid, excludeId: slot.sessionId };
+    slot.status = "starting";
     slot.sessionId = null;
     writePool(pool);
-
-    // Poll until the PID file changes from old UUID to new one
-    pollForSessionId(slot.pid, 60000, oldSessionId)
-      .then(async (newSessionId) => {
-        await withPoolLock(() => {
-          const p = readPool();
-          if (!p) return;
-          const s = p.slots.find((x) => x.termId === termId);
-          if (s) {
-            s.sessionId = newSessionId;
-            s.status = newSessionId ? "fresh" : "error";
-            writePool(p);
-            // Write idle signal so getSessions detects slot as "fresh" (no user input)
-            if (newSessionId) createFreshIdleSignal(s.pid, newSessionId);
-          }
-        });
-      })
-      .catch((err) =>
-        console.error("[main] Post-offload session poll failed:", err.message),
-      );
   });
+
+  // Track slot in background (session ID polling after /clear)
+  if (slotRef) {
+    trackNewSlot(
+      { termId: slotRef.termId, pid: slotRef.pid },
+      { excludeId: slotRef.excludeId, skipTrustPrompt: true },
+    );
+  }
 
   return meta;
 }
@@ -1308,7 +1297,8 @@ async function spawnPoolSlot(index) {
 
 // Initialize pool: spawn N Claude sessions via PTY daemon
 async function poolInit(size) {
-  return withPoolLock(async () => {
+  // Phase 1: spawn slots and persist pool with "starting" status (inside lock)
+  const pool = await withPoolLock(async () => {
     size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
     const existing = readPool();
     if (existing) {
@@ -1317,7 +1307,7 @@ async function poolInit(size) {
       );
     }
 
-    const pool = {
+    const p = {
       version: 1,
       poolSize: size,
       createdAt: new Date().toISOString(),
@@ -1325,38 +1315,28 @@ async function poolInit(size) {
     };
 
     // Spawn each slot as a Claude session in a daemon terminal (parallel)
-    const slots = await Promise.all(
+    p.slots = await Promise.all(
       Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
     );
-    pool.slots = slots;
 
-    // Accept trust prompts: poll terminal buffers for the prompt, then send Enter
-    await Promise.all(
-      pool.slots.map((slot) => waitForTrustPromptAndAccept(slot.termId)),
-    );
-
-    // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
-    const results = await Promise.allSettled(
-      pool.slots.map(async (slot) => {
-        const sessionId = await pollForSessionId(slot.pid, 60000);
-        slot.sessionId = sessionId;
-        slot.status = sessionId ? "fresh" : "error";
-        // Write idle signal so getSessions detects slot as "fresh" (no user input)
-        if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
-      }),
-    );
-    results.forEach((result, i) => {
-      if (result.status === "rejected") {
-        console.error(
-          `Pool slot ${i} failed to initialize:`,
-          result.reason?.message || result.reason,
-        );
-      }
-    });
-
-    writePool(pool);
-    return pool;
+    writePool(p);
+    return p;
   });
+
+  // Phase 2: track all slots (trust prompt + session ID polling) outside lock
+  const results = await Promise.allSettled(
+    pool.slots.map((slot) => trackNewSlot(slot)),
+  );
+  results.forEach((result, i) => {
+    if (result.status === "rejected") {
+      console.error(
+        `Pool slot ${i} failed to initialize:`,
+        result.reason?.message || result.reason,
+      );
+    }
+  });
+
+  return readPool();
 }
 
 // Poll for a session-pid file to appear (or change from excludeId) for a PID.
@@ -1381,6 +1361,51 @@ async function pollForSessionId(pid, timeoutMs, excludeId = null) {
   }
 }
 
+// After spawning, track the slot until it gets a session ID.
+// Runs trust prompt acceptance + session ID polling in background.
+// Updates pool.json via withPoolLock when done.
+// Returns a promise that resolves to the session ID (can be awaited or fire-and-forget).
+function trackNewSlot(
+  slot,
+  {
+    timeout = 60000,
+    excludeId = null,
+    expectedStatus = "starting",
+    skipTrustPrompt = false,
+    onResolved = null,
+  } = {},
+) {
+  if (!skipTrustPrompt) waitForTrustPromptAndAccept(slot.termId);
+  return pollForSessionId(slot.pid, timeout, excludeId)
+    .then(async (sessionId) => {
+      await withPoolLock(() => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === slot.termId);
+        if (s && s.status === expectedStatus) {
+          s.sessionId = sessionId;
+          s.status = sessionId ? "fresh" : "error";
+          writePool(p);
+          if (sessionId) createFreshIdleSignal(s.pid, sessionId);
+        }
+      });
+      if (onResolved) await onResolved(sessionId);
+      return sessionId;
+    })
+    .catch(async (err) => {
+      console.error("[main] Slot tracking failed:", err.message);
+      await withPoolLock(() => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === slot.termId);
+        if (s && s.status === expectedStatus) {
+          s.status = "error";
+          writePool(p);
+        }
+      });
+    });
+}
+
 // Resize pool: add or remove slots
 async function poolResize(newSize) {
   return withPoolLock(async () => {
@@ -1400,37 +1425,9 @@ async function poolResize(newSize) {
       );
       pool.slots.push(...newSlots);
 
-      // Resolve session IDs in background (locked to avoid clobbering)
+      // Track new slots in background (trust prompt + session ID polling)
       for (const slot of newSlots) {
-        pollForSessionId(slot.pid, 60000)
-          .then(async (sessionId) => {
-            await withPoolLock(() => {
-              const current = readPool();
-              if (!current) return;
-              const s = current.slots.find((x) => x.termId === slot.termId);
-              if (s) {
-                s.sessionId = sessionId;
-                s.status = sessionId ? "fresh" : "error";
-                writePool(current);
-              }
-            });
-          })
-          .catch(async (err) => {
-            console.error(
-              "[main] Resize session poll failed for slot %s: %s",
-              slot.termId,
-              err.message,
-            );
-            await withPoolLock(() => {
-              const current = readPool();
-              if (!current) return;
-              const s = current.slots.find((x) => x.termId === slot.termId);
-              if (s && s.status === "starting") {
-                s.status = "error";
-                writePool(current);
-              }
-            });
-          });
+        trackNewSlot(slot);
       }
     } else {
       // Shrink: kill excess slots (prefer fresh, then LRU idle)
@@ -1540,28 +1537,8 @@ async function reconcilePool() {
           slot.status = "starting";
           slot.sessionId = null;
           changed = true;
-          // Accept trust prompt after spawning (runs in background)
-          waitForTrustPromptAndAccept(newSlot.termId);
-          pollForSessionId(slot.pid, 60000)
-            .then(async (sessionId) => {
-              await withPoolLock(() => {
-                const p = readPool();
-                if (!p) return;
-                const s = p.slots.find((x) => x.index === slot.index);
-                if (s) {
-                  s.sessionId = sessionId;
-                  s.status = sessionId ? "fresh" : "error";
-                  writePool(p);
-                  if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
-                }
-              });
-            })
-            .catch((err) =>
-              console.error(
-                "[main] Reconcile session poll failed:",
-                err.message,
-              ),
-            );
+          // Track slot in background (trust prompt + session ID polling)
+          trackNewSlot(slot);
         } catch (err) {
           console.error(
             `[main] Failed to restart slot ${slot.index}:`,
@@ -1797,26 +1774,19 @@ async function poolResume(sessionId) {
     slot.status = "busy";
     writePool(pool);
 
-    // Async: poll for session ID change after /resume triggers SessionStart hook
-    pollForSessionId(slot.pid, 60000, oldSlotSessionId)
-      .then(async (newSessionId) => {
-        await withPoolLock(() => {
-          const p = readPool();
-          if (!p) return;
-          const s = p.slots.find((x) => x.termId === slot.termId);
-          if (s && newSessionId) {
-            s.sessionId = newSessionId;
-            writePool(p);
-          }
-        });
-        if (newSessionId) {
-          removeOffloadData(sessionId);
-        }
-        sessionsCache = null;
-      })
-      .catch((err) =>
-        console.error("[main] Post-resume session poll failed:", err.message),
-      );
+    // Track slot in background (session ID polling after /resume)
+    trackNewSlot(
+      { termId: slot.termId, pid: slot.pid },
+      {
+        excludeId: oldSlotSessionId,
+        expectedStatus: "busy",
+        skipTrustPrompt: true,
+        onResolved: async (newSessionId) => {
+          if (newSessionId) removeOffloadData(sessionId);
+          invalidateSessionsCache();
+        },
+      },
+    );
 
     return {
       type: "resumed",
