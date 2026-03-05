@@ -1429,6 +1429,102 @@ async function poolClean() {
   return cleaned;
 }
 
+async function poolResume(sessionId) {
+  validateSessionId(sessionId);
+  const meta = readOffloadMeta(sessionId);
+  if (!meta) throw new Error("No offload data for session");
+  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
+  if (!claudeSessionId) throw new Error("No Claude session ID stored");
+
+  if (meta.archived) {
+    unarchiveSession(sessionId);
+  }
+
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
+
+    const sessions = await getSessions();
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+
+    // Find a fresh slot
+    let slot = pool.slots.find((s) => {
+      if (s.status === "fresh") return true;
+      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+      return session && session.status === "fresh";
+    });
+
+    // If no fresh slot, offload LRU idle
+    if (!slot) {
+      const idleSlots = pool.slots.filter((s) => {
+        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+        return session && session.status === "idle";
+      });
+      if (idleSlots.length === 0)
+        throw new Error("No fresh or idle slots available");
+
+      idleSlots.sort((a, b) => {
+        const sa = sessionMap.get(a.sessionId);
+        const sb = sessionMap.get(b.sessionId);
+        return (sa?.idleTs || 0) - (sb?.idleTs || 0);
+      });
+      const victim = idleSlots[0];
+      const victimSession = sessionMap.get(victim.sessionId);
+      await offloadSession(victim.sessionId, victim.termId, null, {
+        cwd: victimSession?.cwd,
+        gitRoot: victimSession?.gitRoot,
+        pid: victim.pid,
+      });
+
+      const newSessionId = await pollForSessionId(
+        victim.pid,
+        30000,
+        victim.sessionId,
+      );
+      victim.sessionId = newSessionId;
+      victim.status = newSessionId ? "fresh" : "error";
+      writePool(pool);
+      slot = victim;
+      if (!newSessionId)
+        throw new Error("Slot failed to become fresh after offload");
+    }
+
+    const oldSlotSessionId = slot.sessionId;
+
+    await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
+    slot.status = "busy";
+    writePool(pool);
+
+    // Async: poll for session ID change after /resume triggers SessionStart hook
+    pollForSessionId(slot.pid, 60000, oldSlotSessionId)
+      .then((newSessionId) => {
+        withPoolLock(() => {
+          const p = readPool();
+          if (!p) return;
+          const s = p.slots.find((x) => x.termId === slot.termId);
+          if (s && newSessionId) {
+            s.sessionId = newSessionId;
+            writePool(p);
+          }
+        });
+        if (newSessionId) {
+          removeOffloadData(sessionId);
+        }
+        sessionsCache = null;
+      })
+      .catch((err) =>
+        console.error("[main] Post-resume session poll failed:", err.message),
+      );
+
+    return {
+      type: "resumed",
+      sessionId,
+      termId: slot.termId,
+      slotIndex: slot.index,
+    };
+  });
+}
+
 function watchIntention(sessionId) {
   // Clean up previous watcher
   if (fileWatchers.has("current")) {
@@ -1838,6 +1934,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pool-read", () => readPool());
   ipcMain.handle("pool-destroy", async () => poolDestroy());
   ipcMain.handle("pool-clean", () => poolClean());
+  ipcMain.handle("pool-resume", async (_e, sessionId) => poolResume(sessionId));
 
   // Setup scripts
   ipcMain.handle("list-setup-scripts", () => {
@@ -2041,6 +2138,11 @@ app.whenReady().then(async () => {
           slotIndex: slot.index,
         };
       });
+    },
+
+    "pool-resume": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      return poolResume(msg.sessionId);
     },
 
     "pool-followup": async (msg) => {

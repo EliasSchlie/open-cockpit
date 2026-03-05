@@ -1120,51 +1120,13 @@ async function pollForFreshSlot(timeoutMs) {
 
 // Resume an offloaded session into a fresh slot
 async function resumeOffloadedSession(session) {
-  const meta = await window.api.readOffloadMeta(session.sessionId);
-  if (!meta || !meta.claudeSessionId) {
-    showNotification("Cannot resume: no session ID stored");
+  try {
+    const result = await window.api.poolResume(session.sessionId);
+    showNotification(`Resuming session in slot ${result.slotIndex}…`);
+  } catch (err) {
+    showNotification(`Resume failed: ${err.message}`);
     return;
   }
-
-  const freshSlot = await acquireFreshSlot();
-  if (!freshSlot) {
-    showNotification("All pool slots are busy — cannot resume");
-    return;
-  }
-
-  // Find the terminal for this fresh slot
-  const pool = await window.api.poolRead();
-  const slot = pool?.slots.find((s) => s.sessionId === freshSlot.sessionId);
-  if (!slot) {
-    showNotification("Could not find pool terminal for fresh slot");
-    return;
-  }
-
-  // Send /resume to the fresh slot's terminal (mirroring sub-Claude's flow)
-  await window.api.ptyWrite(slot.termId, "\x1b"); // Escape
-  await new Promise((r) => setTimeout(r, 500));
-  await window.api.ptyWrite(slot.termId, "\x15"); // Ctrl-U clear line
-  await new Promise((r) => setTimeout(r, 200));
-  await window.api.ptyWrite(slot.termId, `/resume ${meta.claudeSessionId}\n`);
-
-  // Poll until the session appears in getSessions
-  const started = Date.now();
-  while (Date.now() - started < 30000) {
-    await new Promise((r) => setTimeout(r, 500));
-    const sessions = await window.api.getSessions();
-    const resumed = sessions.find(
-      (s) => s.sessionId === session.sessionId && s.status !== "offloaded",
-    );
-    if (resumed) {
-      // Remove offload data only after confirmed resume
-      await window.api.removeOffloadData(session.sessionId);
-      await loadSessions();
-      await selectSession(resumed);
-      return;
-    }
-  }
-
-  // Fallback: just refresh
   await loadSessions();
 }
 

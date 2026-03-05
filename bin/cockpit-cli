@@ -86,6 +86,33 @@ case "$CMD" in
     fi
     ;;
 
+  resume)
+    SESSION_ID="${1:?sessionId required}"
+    shift
+    BLOCK=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --block) BLOCK=true; shift ;;
+        *) shift ;;
+      esac
+    done
+
+    json="{\"type\":\"pool-resume\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    RESULT=$(send_api "$json" 60)
+    check_error "$RESULT"
+    SLOT=$(json_field "$RESULT" "slotIndex")
+
+    if $BLOCK; then
+      echo "Resumed in slot $SLOT" >&2
+      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
+      WAIT_RESULT=$(send_api "$wait_json" 310)
+      check_error "$WAIT_RESULT"
+      json_field "$WAIT_RESULT" "buffer"
+    else
+      echo "Resumed in slot $SLOT"
+    fi
+    ;;
+
   followup)
     SESSION_ID="${1:?sessionId required}"
     shift
@@ -277,6 +304,7 @@ Usage: cockpit-cli <command> [args...]
 
 Session commands (sub-claude compatible):
   start <prompt> [--block]     Send prompt to fresh slot, return session ID
+  resume <id> [--block]        Resume offloaded/archived session into fresh slot
   followup <id> <prompt> [--block]  Follow up on idle session
   wait [id]                    Wait for session to finish, print output
   capture <id>                 Show live terminal content

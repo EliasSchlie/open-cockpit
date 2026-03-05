@@ -8,6 +8,8 @@ Unix socket API at `~/.open-cockpit/api.sock` for external process control. Prot
 # Session commands (sub-claude compatible)
 bin/cockpit-cli start "fix the login bug"          # returns session ID
 bin/cockpit-cli start "fix the login bug" --block   # waits, prints output
+bin/cockpit-cli resume <id>                         # resume offloaded/archived session
+bin/cockpit-cli resume <id> --block                 # resume and wait for completion
 bin/cockpit-cli followup <id> "also add tests"      # follow up on idle session
 bin/cockpit-cli wait <id>                            # wait for session to finish
 bin/cockpit-cli wait                                 # wait for any session
@@ -66,6 +68,7 @@ Send JSON with `type` and optional `id`. Response echoes `id` back.
 | Command | Fields | Response |
 |---------|--------|----------|
 | `pool-start` | `prompt` | `{ type: "started", sessionId, termId, slotIndex }` |
+| `pool-resume` | `sessionId` | `{ type: "resumed", sessionId, termId, slotIndex }` |
 | `pool-followup` | `sessionId`, `prompt` | `{ type: "started", sessionId, termId, slotIndex }` |
 | `pool-wait` | `sessionId` (optional), `timeout` (optional, ms, default 300000) | `{ type: "result", sessionId, buffer }` |
 | `pool-capture` | `sessionId` or `slotIndex` | `{ type: "buffer", sessionId, slotIndex, buffer }` |
@@ -74,6 +77,7 @@ Send JSON with `type` and optional `id`. Response echoes `id` back.
 | `pool-clean` | -- | `{ type: "cleaned", count }` |
 
 `pool-start` acquires the first fresh slot, sends the prompt, and marks the slot busy.
+`pool-resume` resumes an offloaded/archived session into a fresh slot (acquires fresh or offloads LRU idle). Unarchives if needed.
 `pool-followup` sends a follow-up to an idle session (errors if not idle).
 `pool-wait` long-polls until the session (or any busy session if no ID) becomes idle.
 `pool-result` returns the buffer only if the session is not running.
