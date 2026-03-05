@@ -1588,29 +1588,69 @@ function focusEditor() {
 }
 
 // --- Command palette ---
+// --- Shortcut display helpers ---
+// Convert Electron accelerator to display string (e.g. "CmdOrCtrl+N" → "⌘N")
+function formatShortcutDisplay(accel) {
+  if (!accel) return "";
+  return accel
+    .replace(/CmdOrCtrl\+/gi, "⌘")
+    .replace(/Cmd\+/gi, "⌘")
+    .replace(/Ctrl\+/gi, "⌃")
+    .replace(/Shift\+/gi, "⇧")
+    .replace(/Alt\+/gi, "⌥")
+    .replace(/\+/g, "")
+    .replace(/Tab/gi, "⇥")
+    .replace(/Up/gi, "↑")
+    .replace(/Down/gi, "↓")
+    .replace(/Left/gi, "←")
+    .replace(/Right/gi, "→");
+}
+
+// Loaded shortcut config (populated on init)
+let shortcutConfig = {};
+
+// Cycle pane focus: editor → terminal tabs (round-robin) → back to editor
+function cyclePane() {
+  if (editorMount.contains(document.activeElement)) {
+    // Editor focused → go to first terminal
+    focusTerminal();
+  } else if (activeTermIndex >= 0 && terminals.length > 1) {
+    // On a terminal tab — cycle to next, or wrap to editor
+    const nextIdx = activeTermIndex + 1;
+    if (nextIdx < terminals.length) {
+      switchToTerminal(nextIdx);
+    } else {
+      focusEditor();
+    }
+  } else {
+    // On terminal (single) or somewhere else → go to editor
+    focusEditor();
+  }
+}
+
 const COMMANDS = [
   {
     id: "next-session",
     label: "Next Session",
-    shortcut: "Alt+↓",
+    shortcutAction: "next-session",
     action: () => switchSession(1),
   },
   {
     id: "prev-session",
     label: "Previous Session",
-    shortcut: "Alt+↑",
+    shortcutAction: "prev-session",
     action: () => switchSession(-1),
   },
   {
     id: "new-session",
     label: "New Claude Session",
-    shortcut: "⌘N",
+    shortcutAction: "new-session",
     action: () => newSessionBtn.click(),
   },
   {
     id: "new-terminal",
     label: "New Terminal Tab",
-    shortcut: "⌘T",
+    shortcutAction: "new-terminal-tab",
     action: () => {
       if (currentSessionId) spawnTerminal(currentSessionCwd);
     },
@@ -1618,7 +1658,7 @@ const COMMANDS = [
   {
     id: "close-terminal",
     label: "Close Terminal Tab",
-    shortcut: "⌘W",
+    shortcutAction: "close-terminal-tab",
     action: () => {
       if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
     },
@@ -1626,7 +1666,7 @@ const COMMANDS = [
   {
     id: "next-tab",
     label: "Next Terminal Tab",
-    shortcut: "⌘⇧]",
+    shortcutAction: "next-tab",
     action: () => {
       if (terminals.length > 1)
         switchToTerminal((activeTermIndex + 1) % terminals.length);
@@ -1635,7 +1675,7 @@ const COMMANDS = [
   {
     id: "prev-tab",
     label: "Previous Terminal Tab",
-    shortcut: "⌘⇧[",
+    shortcutAction: "prev-tab",
     action: () => {
       if (terminals.length > 1)
         switchToTerminal(
@@ -1646,43 +1686,31 @@ const COMMANDS = [
   {
     id: "jump-recent-idle",
     label: "Jump to Recent Idle",
-    shortcut: "⌘J",
+    shortcutAction: "jump-recent-idle",
     action: jumpToRecentIdle,
   },
   {
     id: "archive-current-session",
     label: "Archive Current Session",
-    shortcut: "⌘D",
+    shortcutAction: "archive-current-session",
     action: archiveCurrentSession,
   },
   {
     id: "toggle-sidebar",
     label: "Toggle Sidebar",
-    shortcut: "⌘\\",
+    shortcutAction: "toggle-sidebar",
     action: toggleSidebar,
   },
   {
-    id: "focus-editor",
-    label: "Focus Editor",
-    shortcut: "⌘E",
-    action: focusEditor,
-  },
-  {
-    id: "focus-terminal",
-    label: "Focus Terminal",
-    shortcut: "⌘`",
-    action: focusTerminal,
-  },
-  {
-    id: "focus-external-terminal",
-    label: "Focus External Terminal",
-    shortcut: "⌘O",
-    action: focusCurrentExternalTerminal,
+    id: "cycle-pane",
+    label: "Cycle Pane Focus",
+    shortcutAction: "cycle-pane",
+    action: cyclePane,
   },
   {
     id: "toggle-pane-focus",
     label: "Toggle Pane Focus",
-    shortcut: "Alt+←/→",
+    shortcutAction: "toggle-pane-focus",
     action: () => {
       if (editorMount.contains(document.activeElement)) {
         focusTerminal();
@@ -1692,9 +1720,26 @@ const COMMANDS = [
     },
   },
   {
+    id: "focus-editor",
+    label: "Focus Editor",
+    shortcutAction: "focus-editor",
+    action: focusEditor,
+  },
+  {
+    id: "focus-terminal",
+    label: "Focus Terminal",
+    shortcutAction: "focus-terminal",
+    action: focusTerminal,
+  },
+  {
+    id: "focus-external-terminal",
+    label: "Focus External Terminal",
+    shortcutAction: "focus-external",
+    action: focusCurrentExternalTerminal,
+  },
+  {
     id: "refresh",
     label: "Refresh Sessions",
-    shortcut: "",
     action: () => {
       loadDirColors();
       loadSessions();
@@ -1703,7 +1748,7 @@ const COMMANDS = [
   {
     id: "command-palette",
     label: "Command Palette",
-    shortcut: "⌘/",
+    shortcutAction: "toggle-command-palette",
     action: () => toggleCommandPalette(),
   },
 ];
@@ -1746,13 +1791,19 @@ function closeCommandPalette() {
   focusTerminal();
 }
 
+// Get display shortcut for a command (dynamic from config)
+function getCommandShortcut(cmd) {
+  if (!cmd.shortcutAction) return "";
+  return formatShortcutDisplay(shortcutConfig[cmd.shortcutAction] || "");
+}
+
 function renderPaletteList(query) {
   const q = query.toLowerCase();
   filteredCommands = q
     ? COMMANDS.filter(
         (c) =>
           c.label.toLowerCase().includes(q) ||
-          c.shortcut.toLowerCase().includes(q),
+          getCommandShortcut(c).toLowerCase().includes(q),
       )
     : COMMANDS.filter((c) => !c.id.startsWith("tab-")); // Hide tab-N from unfiltered list
 
@@ -1765,7 +1816,8 @@ function renderPaletteList(query) {
   filteredCommands.forEach((cmd, i) => {
     const item = document.createElement("div");
     item.className = `command-palette-item${i === paletteSelectedIndex ? " selected" : ""}`;
-    item.innerHTML = `<span class="command-palette-label">${cmd.label}</span><span class="command-palette-shortcut">${cmd.shortcut}</span>`;
+    const shortcut = getCommandShortcut(cmd);
+    item.innerHTML = `<span class="command-palette-label">${cmd.label}</span><span class="command-palette-shortcut">${shortcut}</span>`;
     item.addEventListener("click", () => {
       closeCommandPalette();
       cmd.action();
@@ -1869,6 +1921,7 @@ window.api.onTogglePaneFocus(() => {
     focusEditor();
   }
 });
+window.api.onCyclePane(cyclePane);
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
@@ -2397,11 +2450,193 @@ async function showPoolSettings() {
 COMMANDS.push({
   id: "pool-settings",
   label: "Pool Settings",
-  shortcut: "",
   action: () => showPoolSettings(),
 });
 
+// --- Shortcut Settings UI ---
+// Build labels from COMMANDS entries (avoids duplicating labels)
+const SHORTCUT_LABELS = {};
+for (const cmd of COMMANDS) {
+  if (cmd.shortcutAction) SHORTCUT_LABELS[cmd.shortcutAction] = cmd.label;
+}
+// Actions only reachable via input events (no COMMANDS entry)
+SHORTCUT_LABELS["next-terminal-tab-alt"] = "Next Tab (Alt)";
+SHORTCUT_LABELS["prev-terminal-tab-alt"] = "Previous Tab (Alt)";
+
+async function showShortcutSettings() {
+  const existing = document.getElementById("shortcut-settings");
+  if (existing) existing.remove();
+
+  const shortcuts = await window.api.getShortcuts();
+  shortcutConfig = shortcuts;
+
+  // Track active keydown listener for cleanup
+  let activeKeyHandler = null;
+
+  function cleanupRecording() {
+    if (activeKeyHandler) {
+      document.removeEventListener("keydown", activeKeyHandler, true);
+      activeKeyHandler = null;
+    }
+  }
+
+  const overlay = document.createElement("div");
+  overlay.id = "shortcut-settings";
+  overlay.className = "offload-menu-overlay";
+
+  const actionIds = Object.keys(SHORTCUT_LABELS);
+  const rows = actionIds
+    .map((id) => {
+      const label = SHORTCUT_LABELS[id];
+      const current = shortcuts[id] || "";
+      const display = formatShortcutDisplay(current) || "—";
+      return `<div class="shortcut-row" data-action="${id}">
+        <span class="shortcut-label">${label}</span>
+        <button class="shortcut-key-btn" title="Click to rebind">${display}</button>
+        <button class="shortcut-reset-btn" title="Reset to default">↺</button>
+      </div>`;
+    })
+    .join("");
+
+  overlay.innerHTML = `
+    <div class="shortcut-settings-dialog">
+      <div class="pool-settings-header">
+        <span>Keyboard Shortcuts</span>
+        <button class="close-dialog-btn">✕</button>
+      </div>
+      <div class="shortcut-settings-body">
+        ${rows}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  function closeDialog() {
+    cleanupRecording();
+    overlay.remove();
+  }
+
+  // Close on overlay click or close button
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay
+    .querySelector(".close-dialog-btn")
+    .addEventListener("click", closeDialog);
+
+  // Rebind: click key button → enter recording mode
+  overlay.querySelectorAll(".shortcut-key-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // Cancel any existing recording
+      cleanupRecording();
+      const existingBtn = overlay.querySelector(".shortcut-key-btn.recording");
+      if (existingBtn && existingBtn !== btn) {
+        existingBtn.classList.remove("recording");
+        const oldAction = existingBtn.closest(".shortcut-row").dataset.action;
+        existingBtn.textContent =
+          formatShortcutDisplay(shortcuts[oldAction]) || "\u2014";
+      }
+
+      btn.classList.add("recording");
+      btn.textContent = "Press keys...";
+
+      function onKeyDown(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Ignore lone modifier keys
+        if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
+
+        // Escape cancels recording
+        if (e.key === "Escape") {
+          btn.classList.remove("recording");
+          const actionId = btn.closest(".shortcut-row").dataset.action;
+          btn.textContent =
+            formatShortcutDisplay(shortcuts[actionId]) || "\u2014";
+          cleanupRecording();
+          return;
+        }
+
+        // Build Electron accelerator from the event
+        const parts = [];
+        if (e.metaKey) parts.push("CmdOrCtrl");
+        if (e.ctrlKey && !e.metaKey) parts.push("Ctrl");
+        if (e.shiftKey) parts.push("Shift");
+        if (e.altKey) parts.push("Alt");
+
+        const keyMap = {
+          ArrowUp: "Up",
+          ArrowDown: "Down",
+          ArrowLeft: "Left",
+          ArrowRight: "Right",
+          " ": "Space",
+          Backspace: "Backspace",
+          Delete: "Delete",
+          Enter: "Return",
+          Tab: "Tab",
+        };
+        const key = keyMap[e.key] || e.key.toUpperCase();
+        parts.push(key);
+
+        const accelerator = parts.join("+");
+        const actionId = btn.closest(".shortcut-row").dataset.action;
+
+        btn.classList.remove("recording");
+        btn.textContent = formatShortcutDisplay(accelerator);
+        shortcuts[actionId] = accelerator;
+        shortcutConfig = { ...shortcuts };
+
+        window.api.setShortcut(actionId, accelerator);
+        cleanupRecording();
+      }
+
+      activeKeyHandler = onKeyDown;
+      document.addEventListener("keydown", onKeyDown, true);
+    });
+  });
+
+  // Reset buttons
+  overlay.querySelectorAll(".shortcut-reset-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".shortcut-row");
+      const actionId = row.dataset.action;
+      await window.api.resetShortcut(actionId);
+      const defaultVal = await window.api.getDefaultShortcut(actionId);
+      shortcuts[actionId] = defaultVal;
+      shortcutConfig = { ...shortcuts };
+      const keyBtn = row.querySelector(".shortcut-key-btn");
+      keyBtn.textContent = formatShortcutDisplay(defaultVal) || "—";
+    });
+  });
+
+  // Unbind: button to clear a shortcut
+  overlay.querySelectorAll(".shortcut-key-btn").forEach((btn) => {
+    btn.addEventListener("contextmenu", async (e) => {
+      e.preventDefault();
+      const row = btn.closest(".shortcut-row");
+      const actionId = row.dataset.action;
+      await window.api.setShortcut(actionId, "");
+      shortcuts[actionId] = "";
+      shortcutConfig = { ...shortcuts };
+      btn.textContent = "—";
+    });
+  });
+}
+
+// Add shortcut settings to command palette
+COMMANDS.push({
+  id: "shortcut-settings",
+  label: "Keyboard Shortcuts",
+  action: () => showShortcutSettings(),
+});
+
 loadDirColors().then(async () => {
+  // Load shortcut config for command palette display
+  try {
+    shortcutConfig = await window.api.getShortcuts();
+  } catch {}
+
   await reconnectAllPtys();
   const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh
   let sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);

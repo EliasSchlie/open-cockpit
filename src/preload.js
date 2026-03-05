@@ -20,6 +20,7 @@ const channels = [
   "focus-terminal",
   "toggle-command-palette",
   "toggle-pane-focus",
+  "cycle-pane",
   "focus-external",
   "jump-recent-idle",
   "archive-current-session",
@@ -96,6 +97,14 @@ contextBridge.exposeInMainWorld("api", {
   listSetupScripts: () => ipcRenderer.invoke("list-setup-scripts"),
   readSetupScript: (name) => ipcRenderer.invoke("read-setup-script", name),
 
+  // Shortcut settings
+  getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
+  getDefaultShortcut: (actionId) =>
+    ipcRenderer.invoke("get-default-shortcut", actionId),
+  setShortcut: (actionId, accelerator) =>
+    ipcRenderer.invoke("set-shortcut", actionId, accelerator),
+  resetShortcut: (actionId) => ipcRenderer.invoke("reset-shortcut", actionId),
+
   // Menu actions
   onNewTerminalTab: (callback) =>
     ipcRenderer.on("new-terminal-tab", () => callback()),
@@ -121,6 +130,7 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("toggle-command-palette", () => callback()),
   onTogglePaneFocus: (callback) =>
     ipcRenderer.on("toggle-pane-focus", () => callback()),
+  onCyclePane: (callback) => ipcRenderer.on("cycle-pane", () => callback()),
   onFocusExternalTerminal: (callback) =>
     ipcRenderer.on("focus-external", () => callback()),
   onJumpRecentIdle: (callback) =>
