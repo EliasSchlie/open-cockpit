@@ -984,32 +984,64 @@ function writePool(pool) {
 }
 
 // Poll a terminal's buffer for the trust prompt and send Enter to accept it.
-// Returns true if prompt was found and accepted, false if timed out.
-async function waitForTrustPromptAndAccept(termId, timeoutMs = 10000) {
-  const POLL_INTERVAL = 300;
+// Uses read-buffer (single terminal) instead of list (all terminals) to avoid
+// socket contention when many slots poll simultaneously.
+// Verifies the prompt was actually dismissed after sending Enter.
+async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
+  const POLL_INTERVAL = 200;
+  const VERIFY_INTERVAL = 150;
+  const VERIFY_TIMEOUT = 3000;
+  const MAX_RETRIES = 3;
   const TRUST_PATTERNS = ["Do you trust", "trust the files"];
+
+  const bufferHasTrustPrompt = (buffer) =>
+    TRUST_PATTERNS.some((pat) => buffer.includes(pat));
+
+  const readBuffer = async () => {
+    const resp = await daemonRequest({ type: "read-buffer", termId });
+    return resp.buffer || "";
+  };
+
   let elapsed = 0;
   while (elapsed < timeoutMs) {
+    let buffer;
     try {
-      const resp = await daemonRequest({ type: "list" });
-      const pty = resp.ptys.find((p) => p.termId === termId);
-      if (pty && pty.buffer) {
-        const hasTrustPrompt = TRUST_PATTERNS.some((pat) =>
-          pty.buffer.includes(pat),
-        );
-        if (hasTrustPrompt) {
-          daemonSend({ type: "write", termId, data: "\r" });
-          return true;
-        }
-      }
+      buffer = await readBuffer();
     } catch {
-      // Daemon disconnected or terminal gone — stop polling
+      return false; // Daemon gone
+    }
+
+    if (bufferHasTrustPrompt(buffer)) {
+      // Trust prompt detected — send Enter and verify it was accepted
+      for (let _attempt = 0; _attempt < MAX_RETRIES; _attempt++) {
+        daemonSend({ type: "write", termId, data: "\r" });
+        // Verify the prompt disappeared
+        const verifyStart = Date.now();
+        while (Date.now() - verifyStart < VERIFY_TIMEOUT) {
+          await new Promise((r) => setTimeout(r, VERIFY_INTERVAL));
+          try {
+            const newBuffer = await readBuffer();
+            if (!bufferHasTrustPrompt(newBuffer)) return true; // Confirmed
+          } catch {
+            return false;
+          }
+        }
+        // Prompt still there — retry
+        console.warn(
+          `[pool] Trust prompt still present after Enter (termId=${termId}), retrying...`,
+        );
+      }
+      // All retries exhausted but prompt still present
+      console.error(
+        `[pool] Failed to dismiss trust prompt after ${MAX_RETRIES} retries (termId=${termId})`,
+      );
       return false;
     }
+
     await new Promise((r) => setTimeout(r, POLL_INTERVAL));
     elapsed += POLL_INTERVAL;
   }
-  // Fallback: send Enter anyway in case we missed the prompt (e.g. buffer wrapped)
+  // Fallback: send Enter in case prompt appeared but wasn't pattern-matched
   daemonSend({ type: "write", termId, data: "\r" });
   return false;
 }
