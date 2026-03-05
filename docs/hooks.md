@@ -40,10 +40,6 @@ Detects when sessions become idle (waiting for user input) or start processing. 
 | `UserPromptSubmit` | — | clear | User submitted a prompt |
 | `SessionStart` | `clear` | clear | Session was cleared (`/clear`) |
 
-### Block detection
-
-The Stop hook waits 1s then checks if the JSONL transcript was modified — if so, another hook blocked and the session continued (not idle). The signal is removed.
-
 ### Signal file format
 
 ```json
