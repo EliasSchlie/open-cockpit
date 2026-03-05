@@ -87,8 +87,11 @@ Just push your changes — CI handles version bumping and marketplace sync. For 
 
 - `npm start` — production instance (user's daily driver, don't touch during dev)
 - `npm run dev` — dev instance with separate user data dir + "DEV" in title, safe to restart freely
+- `npm run dev:own-pool` — like `dev` but uses its own pool (`pool-dev.json`), isolated from production
 - Both can run simultaneously
 - Multiple Claude sessions may run dev instances concurrently from different worktrees
+
+> ⚠️ **Pool operations in dev mode**: By default, `npm run dev` shares the production pool. If you need to init, destroy, resize, or otherwise modify the pool during development, **always use `npm run dev:own-pool`** to avoid disrupting the production pool.
 
 ## Git hooks
 
