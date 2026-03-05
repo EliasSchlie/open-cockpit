@@ -10,14 +10,6 @@
         ]
       },
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-intention-intro.sh"
-          }
-        ]
-      },
-      {
         "matcher": "clear",
         "hooks": [
           {
@@ -71,6 +63,10 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-intention-intro.sh"
+          },
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/intention-change-notify.sh"

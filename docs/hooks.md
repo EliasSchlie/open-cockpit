@@ -8,16 +8,13 @@ Writes the session ID to `~/.open-cockpit/session-pids/<PID>` so the app can dis
 
 Stale PID entries (dead processes) are cleaned up on each session start. Also deduplicates: if another alive PID maps to the same session UUID (e.g. after `/resume`), the older file is removed.
 
-## `SessionStart` → `session-intention-intro.sh`
+## `UserPromptSubmit` → `session-intention-intro.sh` (once per session)
 
-Introduces Claude to the session's intention file (`~/.open-cockpit/intentions/<session_id>.md`). Instructs Claude to:
+Introduces Claude to the session's intention file (`~/.open-cockpit/intentions/<session_id>.md`) on the first user prompt. Uses a PID-based marker file (`~/.open-cockpit/intentions/.intro-sent/<PID>`) to fire only once per session. Stale markers from dead PIDs are cleaned up automatically.
 
-- Read existing intention content and resume from it
-- Collaborate with the user to define the session's goal if empty
-- Write a markdown title + description capturing the intent
-- Keep the file updated as the goal evolves
+Resolves the session ID via PID mapping (written by `session-pid-map.sh` at SessionStart). Also creates an initial snapshot for change detection (used by `intention-change-notify.sh`).
 
-Also creates an initial snapshot for change detection (used by the UserPromptSubmit hook).
+Previously this was a `SessionStart` hook, but `UserPromptSubmit` is more reliable — `SessionStart` doesn't consistently deliver output to Claude's context.
 
 ## `UserPromptSubmit` → `intention-change-notify.sh`
 
