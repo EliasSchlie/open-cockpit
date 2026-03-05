@@ -6,61 +6,10 @@ on:
 
 jobs:
   release:
-    # Skip if this commit was made by the workflow itself
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          repositories: open-cockpit,claude-plugins
-
-      - name: Checkout plugin repo
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install dependencies and run tests
-        run: |
-          npm ci
-          npm test
-
-      - name: Bump patch version
-        id: bump
-        run: |
-          PLUGIN_JSON=".claude-plugin/plugin.json"
-          current=$(jq -r '.version' "$PLUGIN_JSON")
-          IFS='.' read -r major minor patch <<< "$current"
-          new="${major}.${minor}.$((patch + 1))"
-          jq --arg v "$new" '.version = $v' "$PLUGIN_JSON" > tmp.json && mv tmp.json "$PLUGIN_JSON"
-          echo "version=$new" >> "$GITHUB_OUTPUT"
-          echo "Bumped $current -> $new"
-
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/plugin.json
-          git commit -m "Release v${{ steps.bump.outputs.version }} [skip ci]"
-          git push
-
-      - name: Update marketplace
-        run: |
-          git clone https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/EliasSchlie/claude-plugins.git /tmp/marketplace
-          cd /tmp/marketplace
-          jq --arg v "${{ steps.bump.outputs.version }}" \
-            '(.plugins[] | select(.name == "open-cockpit")).version = $v' \
-            .claude-plugin/marketplace.json > tmp.json && mv tmp.json .claude-plugin/marketplace.json
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/marketplace.json
-          git commit -m "Bump open-cockpit to ${{ steps.bump.outputs.version }} [skip ci]"
-          git push
+    uses: EliasSchlie/claude-plugins/.github/workflows/plugin-release.yml@main
+    with:
+      plugin-name: open-cockpit
+      run-tests: true
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

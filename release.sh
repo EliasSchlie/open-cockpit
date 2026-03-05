@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Bumps the version in both this repo and the marketplace, commits, and pushes.
+# DEPRECATED: CI now handles patch releases automatically on push to main.
+# Use this only as a manual fallback or for explicit major/minor bumps.
 #
 # Usage: ./release.sh          # auto-increments patch (0.1.0 → 0.1.1)
 #        ./release.sh 1.0.0    # explicit version
