@@ -673,9 +673,7 @@ async function poolResize(newSize) {
 
     let removed = 0;
     for (const slot of candidates) {
-      try {
-        await daemonRequest({ type: "kill", termId: slot.termId });
-      } catch {}
+      await killSlotProcess(slot);
       pool.slots = pool.slots.filter((s) => s.index !== slot.index);
       removed++;
     }
@@ -725,6 +723,12 @@ async function reconcilePool() {
       if (slot.status !== "dead") {
         slot.status = "dead";
         changed = true;
+      }
+      // Kill orphaned process by PID before restarting
+      if (slot.pid) {
+        try {
+          process.kill(slot.pid, "SIGTERM");
+        } catch {}
       }
       // Auto-restart dead slot
       try {
@@ -802,14 +806,27 @@ function syncPoolStatuses(sessions) {
   if (updated) writePool(updated);
 }
 
+// Kill a pool slot's process: try daemon first, then fall back to PID kill.
+// This prevents orphans when the daemon was restarted and termIds are stale.
+async function killSlotProcess(slot) {
+  try {
+    await daemonRequest({ type: "kill", termId: slot.termId });
+  } catch {
+    // Daemon kill failed (stale termId or daemon down) — kill by PID directly
+    if (slot.pid) {
+      try {
+        process.kill(slot.pid, "SIGTERM");
+      } catch {}
+    }
+  }
+}
+
 // Destroy pool: kill all slots and remove pool.json
 async function poolDestroy() {
   const pool = readPool();
   if (!pool) return;
   for (const slot of pool.slots) {
-    try {
-      await daemonRequest({ type: "kill", termId: slot.termId });
-    } catch {}
+    await killSlotProcess(slot);
   }
   try {
     fs.unlinkSync(POOL_FILE);
