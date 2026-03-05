@@ -769,7 +769,7 @@ const STATUS_CLASSES = {
 
 // Build a fingerprint for a session to detect changes
 function sessionFingerprint(s) {
-  return `${s.sessionId}|${s.status}|${s.intentionHeading || ""}|${s.cwd || ""}|${s.origin || ""}`;
+  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.cwd || ""}|${s.origin || ""}`;
 }
 
 // Track previous session fingerprints for diff-based updates
@@ -867,13 +867,16 @@ function createSessionItem(s) {
   const originTag = s.origin
     ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
     : "";
+  const staleTag = s.staleIdle
+    ? `<span class="session-origin-tag session-origin-stale">stale</span>`
+    : "";
   li.innerHTML = `
     <div class="session-dir-indicator" style="${indicatorStyle}"></div>
     <div class="session-item-content">
       <div class="session-project">
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
         ${escapeHtml(heading)}
-        ${originTag}
+        ${originTag}${staleTag}
       </div>
       <div class="session-cwd">${escapeHtml(dp)}</div>
     </div>
