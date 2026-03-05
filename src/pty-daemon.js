@@ -66,6 +66,7 @@ function sendTo(socket, msg) {
 function resetIdleTimer() {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
+  // Re-arm only when fully idle (no terminals, no clients)
   if (terminals.size === 0 && clients.size === 0) {
     idleTimer = setTimeout(() => {
       console.log("[pty-daemon] Idle timeout, exiting");
@@ -79,15 +80,25 @@ function cleanup() {
   for (const [, entry] of terminals) {
     try {
       entry.proc.kill();
-    } catch {}
+    } catch {
+      // Process may already be dead — safe to ignore
+    }
   }
   terminals.clear();
   try {
     fs.unlinkSync(SOCKET_PATH);
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      console.error("[pty-daemon] Failed to remove socket:", err.message);
+    }
+  }
   try {
     fs.unlinkSync(path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"));
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      console.error("[pty-daemon] Failed to remove PID file:", err.message);
+    }
+  }
 }
 
 // --- Command handlers ---
@@ -138,33 +149,47 @@ function handleSpawn(socket, msg) {
   terminals.set(termId, entry);
 
   proc.onData((data) => {
-    // Buffer for replay (chunked to avoid O(n) string concat per event)
-    entry.chunks.push(data);
-    entry.chunksLen += data.length;
-    if (entry.chunksLen > BUFFER_SIZE * 2) {
-      let joined = entry.chunks.join("").slice(-BUFFER_SIZE);
-      // Skip leading UTF-8 continuation bytes (0x80-0xBF) to avoid starting
-      // mid-character if the slice split a multi-byte sequence (#90)
-      while (
-        joined.length > 0 &&
-        joined.charCodeAt(0) >= 0x80 &&
-        joined.charCodeAt(0) <= 0xbf
-      ) {
-        joined = joined.slice(1);
+    try {
+      // Buffer for replay (chunked to avoid O(n) string concat per event)
+      entry.chunks.push(data);
+      entry.chunksLen += data.length;
+      if (entry.chunksLen > BUFFER_SIZE * 2) {
+        let joined = entry.chunks.join("").slice(-BUFFER_SIZE);
+        // Skip leading UTF-8 continuation bytes (0x80-0xBF) to avoid starting
+        // mid-character if the slice split a multi-byte sequence (#90)
+        while (
+          joined.length > 0 &&
+          joined.charCodeAt(0) >= 0x80 &&
+          joined.charCodeAt(0) <= 0xbf
+        ) {
+          joined = joined.slice(1);
+        }
+        entry.chunks = [joined];
+        entry.chunksLen = joined.length;
       }
-      entry.chunks = [joined];
-      entry.chunksLen = joined.length;
+      broadcast(termId, { type: "data", termId, data });
+    } catch (err) {
+      console.error(
+        `[pty-daemon] onData error (termId=${termId}):`,
+        err.message,
+      );
     }
-    broadcast(termId, { type: "data", termId, data });
   });
 
   proc.onExit(({ exitCode }) => {
-    entry.meta.exited = true;
-    entry.meta.exitCode = exitCode;
-    broadcast(termId, { type: "exit", termId, exitCode });
-    // Keep the entry around so clients can still see the buffer and exit status.
-    // It gets cleaned up when all clients detach or via kill.
-    resetIdleTimer();
+    try {
+      entry.meta.exited = true;
+      entry.meta.exitCode = exitCode;
+      broadcast(termId, { type: "exit", termId, exitCode });
+      // Keep the entry around so clients can still see the buffer and exit status.
+      // It gets cleaned up when all clients detach or via kill.
+      resetIdleTimer();
+    } catch (err) {
+      console.error(
+        `[pty-daemon] onExit error (termId=${termId}):`,
+        err.message,
+      );
+    }
   });
 
   if (idleTimer) {
@@ -202,7 +227,9 @@ function handleKill(socket, msg) {
     if (!entry.meta.exited) {
       try {
         entry.proc.kill();
-      } catch {}
+      } catch {
+        // Process may already be dead — safe to ignore
+      }
     }
     terminals.delete(msg.termId);
   }
@@ -333,10 +360,14 @@ function handleMessage(socket, msg) {
 function startServer() {
   fs.mkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
-  // Remove stale socket
+  // Remove stale socket — ENOENT expected on first run
   try {
     fs.unlinkSync(SOCKET_PATH);
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      console.error("[pty-daemon] Failed to remove stale socket:", err.message);
+    }
+  }
 
   const server = net.createServer((socket) => {
     clients.add(socket);
@@ -358,7 +389,10 @@ function startServer() {
       }
     });
 
-    socket.on("close", () => {
+    let disconnected = false;
+    function cleanupClient() {
+      if (disconnected) return; // guard against double cleanup from close+error
+      disconnected = true;
       clients.delete(socket);
       // Remove this socket from all terminal client sets; reap exited terminals
       for (const [termId, entry] of terminals) {
@@ -368,16 +402,15 @@ function startServer() {
         }
       }
       resetIdleTimer();
-    });
+    }
 
-    socket.on("error", () => {
-      clients.delete(socket);
-      for (const [termId, entry] of terminals) {
-        entry.clients.delete(socket);
-        if (entry.meta.exited && entry.clients.size === 0) {
-          terminals.delete(termId);
-        }
+    socket.on("close", cleanupClient);
+
+    socket.on("error", (err) => {
+      if (err.code !== "ECONNRESET" && err.code !== "EPIPE") {
+        console.error("[pty-daemon] Client socket error:", err.message);
       }
+      cleanupClient();
     });
   });
 
