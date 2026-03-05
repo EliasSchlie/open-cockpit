@@ -151,9 +151,9 @@ function findSlotBySessionId(pool, sessionId) {
  * Returns { pool, slot } or throws.
  */
 function findSlotByIndex(pool, slotIndex) {
+  if (!pool) throw new Error("Pool not initialized");
   if (typeof slotIndex !== "number" || !Number.isFinite(slotIndex))
     throw new Error("slotIndex must be a number");
-  if (!pool) throw new Error("Pool not initialized");
   const slot = pool.slots.find((s) => s.index === slotIndex);
   if (!slot) throw new Error(`No slot at index ${slotIndex}`);
   return { pool, slot };

@@ -499,6 +499,15 @@ describe("resolveSlotByAddress", () => {
     expect(slot.sessionId).toBe("abc-123");
   });
 
+  it("prefers slotIndex 0 over sessionId", () => {
+    const { slot } = resolveSlotByAddress(pool, {
+      slotIndex: 0,
+      sessionId: "def-456",
+    });
+    expect(slot.index).toBe(0);
+    expect(slot.sessionId).toBe("abc-123");
+  });
+
   it("throws when neither provided", () => {
     expect(() => resolveSlotByAddress(pool, {})).toThrow(
       "sessionId or slotIndex required",
