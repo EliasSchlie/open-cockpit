@@ -1667,22 +1667,20 @@ async function poolClean() {
   });
   let cleaned = 0;
   for (const slot of idleSlots) {
-    const session = sessionMap.get(slot.sessionId);
+    // Re-check status before offloading (slot may have become busy since we read)
+    const currentSessions = await getSessions();
+    const currentSession = currentSessions.find(
+      (s) => s.sessionId === slot.sessionId,
+    );
+    if (!currentSession || currentSession.status !== "idle") {
+      continue;
+    }
     await offloadSession(slot.sessionId, slot.termId, null, {
-      cwd: session?.cwd,
-      gitRoot: session?.gitRoot,
+      cwd: currentSession.cwd,
+      gitRoot: currentSession.gitRoot,
       pid: slot.pid,
     });
-    // Mark as archived so it moves to Archive section instead of staying in Recent
-    const offloadedMeta = readOffloadMeta(slot.sessionId);
-    if (offloadedMeta && !offloadedMeta.archived) {
-      offloadedMeta.archived = true;
-      offloadedMeta.archivedAt = new Date().toISOString();
-      secureWriteFileSync(
-        path.join(OFFLOADED_DIR, slot.sessionId, "meta.json"),
-        JSON.stringify(offloadedMeta, null, 2),
-      );
-    }
+    await archiveSession(slot.sessionId);
     cleaned++;
   }
   return cleaned;
