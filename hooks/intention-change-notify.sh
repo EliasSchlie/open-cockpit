@@ -1,9 +1,9 @@
 #!/bin/bash
-# Detects user edits to the intention file and surfaces the diff to Claude.
+# Reminds Claude to keep the intention file updated, and surfaces user edits.
 #
 # Triggered by: UserPromptSubmit
 # Input: none used (resolves session_id via PID mapping)
-# Output (stdout): Change notification with diff, or nothing if unchanged
+# Output (stdout): Always a reminder; includes diff if user edited the file
 
 set -euo pipefail
 
@@ -25,26 +25,25 @@ SNAPSHOT_FILE="$SNAPSHOT_DIR/${session_id}.md"
 
 mkdir -p "$SNAPSHOT_DIR"
 
-# No intention file yet — nothing to compare
-[ -f "$INTENTION_FILE" ] || exit 0
-
-# No snapshot yet — create baseline, no notification
-if [ ! -f "$SNAPSHOT_FILE" ]; then
+# Detect user edits (diff against snapshot)
+DIFF=""
+if [ -f "$INTENTION_FILE" ] && [ -f "$SNAPSHOT_FILE" ]; then
+  DIFF=$(diff -u "$SNAPSHOT_FILE" "$INTENTION_FILE" --label "previous" --label "current" 2>/dev/null) || true
+  if [ -n "$DIFF" ]; then
+    cp "$INTENTION_FILE" "$SNAPSHOT_FILE"
+  fi
+elif [ -f "$INTENTION_FILE" ] && [ ! -f "$SNAPSHOT_FILE" ]; then
   cp "$INTENTION_FILE" "$SNAPSHOT_FILE"
-  exit 0
 fi
 
-# Compare current file to snapshot (single diff call, check exit code)
-DIFF=$(diff -u "$SNAPSHOT_FILE" "$INTENTION_FILE" --label "previous" --label "current" 2>/dev/null) || true
+# Always remind; append user diff if present
+echo "Reminder: keep the intention file up to date."
 if [ -n "$DIFF" ]; then
-  cp "$INTENTION_FILE" "$SNAPSHOT_FILE"
   cat <<EOF
-The user updated their intention file ($INTENTION_FILE):
 
+User changes:
 \`\`\`diff
 $DIFF
 \`\`\`
-
-Review the changes and adjust your approach accordingly.
 EOF
 fi

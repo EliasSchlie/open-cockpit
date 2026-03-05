@@ -29,14 +29,12 @@ fi
 cat <<EOF
 ## Session Intention File
 
-Your intention file lives at: $INTENTION_FILE
+EMPTY_NOTE=""
+if [ ! -f "$INTENTION_FILE" ] || [ ! -s "$INTENTION_FILE" ]; then
+  EMPTY_NOTE=" (currently empty)"
+fi
 
-This file tracks what this session is about. At the start of a fresh session:
-1. Read the intention file if it already has content — resume from there.
-2. If it's empty or missing, collaborate with the user to define the session's goal:
-   - Write a markdown title (# heading) that summarizes the intent.
-   - Add a short description of what you'll accomplish together.
-3. Update the intention file as the goal evolves during the session.
+Your intention file lives at: ${INTENTION_FILE}${EMPTY_NOTE}
 
-The user can also edit this file directly in the Open Cockpit app — you'll be notified of their changes.
+Write a descriptive heading, then short bullet points about what you're working on together. Add more detail below as needed.
 EOF
