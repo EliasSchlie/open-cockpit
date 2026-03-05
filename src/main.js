@@ -496,18 +496,22 @@ async function offloadSession(
     writePool(pool);
 
     // Poll until the PID file changes from old UUID to new one
-    pollForSessionId(slot.pid, 60000, oldSessionId).then((newSessionId) => {
-      withPoolLock(() => {
-        const p = readPool();
-        if (!p) return;
-        const s = p.slots.find((x) => x.termId === termId);
-        if (s) {
-          s.sessionId = newSessionId;
-          s.status = newSessionId ? "fresh" : "error";
-          writePool(p);
-        }
-      });
-    });
+    pollForSessionId(slot.pid, 60000, oldSessionId)
+      .then((newSessionId) => {
+        withPoolLock(() => {
+          const p = readPool();
+          if (!p) return;
+          const s = p.slots.find((x) => x.termId === termId);
+          if (s) {
+            s.sessionId = newSessionId;
+            s.status = newSessionId ? "fresh" : "error";
+            writePool(p);
+          }
+        });
+      })
+      .catch((err) =>
+        console.error("[main] Post-offload session poll failed:", err.message),
+      );
   });
 
   return meta;
@@ -774,18 +778,22 @@ async function poolResize(newSize) {
 
       // Resolve session IDs in background (locked to avoid clobbering)
       for (const slot of newSlots) {
-        pollForSessionId(slot.pid, 60000).then((sessionId) => {
-          withPoolLock(() => {
-            const current = readPool();
-            if (!current) return;
-            const s = current.slots.find((x) => x.termId === slot.termId);
-            if (s) {
-              s.sessionId = sessionId;
-              s.status = sessionId ? "fresh" : "error";
-              writePool(current);
-            }
-          });
-        });
+        pollForSessionId(slot.pid, 60000)
+          .then((sessionId) => {
+            withPoolLock(() => {
+              const current = readPool();
+              if (!current) return;
+              const s = current.slots.find((x) => x.termId === slot.termId);
+              if (s) {
+                s.sessionId = sessionId;
+                s.status = sessionId ? "fresh" : "error";
+                writePool(current);
+              }
+            });
+          })
+          .catch((err) =>
+            console.error("[main] Resize session poll failed:", err.message),
+          );
       }
     } else {
       // Shrink: kill excess slots (prefer fresh, then LRU idle)
@@ -863,31 +871,38 @@ async function reconcilePool() {
           changed = true;
           // Accept trust prompt after spawning (runs in background)
           waitForTrustPromptAndAccept(newSlot.termId);
-          pollForSessionId(slot.pid, 60000).then((sessionId) => {
-            withPoolLock(() => {
-              const p = readPool();
-              if (!p) return;
-              const s = p.slots.find((x) => x.index === slot.index);
-              if (s) {
-                s.sessionId = sessionId;
-                s.status = sessionId ? "fresh" : "error";
-                writePool(p);
-                if (sessionId) {
-                  fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-                  fs.writeFileSync(
-                    path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
-                    JSON.stringify({
-                      cwd: os.homedir(),
-                      session_id: sessionId,
-                      transcript: "",
-                      ts: Math.floor(Date.now() / 1000),
-                      trigger: "pool-init",
-                    }),
-                  );
+          pollForSessionId(slot.pid, 60000)
+            .then((sessionId) => {
+              withPoolLock(() => {
+                const p = readPool();
+                if (!p) return;
+                const s = p.slots.find((x) => x.index === slot.index);
+                if (s) {
+                  s.sessionId = sessionId;
+                  s.status = sessionId ? "fresh" : "error";
+                  writePool(p);
+                  if (sessionId) {
+                    fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+                    fs.writeFileSync(
+                      path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
+                      JSON.stringify({
+                        cwd: os.homedir(),
+                        session_id: sessionId,
+                        transcript: "",
+                        ts: Math.floor(Date.now() / 1000),
+                        trigger: "pool-init",
+                      }),
+                    );
+                  }
                 }
-              }
-            });
-          });
+              });
+            })
+            .catch((err) =>
+              console.error(
+                "[main] Reconcile session poll failed:",
+                err.message,
+              ),
+            );
         } catch (err) {
           console.error(
             `[main] Failed to restart slot ${slot.index}:`,
@@ -1549,51 +1564,55 @@ app.whenReady().then(async () => {
 
     "pool-start": async (msg) => {
       if (!msg.prompt) throw new Error("prompt required");
-      const pool = readPool();
-      if (!pool) throw new Error("Pool not initialized");
+      return withPoolLock(async () => {
+        const pool = readPool();
+        if (!pool) throw new Error("Pool not initialized");
 
-      const sessions = getSessions();
-      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+        const sessions = getSessions();
+        const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
-      // Find first fresh slot
-      const slot = pool.slots.find((s) => {
-        if (s.status === "fresh") return true;
-        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-        return session && session.status === "fresh";
+        // Find first fresh slot
+        const slot = pool.slots.find((s) => {
+          if (s.status === "fresh") return true;
+          const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+          return session && session.status === "fresh";
+        });
+        if (!slot) throw new Error("No fresh slots available");
+
+        await sendPromptToTerminal(slot.termId, msg.prompt);
+        slot.status = "busy";
+        writePool(pool);
+
+        return {
+          type: "started",
+          sessionId: slot.sessionId,
+          termId: slot.termId,
+          slotIndex: slot.index,
+        };
       });
-      if (!slot) throw new Error("No fresh slots available");
-
-      await sendPromptToTerminal(slot.termId, msg.prompt);
-      slot.status = "busy";
-      writePool(pool);
-
-      return {
-        type: "started",
-        sessionId: slot.sessionId,
-        termId: slot.termId,
-        slotIndex: slot.index,
-      };
     },
 
     "pool-followup": async (msg) => {
       if (!msg.sessionId) throw new Error("sessionId required");
       if (!msg.prompt) throw new Error("prompt required");
-      const { pool, slot } = findSlotBySessionId(msg.sessionId);
+      return withPoolLock(async () => {
+        const { pool, slot } = findSlotBySessionId(msg.sessionId);
 
-      const status = getEffectiveSlotStatus(slot);
-      if (status !== "idle")
-        throw new Error(`Session is ${status}, expected idle`);
+        const status = getEffectiveSlotStatus(slot);
+        if (status !== "idle")
+          throw new Error(`Session is ${status}, expected idle`);
 
-      await sendPromptToTerminal(slot.termId, msg.prompt);
-      slot.status = "busy";
-      writePool(pool);
+        await sendPromptToTerminal(slot.termId, msg.prompt);
+        slot.status = "busy";
+        writePool(pool);
 
-      return {
-        type: "started",
-        sessionId: slot.sessionId,
-        termId: slot.termId,
-        slotIndex: slot.index,
-      };
+        return {
+          type: "started",
+          sessionId: slot.sessionId,
+          termId: slot.termId,
+          slotIndex: slot.index,
+        };
+      });
     },
 
     "pool-wait": async (msg) => {
