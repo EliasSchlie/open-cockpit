@@ -20,6 +20,9 @@ const {
   syncStatuses,
   createSlot,
   selectShrinkCandidates,
+  findSlotBySessionId: findSlotBySessionIdInPool,
+  findSlotByIndex: findSlotByIndexInPool,
+  resolveSlot: resolveSlotInPool,
 } = require("./pool");
 
 const IS_DEV = process.argv.includes("--dev");
@@ -1853,28 +1856,15 @@ app.whenReady().then(async () => {
   // --- Pool interaction helpers (used by API commands) ---
 
   function findSlotBySessionId(sessionId) {
-    validateSessionId(sessionId);
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const slot = pool.slots.find((s) => s.sessionId === sessionId);
-    if (!slot) throw new Error(`No slot found for session ${sessionId}`);
-    return { pool, slot };
+    return findSlotBySessionIdInPool(readPool(), sessionId);
   }
 
   function findSlotByIndex(slotIndex) {
-    if (typeof slotIndex !== "number" || !Number.isFinite(slotIndex))
-      throw new Error("slotIndex must be a number");
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const slot = pool.slots.find((s) => s.index === slotIndex);
-    if (!slot) throw new Error(`No slot at index ${slotIndex}`);
-    return { pool, slot };
+    return findSlotByIndexInPool(readPool(), slotIndex);
   }
 
   function resolveSlot(msg) {
-    if (msg.slotIndex !== undefined) return findSlotByIndex(msg.slotIndex);
-    if (msg.sessionId) return findSlotBySessionId(msg.sessionId);
-    throw new Error("sessionId or slotIndex required");
+    return resolveSlotInPool(readPool(), msg);
   }
 
   async function getTerminalBuffer(termId) {

@@ -9,6 +9,9 @@ import {
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,
+  findSlotBySessionId,
+  findSlotByIndex,
+  resolveSlot as resolveSlotByAddress,
 } from "../src/pool.js";
 
 /** Inline helper — createPool was removed from pool.js (never called in production). */
@@ -374,5 +377,142 @@ describe("pool lifecycle integration", () => {
     resolveSlot(pool, "t1", "new-uuid");
     expect(pool.slots[0].sessionId).toBe("new-uuid");
     expect(pool.slots[0].status).toBe("fresh");
+  });
+});
+
+describe("findSlotBySessionId", () => {
+  it("finds a slot by session ID", () => {
+    const pool = createPool(2);
+    pool.slots = [createSlot(0, 10, 100), createSlot(1, 11, 101)];
+    pool.slots[0].sessionId = "abc-123";
+    pool.slots[1].sessionId = "def-456";
+
+    const { slot } = findSlotBySessionId(pool, "def-456");
+    expect(slot.index).toBe(1);
+    expect(slot.termId).toBe(11);
+  });
+
+  it("throws for invalid session ID format", () => {
+    const pool = createPool(1);
+    expect(() => findSlotBySessionId(pool, "not valid!")).toThrow(
+      "Invalid session ID format",
+    );
+  });
+
+  it("throws when session ID not found", () => {
+    const pool = createPool(1);
+    pool.slots = [createSlot(0, 10, 100)];
+    pool.slots[0].sessionId = "abc-123";
+
+    expect(() => findSlotBySessionId(pool, "def-999")).toThrow(
+      "No slot found for session def-999",
+    );
+  });
+
+  it("throws when pool is null", () => {
+    expect(() => findSlotBySessionId(null, "abc-123")).toThrow(
+      "Pool not initialized",
+    );
+  });
+});
+
+describe("findSlotByIndex", () => {
+  it("finds a slot by index", () => {
+    const pool = createPool(3);
+    pool.slots = [
+      createSlot(0, 10, 100),
+      createSlot(1, 11, 101),
+      createSlot(2, 12, 102),
+    ];
+
+    const { slot } = findSlotByIndex(pool, 2);
+    expect(slot.termId).toBe(12);
+    expect(slot.pid).toBe(102);
+  });
+
+  it("finds slot at index 0", () => {
+    const pool = createPool(2);
+    pool.slots = [createSlot(0, 10, 100), createSlot(1, 11, 101)];
+
+    const { slot } = findSlotByIndex(pool, 0);
+    expect(slot.index).toBe(0);
+    expect(slot.termId).toBe(10);
+  });
+
+  it("throws for non-number slotIndex", () => {
+    const pool = createPool(1);
+    pool.slots = [createSlot(0, 10, 100)];
+
+    expect(() => findSlotByIndex(pool, "0")).toThrow(
+      "slotIndex must be a number",
+    );
+    expect(() => findSlotByIndex(pool, null)).toThrow(
+      "slotIndex must be a number",
+    );
+    expect(() => findSlotByIndex(pool, NaN)).toThrow(
+      "slotIndex must be a number",
+    );
+    expect(() => findSlotByIndex(pool, Infinity)).toThrow(
+      "slotIndex must be a number",
+    );
+  });
+
+  it("throws when index not found", () => {
+    const pool = createPool(2);
+    pool.slots = [createSlot(0, 10, 100)];
+
+    expect(() => findSlotByIndex(pool, 5)).toThrow("No slot at index 5");
+  });
+
+  it("throws when pool is null", () => {
+    expect(() => findSlotByIndex(null, 0)).toThrow("Pool not initialized");
+  });
+});
+
+describe("resolveSlotByAddress", () => {
+  const pool = createPool(2);
+  pool.slots = [createSlot(0, 10, 100), createSlot(1, 11, 101)];
+  pool.slots[0].sessionId = "abc-123";
+  pool.slots[1].sessionId = "def-456";
+
+  it("resolves by slotIndex", () => {
+    const { slot } = resolveSlotByAddress(pool, { slotIndex: 1 });
+    expect(slot.sessionId).toBe("def-456");
+  });
+
+  it("resolves by sessionId", () => {
+    const { slot } = resolveSlotByAddress(pool, { sessionId: "abc-123" });
+    expect(slot.index).toBe(0);
+  });
+
+  it("prefers slotIndex when both provided", () => {
+    const { slot } = resolveSlotByAddress(pool, {
+      slotIndex: 1,
+      sessionId: "abc-123",
+    });
+    expect(slot.index).toBe(1);
+  });
+
+  it("handles slotIndex 0 (falsy but valid)", () => {
+    const { slot } = resolveSlotByAddress(pool, { slotIndex: 0 });
+    expect(slot.index).toBe(0);
+    expect(slot.sessionId).toBe("abc-123");
+  });
+
+  it("throws when neither provided", () => {
+    expect(() => resolveSlotByAddress(pool, {})).toThrow(
+      "sessionId or slotIndex required",
+    );
+  });
+
+  it("works on error slots with null sessionId", () => {
+    const errorPool = createPool(1);
+    errorPool.slots = [createSlot(0, 10, 100)];
+    errorPool.slots[0].status = "error";
+    // sessionId is null (default from createSlot)
+
+    const { slot } = resolveSlotByAddress(errorPool, { slotIndex: 0 });
+    expect(slot.status).toBe("error");
+    expect(slot.sessionId).toBeNull();
   });
 });
