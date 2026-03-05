@@ -1083,6 +1083,28 @@ function writeIntention(sessionId, content) {
   fs.writeFileSync(path.join(INTENTIONS_DIR, `${sessionId}.md`), content);
 }
 
+async function poolClean() {
+  const pool = readPool();
+  if (!pool) throw new Error("Pool not initialized");
+  const sessions = await getSessions();
+  const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+  const idleSlots = pool.slots.filter((s) => {
+    const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+    return session && session.status === "idle";
+  });
+  let cleaned = 0;
+  for (const slot of idleSlots) {
+    const session = sessionMap.get(slot.sessionId);
+    await offloadSession(slot.sessionId, slot.termId, null, {
+      cwd: session?.cwd,
+      gitRoot: session?.gitRoot,
+      pid: slot.pid,
+    });
+    cleaned++;
+  }
+  return cleaned;
+}
+
 function watchIntention(sessionId) {
   // Clean up previous watcher
   if (fileWatchers.has("current")) {
@@ -1463,6 +1485,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pool-health", () => getPoolHealth()); // getPoolHealth is async, returns promise — ipcMain.handle awaits it
   ipcMain.handle("pool-read", () => readPool());
   ipcMain.handle("pool-destroy", async () => poolDestroy());
+  ipcMain.handle("pool-clean", () => poolClean());
 
   // Setup scripts
   ipcMain.handle("list-setup-scripts", () => {
@@ -1756,28 +1779,7 @@ app.whenReady().then(async () => {
     },
 
     "pool-clean": async () => {
-      const pool = readPool();
-      if (!pool) throw new Error("Pool not initialized");
-
-      const sessions = await getSessions();
-      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-
-      const idleSlots = pool.slots.filter((s) => {
-        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-        return session && session.status === "idle";
-      });
-
-      let cleaned = 0;
-      for (const slot of idleSlots) {
-        const session = sessionMap.get(slot.sessionId);
-        await offloadSession(slot.sessionId, slot.termId, null, {
-          cwd: session?.cwd,
-          gitRoot: session?.gitRoot,
-          pid: slot.pid,
-        });
-        cleaned++;
-      }
-
+      const cleaned = await poolClean();
       return { type: "cleaned", count: cleaned };
     },
   });
