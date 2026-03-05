@@ -465,7 +465,8 @@ async function spawnTerminal(cwd, cmd, args) {
   try {
     await window.api.ptyAttach(termId);
   } catch (err) {
-    terminals.splice(terminals.indexOf(entry), 1);
+    const idx = terminals.indexOf(entry);
+    if (idx !== -1) terminals.splice(idx, 1);
     term.dispose();
     container.remove();
     pendingTerminals.delete(termId);
@@ -524,7 +525,8 @@ async function attachPoolTerminal(poolTermId) {
   try {
     await window.api.ptyAttach(poolTermId);
   } catch (err) {
-    terminals.splice(terminals.indexOf(entry), 1);
+    const idx = terminals.indexOf(entry);
+    if (idx !== -1) terminals.splice(idx, 1);
     term.dispose();
     container.remove();
     pendingTerminals.delete(poolTermId);
