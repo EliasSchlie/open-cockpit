@@ -2777,17 +2777,28 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", async () => {
+let ownPoolDestroyed = false;
+app.on("before-quit", (e) => {
   // Dev instances with --own-pool auto-destroy their pool on quit.
   // Production instances intentionally leave the daemon and pool alive —
   // terminals persist across app restarts so users don't lose sessions.
-  if (OWN_POOL) {
-    try {
-      await poolDestroy();
-      debugLog("main", "own-pool destroyed on quit");
-    } catch (err) {
-      debugLog("main", "own-pool destroy failed on quit:", err.message);
-    }
+  // Electron doesn't await async before-quit handlers, so we must block
+  // the quit until poolDestroy finishes to avoid orphaned processes.
+  if (OWN_POOL && !ownPoolDestroyed) {
+    e.preventDefault();
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), 5000),
+    );
+    Promise.race([poolDestroy(), timeout])
+      .then(() => debugLog("main", "own-pool destroyed on quit"))
+      .catch((err) =>
+        debugLog("main", "own-pool destroy failed on quit:", err.message),
+      )
+      .finally(() => {
+        ownPoolDestroyed = true;
+        app.quit();
+      });
+    return;
   }
   closeDebugLog();
   // Disconnect from daemon (daemon keeps PTYs alive)
