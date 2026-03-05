@@ -805,7 +805,7 @@ function createSessionItem(s) {
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
     : "background: transparent";
   const originTag = s.origin
-    ? `<span class="session-origin-tag session-origin-${s.origin}">${s.origin}</span>`
+    ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
     : "";
   li.innerHTML = `
     <div class="session-dir-indicator" style="${indicatorStyle}"></div>
@@ -1114,20 +1114,15 @@ async function selectSession(session) {
           const entry = await attachPoolTerminal(slot.termId);
           if (gen !== sessionGeneration) {
             // Session changed while attaching — detach and clean up
-            await window.api.ptyDetach(entry.termId).catch(() => {});
-            entry.resizeObserver.disconnect();
-            entry.term.dispose();
-            entry.container.remove();
+            // Also purge from sessionTerminals (hideCurrentTerminals may have cached it)
+            destroySessionTerminals(session.sessionId);
             return;
           }
         } catch {
           // Attach failed (slot dead?) — fall back to fresh shell
           const entry = await spawnTerminal(session.cwd);
           if (gen !== sessionGeneration) {
-            await window.api.ptyKill(entry.termId);
-            entry.resizeObserver.disconnect();
-            entry.term.dispose();
-            entry.container.remove();
+            destroySessionTerminals(session.sessionId);
             return;
           }
         }
@@ -1135,10 +1130,7 @@ async function selectSession(session) {
         // No pool slot found — fall back to fresh shell
         const entry = await spawnTerminal(session.cwd);
         if (gen !== sessionGeneration) {
-          await window.api.ptyKill(entry.termId);
-          entry.resizeObserver.disconnect();
-          entry.term.dispose();
-          entry.container.remove();
+          destroySessionTerminals(session.sessionId);
           return;
         }
       }
@@ -1147,10 +1139,7 @@ async function selectSession(session) {
       const entry = await spawnTerminal(session.cwd);
       if (gen !== sessionGeneration) {
         // Session changed while spawning — orphan cleanup
-        await window.api.ptyKill(entry.termId);
-        entry.resizeObserver.disconnect();
-        entry.term.dispose();
-        entry.container.remove();
+        destroySessionTerminals(session.sessionId);
         return;
       }
     }
@@ -1682,7 +1671,14 @@ async function reconnectTerminal(ptyInfo) {
   pendingTerminals.set(ptyInfo.termId, entry);
 
   // Attach to daemon for future data
-  await window.api.ptyAttach(ptyInfo.termId);
+  try {
+    await window.api.ptyAttach(ptyInfo.termId);
+  } catch (err) {
+    pendingTerminals.delete(ptyInfo.termId);
+    term.dispose();
+    container.remove();
+    throw err;
+  }
 
   pendingTerminals.delete(ptyInfo.termId);
 
@@ -1993,11 +1989,15 @@ async function showPoolSettings() {
     }
   }, 3000);
 
-  // Slot row click → open terminal popup
-  for (const row of overlay.querySelectorAll(".pool-slot-clickable")) {
-    row.addEventListener("click", () => {
+  // Slot row click → open terminal popup (delegated to survive innerHTML poll updates)
+  const slotsListEl = overlay.querySelector(".pool-slots-list");
+  if (slotsListEl) {
+    slotsListEl.addEventListener("click", async (e) => {
+      const row = e.target.closest(".pool-slot-clickable");
+      if (!row) return;
       const slotIndex = parseInt(row.dataset.slotIndex, 10);
-      const slot = health.slots.find((s) => s.index === slotIndex);
+      const currentHealth = await window.api.poolHealth();
+      const slot = currentHealth.slots.find((s) => s.index === slotIndex);
       if (slot) openSlotTerminalPopup(slot);
     });
   }
