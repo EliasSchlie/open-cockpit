@@ -2288,8 +2288,13 @@ COMMANDS.push({
 
 loadDirColors().then(async () => {
   await reconnectAllPtys();
-  let sessionPollInterval = setInterval(loadSessions, 10000);
+  const POLL_INTERVAL = 5000;
+  let sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
   loadSessions();
+
+  // Event-driven refresh: main process pushes (already debounced) when
+  // idle-signals/session-pids change.
+  window.api.onSessionsChanged(() => loadSessions());
 
   // Pause polling when window is hidden to save CPU
   document.addEventListener("visibilitychange", () => {
@@ -2299,7 +2304,7 @@ loadDirColors().then(async () => {
     } else {
       if (!sessionPollInterval) {
         loadSessions();
-        sessionPollInterval = setInterval(loadSessions, 10000);
+        sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
       }
     }
   });

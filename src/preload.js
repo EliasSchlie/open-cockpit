@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 // Remove stale listeners from previous renderer loads (Cmd+R)
 const channels = [
   "intention-changed",
+  "sessions-changed",
   "pty-data",
   "pty-replay",
   "pty-exit",
@@ -32,6 +33,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("watch-intention", sessionId),
   onIntentionChanged: (callback) =>
     ipcRenderer.on("intention-changed", (_e, content) => callback(content)),
+  onSessionsChanged: (callback) =>
+    ipcRenderer.on("sessions-changed", () => callback()),
 
   // External terminal focus
   focusExternalTerminal: (pid) =>
