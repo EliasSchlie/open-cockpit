@@ -49,7 +49,44 @@ const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
 const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
+const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
+const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
 const DEFAULT_POOL_SIZE = 5;
+
+// --- Debug logging ---
+// Append timestamped lines to ~/.open-cockpit/debug.log.
+// Used by both main and renderer (via IPC). Rotates at 2 MB.
+let debugLogFd = null;
+let debugLogSize = 0;
+function debugLog(tag, ...args) {
+  const line = `${new Date().toISOString()} [${tag}] ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}\n`;
+  try {
+    if (!debugLogFd) {
+      debugLogFd = fs.openSync(DEBUG_LOG_FILE, "a", 0o600);
+      debugLogSize = fs.fstatSync(debugLogFd).size;
+    }
+    if (debugLogSize > DEBUG_LOG_MAX_SIZE) {
+      fs.closeSync(debugLogFd);
+      try {
+        fs.renameSync(DEBUG_LOG_FILE, DEBUG_LOG_FILE + ".1");
+      } catch {}
+      debugLogFd = fs.openSync(DEBUG_LOG_FILE, "a", 0o600);
+      debugLogSize = 0;
+    }
+    fs.writeSync(debugLogFd, line);
+    debugLogSize += Buffer.byteLength(line);
+  } catch {
+    // Last resort — don't crash the app over logging
+  }
+}
+function closeDebugLog() {
+  if (debugLogFd !== null) {
+    try {
+      fs.closeSync(debugLogFd);
+    } catch {}
+    debugLogFd = null;
+  }
+}
 
 // Poll a condition until it returns a truthy value, with timeout.
 // Returns the truthy value, or throws on timeout.
@@ -1993,6 +2030,7 @@ function handleDaemonMessage(msg) {
 }
 
 app.whenReady().then(async () => {
+  debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
   // Ensure setup-scripts directory exists
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
@@ -2073,6 +2111,9 @@ app.whenReady().then(async () => {
     if (anyDied) onDirChange();
   }, LIVENESS_CHECK_INTERVAL);
 
+  ipcMain.on("debug-log", (_e, tag, args) => {
+    debugLog(tag, ...args);
+  });
   ipcMain.handle("get-dir-colors", () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
@@ -2675,6 +2716,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", () => {
+  closeDebugLog();
   // Disconnect from daemon (daemon keeps PTYs alive)
   if (daemonSocket && !daemonSocket.destroyed) {
     daemonSocket.destroy();

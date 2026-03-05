@@ -12,6 +12,11 @@ import { syntaxTree } from "@codemirror/language";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 
+// --- Debug logging (writes to ~/.open-cockpit/debug.log via main process) ---
+function debugLog(tag, ...args) {
+  window.api?.debugLog?.(`renderer:${tag}`, ...args);
+}
+
 // --- Bullet widget: replaces "- " / "* " / "1. " with rendered bullet ---
 class BulletWidget extends WidgetType {
   constructor(ordered, index) {
@@ -477,6 +482,7 @@ async function spawnTerminal(cwd, cmd, args) {
   try {
     await window.api.ptyAttach(termId);
   } catch (err) {
+    debugLog("term", `attach failed termId=${termId}`, err.message);
     const idx = terminals.indexOf(entry);
     if (idx !== -1) terminals.splice(idx, 1);
     term.dispose();
@@ -537,6 +543,7 @@ async function attachPoolTerminal(poolTermId) {
   try {
     await window.api.ptyAttach(poolTermId);
   } catch (err) {
+    debugLog("pool", `attach failed poolTermId=${poolTermId}`, err.message);
     const idx = terminals.indexOf(entry);
     if (idx !== -1) terminals.splice(idx, 1);
     term.dispose();
@@ -1127,11 +1134,15 @@ async function acquireFreshSlot() {
       { cwd: victim.cwd, gitRoot: victim.gitRoot, pid: victim.pid },
     );
   } catch (err) {
-    console.error("Failed to offload session:", err);
+    debugLog("pool", `offload failed session=${victim.sessionId}`, err.message);
     return null;
   }
 
   // Poll until the slot becomes fresh (idle signal changes after /clear)
+  debugLog(
+    "pool",
+    `polling for fresh slot after offload of ${victim.sessionId}`,
+  );
   const fresh = await pollForFreshSlot(30000);
   if (fresh) {
     destroySessionTerminals(victim.sessionId);
@@ -1154,8 +1165,12 @@ async function pollForFreshSlot(timeoutMs) {
     const fresh = sessions.find(
       (s) => s.status === "fresh" || poolFreshIds.has(s.sessionId),
     );
-    if (fresh) return fresh;
+    if (fresh) {
+      debugLog("pool", `fresh slot found: ${fresh.sessionId}`);
+      return fresh;
+    }
   }
+  debugLog("pool", `poll timed out after ${timeoutMs}ms — no fresh slot`);
   return null;
 }
 
@@ -1165,6 +1180,7 @@ async function resumeOffloadedSession(session) {
     const result = await window.api.poolResume(session.sessionId);
     showNotification(`Resuming session in slot ${result.slotIndex}…`);
   } catch (err) {
+    debugLog("pool", `resume failed session=${session.sessionId}`, err.message);
     showNotification(`Resume failed: ${err.message}`);
     return;
   }
@@ -1199,6 +1215,10 @@ async function selectSession(session) {
   currentSessionId = session.sessionId;
   currentSessionCwd = session.cwd;
   const gen = ++sessionGeneration;
+  debugLog(
+    "session",
+    `select ${session.sessionId} gen=${gen} origin=${session.origin}`,
+  );
 
   document.querySelectorAll(".session-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.sessionId === session.sessionId);
@@ -1227,7 +1247,10 @@ async function selectSession(session) {
   // External sessions: try to focus their terminal app (iTerm/Cursor)
   if (session.origin !== "pool" && session.alive) {
     const result = await window.api.focusExternalTerminal(session.pid);
-    if (gen !== sessionGeneration) return;
+    if (gen !== sessionGeneration) {
+      debugLog("session", `race abort gen=${gen} at focusExternal`);
+      return;
+    }
     if (result.focused) {
       saveStatus.textContent = `Focused ${result.app}`;
       setTimeout(() => {
@@ -1242,21 +1265,27 @@ async function selectSession(session) {
     if (session.origin === "pool") {
       // Pool session: attach to the pool slot's existing Claude TUI
       const pool = await window.api.poolRead();
-      if (gen !== sessionGeneration) return;
+      if (gen !== sessionGeneration) {
+        debugLog("session", `race abort gen=${gen} at poolRead`);
+        return;
+      }
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
       if (slot) {
         try {
           const entry = await attachPoolTerminal(slot.termId);
           if (gen !== sessionGeneration) {
-            // Session changed while attaching — detach and clean up
-            // Also purge from sessionTerminals (hideCurrentTerminals may have cached it)
+            debugLog("session", `race abort gen=${gen} at poolAttach`);
             destroySessionTerminals(session.sessionId);
             return;
           }
         } catch {
-          // Attach failed (slot dead?) — fall back to fresh shell
+          debugLog(
+            "session",
+            `pool attach failed for slot ${slot.termId}, falling back to shell`,
+          );
           const entry = await spawnTerminal(session.cwd);
           if (gen !== sessionGeneration) {
+            debugLog("session", `race abort gen=${gen} at spawnFallback`);
             destroySessionTerminals(session.sessionId);
             return;
           }
@@ -1265,6 +1294,7 @@ async function selectSession(session) {
         // No pool slot found — fall back to fresh shell
         const entry = await spawnTerminal(session.cwd);
         if (gen !== sessionGeneration) {
+          debugLog("session", `race abort gen=${gen} at noSlotSpawn`);
           destroySessionTerminals(session.sessionId);
           return;
         }
@@ -1273,7 +1303,7 @@ async function selectSession(session) {
       // External session: spawn a fresh shell
       const entry = await spawnTerminal(session.cwd);
       if (gen !== sessionGeneration) {
-        // Session changed while spawning — orphan cleanup
+        debugLog("session", `race abort gen=${gen} at extSpawn`);
         destroySessionTerminals(session.sessionId);
         return;
       }
@@ -1451,7 +1481,11 @@ function scheduleSave() {
         if (saveStatus.textContent === "Saved") saveStatus.textContent = "";
       }, 2000);
     } catch (err) {
-      console.error("Failed to save intention:", err);
+      debugLog(
+        "editor",
+        `intention save failed session=${currentSessionId}`,
+        err.message,
+      );
       saveStatus.textContent = "";
     }
   }, 500);
@@ -1887,6 +1921,7 @@ async function reconnectTerminal(ptyInfo) {
 // On app start: reconnect to any PTYs that survived from previous instance
 async function reconnectAllPtys() {
   const ptys = await window.api.ptyList();
+  debugLog("startup", `reconnecting ${ptys.length} PTYs`);
   if (ptys.length === 0) return;
 
   // Identify pool slot termIds so we can tag reconnected terminals
@@ -1910,7 +1945,7 @@ async function reconnectAllPtys() {
   // Reconnect each session's terminals (skip orphaned terminals with no session)
   for (const [sid, sessionPtys] of bySession) {
     if (sid === "__none__") {
-      // Detach orphaned terminals — they have no session to display under
+      debugLog("startup", `detaching ${sessionPtys.length} orphaned PTYs`);
       for (const p of sessionPtys) {
         window.api.ptyDetach(p.termId).catch(() => {});
       }
