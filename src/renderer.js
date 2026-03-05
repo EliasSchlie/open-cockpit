@@ -1632,9 +1632,9 @@ async function showPoolSettings() {
       initBtn.disabled = true;
       try {
         await window.api.poolInit(size);
-        overlay.remove();
         showNotification(`Pool initialized (${size} slots)`);
         await loadSessions();
+        showPoolSettings();
       } catch (err) {
         initBtn.textContent = "Initialize Pool";
         initBtn.disabled = false;
@@ -1659,9 +1659,9 @@ async function showPoolSettings() {
       resizeBtn.disabled = true;
       try {
         await window.api.poolResize(newSize);
-        overlay.remove();
         showNotification(`Pool resized to ${newSize} slots`);
         await loadSessions();
+        showPoolSettings();
       } catch (err) {
         resizeBtn.textContent = "Resize";
         resizeBtn.disabled = false;
