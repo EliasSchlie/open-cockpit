@@ -532,6 +532,18 @@ async function getSessionsUncached() {
         path.join(offloadDir, "meta.json"),
         JSON.stringify(meta, null, 2),
       );
+    } else {
+      // Offload dir exists (session was offloaded before dying) — ensure archived
+      const existingMeta = readOffloadMeta(s.sessionId);
+      if (existingMeta && !existingMeta.archived) {
+        existingMeta.archived = true;
+        existingMeta.archivedAt =
+          existingMeta.archivedAt || new Date().toISOString();
+        fs.writeFileSync(
+          path.join(offloadDir, "meta.json"),
+          JSON.stringify(existingMeta, null, 2),
+        );
+      }
     }
 
     // Clean up stale PID file
@@ -749,6 +761,12 @@ async function offloadSession(
     const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
     try {
       fs.unlinkSync(idleSignalFile);
+    } catch {}
+    // Remove stale PID file so the old session doesn't appear as a live "idle"
+    // ghost while /clear is in flight. The SessionStart hook will recreate it
+    // with the new session UUID once /clear completes.
+    try {
+      fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(pid)));
     } catch {}
   }
 
@@ -1396,6 +1414,16 @@ async function poolClean() {
       gitRoot: session?.gitRoot,
       pid: slot.pid,
     });
+    // Mark as archived so it moves to Archive section instead of staying in Recent
+    const offloadedMeta = readOffloadMeta(slot.sessionId);
+    if (offloadedMeta && !offloadedMeta.archived) {
+      offloadedMeta.archived = true;
+      offloadedMeta.archivedAt = new Date().toISOString();
+      fs.writeFileSync(
+        path.join(OFFLOADED_DIR, slot.sessionId, "meta.json"),
+        JSON.stringify(offloadedMeta, null, 2),
+      );
+    }
     cleaned++;
   }
   return cleaned;
