@@ -1075,8 +1075,10 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function isFreshSlot(s) {
-  return s.status === "fresh" || s.poolStatus === "fresh";
+function isFreshPoolSlot(s) {
+  return (
+    s.origin === "pool" && (s.status === "fresh" || s.poolStatus === "fresh")
+  );
 }
 
 // Acquire a fresh slot: prefer existing fresh, else offload LRU idle.
@@ -1085,7 +1087,7 @@ async function acquireFreshSlot() {
   const sessions = await window.api.getSessions();
 
   // 1. Prefer an existing fresh slot (poolStatus is set by main process)
-  const freshSession = sessions.find(isFreshSlot);
+  const freshSession = sessions.find(isFreshPoolSlot);
   if (freshSession) return freshSession;
 
   // No pool sessions at all — nothing to acquire from
@@ -1140,7 +1142,7 @@ async function pollForFreshSlot(timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     await new Promise((r) => setTimeout(r, 500));
     const sessions = await window.api.getSessions();
-    const fresh = sessions.find(isFreshSlot);
+    const fresh = sessions.find(isFreshPoolSlot);
     if (fresh) {
       debugLog("pool", `fresh slot found: ${fresh.sessionId}`);
       return fresh;
