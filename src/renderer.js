@@ -2078,6 +2078,19 @@ COMMANDS.push({
 
 loadDirColors().then(async () => {
   await reconnectAllPtys();
-  setInterval(loadSessions, 10000);
+  let sessionPollInterval = setInterval(loadSessions, 10000);
   loadSessions();
+
+  // Pause polling when window is hidden to save CPU
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearInterval(sessionPollInterval);
+      sessionPollInterval = null;
+    } else {
+      if (!sessionPollInterval) {
+        loadSessions();
+        sessionPollInterval = setInterval(loadSessions, 10000);
+      }
+    }
+  });
 });
