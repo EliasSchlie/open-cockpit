@@ -19,16 +19,24 @@ send_api() {
   if command -v socat &>/dev/null; then
     printf '%s\n' "$json" | socat -t"$timeout" - UNIX-CONNECT:"$SOCKET"
   else
+    local tmpf
+    tmpf=$(mktemp)
     node -e "
-      const net = require('net');
+      const net = require('net'), fs = require('fs');
       let buf = '';
       const sock = net.createConnection(process.argv[1]);
       sock.on('connect', () => { sock.write(process.argv[2] + '\n'); });
-      sock.on('data', (d) => { buf += d; const i = buf.indexOf('\n'); if (i !== -1) { process.stdout.write(buf.slice(0, i + 1)); sock.destroy(); process.exit(0); } });
-      sock.on('end', () => { if (buf) process.stdout.write(buf); process.exit(0); });
+      sock.on('data', (d) => { buf += d; const i = buf.indexOf('\n'); if (i !== -1) { fs.writeFileSync(process.argv[3], buf.slice(0, i + 1)); sock.destroy(); process.exit(0); } });
+      sock.on('end', () => { if (buf) { fs.writeFileSync(process.argv[3], buf); } process.exit(0); });
       sock.on('error', (e) => { console.error(e.message); process.exit(1); });
       setTimeout(() => { console.error('timeout'); process.exit(1); }, ${timeout}000);
-    " "$SOCKET" "$json"
+    " "$SOCKET" "$json" "$tmpf"
+    local rc=$?
+    if [[ $rc -eq 0 && -s "$tmpf" ]]; then
+      cat "$tmpf"
+    fi
+    rm -f "$tmpf"
+    return $rc
   fi
 }
 
