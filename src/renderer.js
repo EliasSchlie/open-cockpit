@@ -1816,6 +1816,9 @@ async function reconnectTerminal(ptyInfo) {
     fontFamily: "'SF Mono', Menlo, monospace",
     fontSize: 13,
     cursorBlink: true,
+    // Match the PTY's current dimensions so replay buffer renders correctly
+    ...(ptyInfo.cols && { cols: ptyInfo.cols }),
+    ...(ptyInfo.rows && { rows: ptyInfo.rows }),
   });
 
   const fitAddon = new FitAddon();
