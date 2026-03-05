@@ -909,6 +909,8 @@ async function offloadSession(
             s.sessionId = newSessionId;
             s.status = newSessionId ? "fresh" : "error";
             writePool(p);
+            // Write idle signal so getSessions detects slot as "fresh" (no user input)
+            if (newSessionId) createFreshIdleSignal(s.pid, newSessionId);
           }
         });
       })
