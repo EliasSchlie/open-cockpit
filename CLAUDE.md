@@ -8,6 +8,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/api-server.js` — **API server**: Unix socket API for external process control ([docs/api.md](docs/api.md))
 - `src/main.js` — Main process: window, IPC, daemon client, session discovery
 - `src/preload.js` — Context bridge (`api` object)
+- `src/shortcuts.js` — Configurable keyboard shortcuts (defaults, overrides, accelerator matching)
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
@@ -48,6 +49,7 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
 - `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings)
 - `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived session data (meta.json, snapshot.log)
+- `~/.open-cockpit/shortcuts.json` — User keyboard shortcut overrides (only non-default values)
 - `~/.open-cockpit/setup-scripts/` — Setup script files for Cmd+N picker
 - `~/.open-cockpit/debug.log` — Debug log (both main + renderer, rotates at 2 MB)
 - `~/.open-cockpit/api.sock` — Programmatic API Unix socket
