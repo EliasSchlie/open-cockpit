@@ -691,12 +691,15 @@ async function readTerminalBuffer(termId) {
   }
 }
 
-// Wait until the terminal buffer contains the given text (or timeout)
+// Wait until the terminal buffer's tail contains the given text (or timeout).
+// Only checks the last portion of the buffer to avoid false-matching scrollback.
 async function waitForBufferContent(termId, text, timeoutMs = 3000) {
+  const tailSize = text.length + 500; // enough for the input line + prompt
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const buffer = await readTerminalBuffer(termId);
-    if (buffer.includes(text)) return true;
+    const tail = buffer.length > tailSize ? buffer.slice(-tailSize) : buffer;
+    if (tail.includes(text)) return true;
     await new Promise((r) => setTimeout(r, 50));
   }
   return false;
@@ -1081,9 +1084,22 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 15000) {
 
 // Async mutex for pool.json read-modify-write cycles.
 // Serializes all concurrent access to prevent lost updates.
+// NOT reentrant — calling withPoolLock from inside withPoolLock will deadlock.
 let _poolLock = Promise.resolve();
+let _poolLockHeld = false;
 function withPoolLock(fn) {
-  const p = _poolLock.then(fn);
+  const p = _poolLock.then(() => {
+    if (_poolLockHeld) {
+      throw new Error(
+        "withPoolLock called while lock is held — nested calls deadlock. " +
+          "Restructure to avoid nesting (see ensureFreshSlot pattern).",
+      );
+    }
+    _poolLockHeld = true;
+    return Promise.resolve(fn()).finally(() => {
+      _poolLockHeld = false;
+    });
+  });
   _poolLock = p.catch(() => {}); // keep chain alive on errors
   return p;
 }
@@ -1429,20 +1445,9 @@ async function poolClean() {
   return cleaned;
 }
 
-async function poolResume(sessionId) {
-  validateSessionId(sessionId);
-  const meta = readOffloadMeta(sessionId);
-  if (!meta) throw new Error("No offload data for session");
-  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
-  if (!claudeSessionId) throw new Error("No Claude session ID stored");
-
-  if (meta.archived) {
-    unarchiveSession(sessionId);
-  }
-
-  // Phase 1: Ensure a fresh slot exists.
-  // offloadSession uses its own withPoolLock, so we can't nest it.
-  // Check + offload outside the resume lock, then re-check inside.
+// Ensure a fresh pool slot exists, offloading the LRU idle session if needed.
+// Two-phase to avoid nesting withPoolLock (offloadSession uses its own lock).
+async function ensureFreshSlot() {
   const needsOffload = await withPoolLock(async () => {
     const pool = readPool();
     if (!pool) throw new Error("Pool not initialized");
@@ -1455,7 +1460,6 @@ async function poolResume(sessionId) {
     });
     if (hasFresh) return null;
 
-    // Find LRU idle victim
     const idleSlots = pool.slots.filter((s) => {
       const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
       return session && session.status === "idle";
@@ -1486,8 +1490,22 @@ async function poolResume(sessionId) {
     });
     await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
   }
+}
 
-  // Phase 2: Acquire fresh slot and send /resume
+async function poolResume(sessionId) {
+  validateSessionId(sessionId);
+  const meta = readOffloadMeta(sessionId);
+  if (!meta) throw new Error("No offload data for session");
+  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
+  if (!claudeSessionId) throw new Error("No Claude session ID stored");
+
+  if (meta.archived) {
+    unarchiveSession(sessionId);
+  }
+
+  await ensureFreshSlot();
+
+  // Acquire fresh slot and send /resume
   return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) throw new Error("Pool not initialized");
@@ -2124,6 +2142,7 @@ app.whenReady().then(async () => {
 
     "pool-start": async (msg) => {
       if (!msg.prompt) throw new Error("prompt required");
+      await ensureFreshSlot();
       return withPoolLock(async () => {
         const pool = readPool();
         if (!pool) throw new Error("Pool not initialized");
@@ -2131,7 +2150,6 @@ app.whenReady().then(async () => {
         const sessions = await getSessions();
         const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
-        // Find first fresh slot
         const slot = pool.slots.find((s) => {
           if (s.status === "fresh") return true;
           const session = s.sessionId ? sessionMap.get(s.sessionId) : null;

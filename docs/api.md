@@ -76,8 +76,8 @@ Send JSON with `type` and optional `id`. Response echoes `id` back.
 | `pool-input` | (`sessionId` or `slotIndex`), `data` | `{ type: "ok" }` |
 | `pool-clean` | -- | `{ type: "cleaned", count }` |
 
-`pool-start` acquires the first fresh slot, sends the prompt, and marks the slot busy.
-`pool-resume` resumes an offloaded/archived session into a fresh slot (acquires fresh or offloads LRU idle). Unarchives if needed.
+`pool-start` acquires a fresh slot (offloads LRU idle if none available), sends the prompt, and marks the slot busy.
+`pool-resume` resumes an offloaded/archived session into a fresh slot (offloads LRU idle if needed). Unarchives if needed.
 `pool-followup` sends a follow-up to an idle session (errors if not idle).
 `pool-wait` long-polls until the session (or any busy session if no ID) becomes idle.
 `pool-result` returns the buffer only if the session is not running.

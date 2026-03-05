@@ -191,11 +191,11 @@ case "$CMD" in
     if [[ "$SESSION_ID" == "--slot" ]]; then
       SLOT="${2:?slot index required}"
       validate_slot "$SLOT"
-      TEXT="${3:?text required}"
+      TEXT=$(printf '%b' "${3:?text required}")
       DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
       json="{\"type\":\"pool-input\",\"id\":1,\"slotIndex\":$SLOT,\"data\":$DATA_JSON}"
     else
-      TEXT="${2:?text required}"
+      TEXT=$(printf '%b' "${2:?text required}")
       DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
       json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"data\":$DATA_JSON}"
     fi
@@ -261,6 +261,8 @@ case "$CMD" in
         SLOT="${1:?slot index required}"
         validate_slot "$SLOT"
         TEXT="${2:?data required}"
+        # Interpret escape sequences (\x1b, \r, \n, \t, etc.)
+        TEXT=$(printf '%b' "$TEXT")
         DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
         json="{\"type\":\"slot-write\",\"id\":1,\"slotIndex\":$SLOT,\"data\":$DATA_JSON}"
         RESULT=$(send_api "$json")
@@ -291,7 +293,7 @@ case "$CMD" in
   read-intention)  json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\"}"; send_api "$json" ;;
   write-intention) json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\",\"content\":$(printf '%s' "${2:?content required}" | jq -Rs .)}"; send_api "$json" ;;
   pty-list)     json="{\"type\":\"pty-list\",\"id\":1}"; send_api "$json" ;;
-  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%s' "${2:?data required}" | jq -Rs .)}"; send_api "$json" ;;
+  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%b' "${2:?data required}" | jq -Rs .)}"; send_api "$json" ;;
   pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
   pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":$(printf '%s' "${1:?cwd required}" | jq -Rs .),\"cmd\":$(printf '%s' "${2:?cmd required}" | jq -Rs .),\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
   pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
