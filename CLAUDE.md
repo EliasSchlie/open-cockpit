@@ -102,6 +102,18 @@ Git hooks live in `.githooks/` (version-controlled). `core.hooksPath` is set aut
 
 Worktrees auto-setup via the `post-checkout` hook — just `git worktree add` and it's ready.
 
+### Merging worktree PRs
+
+`gh pr merge --delete-branch` fails from worktrees. Always merge from the **root worktree** without `--delete-branch`, then clean up:
+
+```bash
+cd ~/Documents/Projects/open-cockpit
+gh pr merge <number> --squash
+git worktree remove .wt/<name>
+git branch -d <branch>
+git pull
+```
+
 ## Managing dev instances (multi-session safe)
 
 Multiple Claude sessions may work on different worktrees simultaneously. Electron processes inherit the `cwd` of the worktree — use `lsof` to identify and kill only yours.
