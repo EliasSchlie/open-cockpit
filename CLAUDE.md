@@ -116,6 +116,14 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI helper)
 
+## Terminal tab model
+
+- **Pool sessions** (non-external): The first terminal tab shows the **live Claude TUI** from the pool slot (attached via daemon). Users interact with Claude directly through this tab.
+- **External sessions** (started outside the app): First tab is a fresh shell, since the app doesn't own their terminal.
+- **Additional tabs** (via "+" in the tab bar): Always fresh shells at the session's cwd.
+
+**Not yet implemented** — see [#28](https://github.com/EliasSchlie/open-cockpit/issues/28). Currently all first tabs are fresh shells.
+
 ## Conventions
 
 - Electron: contextIsolation, sandbox off (preload needs npm packages)
