@@ -2,56 +2,245 @@
 set -euo pipefail
 
 SOCKET="$HOME/.open-cockpit/api.sock"
-CMD="${1:-ping}"
+
+# Send JSON to API socket. Args: <json> [timeout_seconds]
+send_api() {
+  local json="$1"
+  local timeout="${2:-5}"
+
+  if command -v socat &>/dev/null; then
+    printf '%s\n' "$json" | socat -t"$timeout" - UNIX-CONNECT:"$SOCKET"
+  else
+    node -e "
+      const net = require('net');
+      const sock = net.createConnection(process.argv[1]);
+      sock.on('connect', () => { sock.write(process.argv[2] + '\n'); });
+      sock.on('data', (d) => { process.stdout.write(d); sock.destroy(); process.exit(0); });
+      sock.on('error', (e) => { console.error(e.message); process.exit(1); });
+      setTimeout(() => { console.error('timeout'); process.exit(1); }, ${timeout}000);
+    " "$SOCKET" "$json"
+  fi
+}
+
+# Extract a field from JSON response (requires jq)
+json_field() {
+  echo "$1" | jq -r ".$2"
+}
+
+# Check for errors in API response
+check_error() {
+  local resp="$1"
+  local err
+  err=$(echo "$resp" | jq -r '.error // empty' 2>/dev/null) || true
+  if [[ -n "$err" ]]; then
+    echo "Error: $err" >&2
+    exit 1
+  fi
+}
+
+CMD="${1:-help}"
 shift 2>/dev/null || true
 
-# Build JSON from command + args
 case "$CMD" in
-  pool-init)    json="{\"type\":\"pool-init\",\"id\":1,\"size\":${1:-5}}" ;;
-  pool-resize)  json="{\"type\":\"pool-resize\",\"id\":1,\"size\":${1:?size required}}" ;;
-  pool-health)  json="{\"type\":\"pool-health\",\"id\":1}" ;;
-  pool-read)    json="{\"type\":\"pool-read\",\"id\":1}" ;;
-  pool-destroy) json="{\"type\":\"pool-destroy\",\"id\":1}" ;;
-  get-sessions) json="{\"type\":\"get-sessions\",\"id\":1}" ;;
-  read-intention)  json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\"}" ;;
-  write-intention) json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\",\"content\":$(printf '%s' "${2:?content required}" | jq -Rs .)}" ;;
-  pty-list)     json="{\"type\":\"pty-list\",\"id\":1}" ;;
-  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%s' "${2:?data required}" | jq -Rs .)}" ;;
-  pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":${1:?termId required}}" ;;
-  pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":\"${1:?cwd required}\",\"cmd\":\"${2:?cmd required}\",\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}" ;;
-  pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}" ;;
-  ping)         json="{\"type\":\"ping\",\"id\":1}" ;;
-  *)            echo "Unknown command: $CMD" >&2
-                echo "Usage: cockpit-cli <command> [args...]" >&2
-                echo "" >&2
-                echo "Commands:" >&2
-                echo "  ping                         Health check" >&2
-                echo "  get-sessions                 List all sessions" >&2
-                echo "  pool-init [size]             Initialize pool (default: 5)" >&2
-                echo "  pool-resize <size>           Resize pool" >&2
-                echo "  pool-health                  Pool health report" >&2
-                echo "  pool-read                    Read pool.json" >&2
-                echo "  pool-destroy                 Destroy pool" >&2
-                echo "  read-intention <sessionId>   Read intention file" >&2
-                echo "  write-intention <id> <text>  Write intention file" >&2
-                echo "  pty-list                     List terminals" >&2
-                echo "  pty-write <termId> <data>    Write to terminal" >&2
-                echo "  pty-read <termId>            Read terminal buffer" >&2
-                echo "  pty-spawn <cwd> <cmd> [args] Spawn terminal" >&2
-                echo "  pty-kill <termId>            Kill terminal" >&2
-                exit 1 ;;
-esac
 
-# Send via socat (or node if socat unavailable)
-if command -v socat &>/dev/null; then
-  printf '%s\n' "$json" | socat -t0 - UNIX-CONNECT:"$SOCKET" || true
-else
-  node -e "
-    const net = require('net');
-    const sock = net.createConnection('$SOCKET');
-    sock.on('connect', () => { sock.write(JSON.stringify($json) + '\n'); });
-    sock.on('data', (d) => { process.stdout.write(d); sock.destroy(); process.exit(0); });
-    sock.on('error', (e) => { console.error(e.message); process.exit(1); });
-    setTimeout(() => { console.error('timeout'); process.exit(1); }, 5000);
-  "
-fi
+  # --- Sub-claude compatible commands ---
+
+  start)
+    BLOCK=false
+    PROMPT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --block) BLOCK=true; shift ;;
+        *) PROMPT="$1"; shift ;;
+      esac
+    done
+    if [[ -z "$PROMPT" ]]; then
+      echo "Usage: cockpit-cli start <prompt> [--block]" >&2
+      exit 1
+    fi
+
+    PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
+    json="{\"type\":\"pool-start\",\"id\":1,\"prompt\":$PROMPT_JSON}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    SESSION_ID=$(json_field "$RESULT" "sessionId")
+
+    if $BLOCK; then
+      echo "$SESSION_ID" >&2
+      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
+      WAIT_RESULT=$(send_api "$wait_json" 310)
+      check_error "$WAIT_RESULT"
+      json_field "$WAIT_RESULT" "buffer"
+    else
+      echo "$SESSION_ID"
+    fi
+    ;;
+
+  followup)
+    SESSION_ID="${1:?sessionId required}"
+    shift
+    BLOCK=false
+    PROMPT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --block) BLOCK=true; shift ;;
+        *) PROMPT="$1"; shift ;;
+      esac
+    done
+    if [[ -z "$PROMPT" ]]; then
+      echo "Usage: cockpit-cli followup <id> <prompt> [--block]" >&2
+      exit 1
+    fi
+
+    PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
+    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    SID=$(json_field "$RESULT" "sessionId")
+
+    if $BLOCK; then
+      echo "$SID" >&2
+      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SID\",\"timeout\":300000}"
+      WAIT_RESULT=$(send_api "$wait_json" 310)
+      check_error "$WAIT_RESULT"
+      json_field "$WAIT_RESULT" "buffer"
+    else
+      echo "$SID"
+    fi
+    ;;
+
+  wait)
+    if [[ $# -gt 0 ]]; then
+      SESSION_ID="$1"
+      json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
+    else
+      json="{\"type\":\"pool-wait\",\"id\":1,\"timeout\":300000}"
+    fi
+    RESULT=$(send_api "$json" 310)
+    check_error "$RESULT"
+    json_field "$RESULT" "buffer"
+    ;;
+
+  capture)
+    SESSION_ID="${1:?sessionId required}"
+    json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    json_field "$RESULT" "buffer"
+    ;;
+
+  result)
+    SESSION_ID="${1:?sessionId required}"
+    json="{\"type\":\"pool-result\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    json_field "$RESULT" "buffer"
+    ;;
+
+  input)
+    SESSION_ID="${1:?sessionId required}"
+    TEXT="${2:?text required}"
+    DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+    json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"data\":$DATA_JSON}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    ;;
+
+  clean)
+    json="{\"type\":\"pool-clean\",\"id\":1}"
+    RESULT=$(send_api "$json" 60)
+    check_error "$RESULT"
+    COUNT=$(json_field "$RESULT" "count")
+    echo "Cleaned $COUNT session(s)"
+    ;;
+
+  # --- Pool management subcommand ---
+
+  pool)
+    SUBCMD="${1:?subcommand required (init|status|resize|destroy)}"
+    shift
+    case "$SUBCMD" in
+      init)
+        SIZE="${1:-5}"
+        json="{\"type\":\"pool-init\",\"id\":1,\"size\":$SIZE}"
+        send_api "$json" 120
+        ;;
+      status)
+        json="{\"type\":\"pool-health\",\"id\":1}"
+        send_api "$json"
+        ;;
+      resize)
+        SIZE="${1:?size required}"
+        json="{\"type\":\"pool-resize\",\"id\":1,\"size\":$SIZE}"
+        send_api "$json" 120
+        ;;
+      destroy)
+        json="{\"type\":\"pool-destroy\",\"id\":1}"
+        send_api "$json" 30
+        ;;
+      *)
+        echo "Unknown pool subcommand: $SUBCMD" >&2
+        echo "Available: init, status, resize, destroy" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # --- Legacy flat commands (backward compatible) ---
+
+  pool-init)    json="{\"type\":\"pool-init\",\"id\":1,\"size\":${1:-5}}"; send_api "$json" 120 ;;
+  pool-resize)  json="{\"type\":\"pool-resize\",\"id\":1,\"size\":${1:?size required}}"; send_api "$json" 120 ;;
+  pool-health)  json="{\"type\":\"pool-health\",\"id\":1}"; send_api "$json" ;;
+  pool-read)    json="{\"type\":\"pool-read\",\"id\":1}"; send_api "$json" ;;
+  pool-destroy) json="{\"type\":\"pool-destroy\",\"id\":1}"; send_api "$json" 30 ;;
+  get-sessions) json="{\"type\":\"get-sessions\",\"id\":1}"; send_api "$json" ;;
+  read-intention)  json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\"}"; send_api "$json" ;;
+  write-intention) json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\",\"content\":$(printf '%s' "${2:?content required}" | jq -Rs .)}"; send_api "$json" ;;
+  pty-list)     json="{\"type\":\"pty-list\",\"id\":1}"; send_api "$json" ;;
+  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%s' "${2:?data required}" | jq -Rs .)}"; send_api "$json" ;;
+  pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
+  pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":\"${1:?cwd required}\",\"cmd\":\"${2:?cmd required}\",\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
+  pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
+  ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
+
+  help|*)
+    [[ "$CMD" != "help" ]] && echo "Unknown command: $CMD" >&2
+    cat >&2 <<'USAGE'
+Usage: cockpit-cli <command> [args...]
+
+Session commands (sub-claude compatible):
+  start <prompt> [--block]     Send prompt to fresh slot, return session ID
+  followup <id> <prompt> [--block]  Follow up on idle session
+  wait [id]                    Wait for session to finish, print output
+  capture <id>                 Show live terminal content
+  result <id>                  Print output (error if still running)
+  input <id> <text>            Send raw input to terminal
+  clean                        Free slots occupied by finished sessions
+
+Pool management:
+  pool init [size]             Initialize pool (default: 5)
+  pool status                  Pool health report
+  pool resize <size>           Resize pool
+  pool destroy                 Destroy pool
+
+Low-level:
+  ping                         Health check
+  get-sessions                 List all sessions
+  read-intention <sessionId>   Read intention file
+  write-intention <id> <text>  Write intention file
+  pty-list                     List terminals
+  pty-write <termId> <data>    Write to terminal
+  pty-read <termId>            Read terminal buffer
+  pty-spawn <cwd> <cmd> [args] Spawn terminal
+  pty-kill <termId>            Kill terminal
+
+Output contract:
+  start:         session ID to stdout
+  start --block: output to stdout, session ID to stderr
+  wait:          terminal output to stdout
+  capture:       live terminal content to stdout
+USAGE
+    [[ "$CMD" != "help" ]] && exit 1
+    exit 0
+    ;;
+esac

@@ -1243,6 +1243,67 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  // --- Pool interaction helpers (used by API commands) ---
+
+  function findSlotBySessionId(sessionId) {
+    validateSessionId(sessionId);
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
+    const slot = pool.slots.find((s) => s.sessionId === sessionId);
+    if (!slot) throw new Error(`No slot found for session ${sessionId}`);
+    return { pool, slot };
+  }
+
+  async function getTerminalBuffer(termId) {
+    const resp = await daemonRequest({ type: "list" });
+    const pty = resp.ptys.find((p) => p.termId === termId);
+    return pty ? pty.buffer || "" : "";
+  }
+
+  async function sendPromptToTerminal(termId, prompt) {
+    daemonSend({ type: "write", termId, data: "\x1b" });
+    await new Promise((r) => setTimeout(r, 200));
+    daemonSend({ type: "write", termId, data: "\x15" });
+    await new Promise((r) => setTimeout(r, 100));
+    daemonSend({ type: "write", termId, data: prompt + "\r" });
+  }
+
+  function getEffectiveSlotStatus(slot) {
+    const sessions = getSessions();
+    const session = sessions.find((s) => s.sessionId === slot.sessionId);
+    if (!session) return slot.status;
+    if (session.status === "idle") return "idle";
+    if (session.status === "processing") return "busy";
+    if (session.status === "fresh") return "fresh";
+    return slot.status;
+  }
+
+  function waitForSessionIdle(sessionId, timeoutMs = 300000) {
+    return new Promise((resolve, reject) => {
+      let elapsed = 0;
+      const interval = 1000;
+      const check = () => {
+        const sessions = getSessions();
+        const session = sessions.find((s) => s.sessionId === sessionId);
+        if (session && session.status === "idle") {
+          resolve();
+          return;
+        }
+        if (session && !session.alive) {
+          reject(new Error("Session process died"));
+          return;
+        }
+        elapsed += interval;
+        if (elapsed >= timeoutMs) {
+          reject(new Error("Timeout waiting for session to become idle"));
+          return;
+        }
+        setTimeout(check, interval);
+      };
+      setTimeout(check, interval);
+    });
+  }
+
   // --- Programmatic API server (Unix socket) ---
   const apiServer = createApiServer(API_SOCKET, {
     ping: async () => ({ type: "pong" }),
@@ -1307,6 +1368,155 @@ app.whenReady().then(async () => {
       const resp = await daemonRequest({ type: "list" });
       const p = resp.ptys.find((p) => p.termId === msg.termId);
       return { type: "buffer", buffer: p ? p.buffer : null };
+    },
+
+    // --- Pool interaction commands (sub-claude compatible) ---
+
+    "pool-start": async (msg) => {
+      if (!msg.prompt) throw new Error("prompt required");
+      const pool = readPool();
+      if (!pool) throw new Error("Pool not initialized");
+
+      const sessions = getSessions();
+      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+
+      // Find first fresh slot
+      const slot = pool.slots.find((s) => {
+        if (s.status === "fresh") return true;
+        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+        return session && session.status === "fresh";
+      });
+      if (!slot) throw new Error("No fresh slots available");
+
+      await sendPromptToTerminal(slot.termId, msg.prompt);
+      slot.status = "busy";
+      writePool(pool);
+
+      return {
+        type: "started",
+        sessionId: slot.sessionId,
+        termId: slot.termId,
+        slotIndex: slot.index,
+      };
+    },
+
+    "pool-followup": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (!msg.prompt) throw new Error("prompt required");
+      const { pool, slot } = findSlotBySessionId(msg.sessionId);
+
+      const status = getEffectiveSlotStatus(slot);
+      if (status !== "idle")
+        throw new Error(`Session is ${status}, expected idle`);
+
+      await sendPromptToTerminal(slot.termId, msg.prompt);
+      slot.status = "busy";
+      writePool(pool);
+
+      return {
+        type: "started",
+        sessionId: slot.sessionId,
+        termId: slot.termId,
+        slotIndex: slot.index,
+      };
+    },
+
+    "pool-wait": async (msg) => {
+      const timeout = msg.timeout || 300000;
+
+      if (msg.sessionId) {
+        validateSessionId(msg.sessionId);
+        const { slot } = findSlotBySessionId(msg.sessionId);
+        await waitForSessionIdle(msg.sessionId, timeout);
+        const buffer = await getTerminalBuffer(slot.termId);
+        return { type: "result", sessionId: msg.sessionId, buffer };
+      }
+
+      // No sessionId: wait for any busy session to become idle
+      const pool = readPool();
+      if (!pool) throw new Error("Pool not initialized");
+      const busySlots = pool.slots.filter((s) => s.status === "busy");
+      if (busySlots.length === 0)
+        throw new Error("No busy sessions to wait for");
+
+      const finished = await new Promise((resolve, reject) => {
+        let elapsed = 0;
+        const interval = 1000;
+        const check = () => {
+          const sessions = getSessions();
+          for (const s of busySlots) {
+            const session = sessions.find(
+              (sess) => sess.sessionId === s.sessionId,
+            );
+            if (session && session.status === "idle") {
+              resolve(s);
+              return;
+            }
+          }
+          elapsed += interval;
+          if (elapsed >= timeout) {
+            reject(new Error("Timeout waiting for session to become idle"));
+            return;
+          }
+          setTimeout(check, interval);
+        };
+        setTimeout(check, interval);
+      });
+
+      const buffer = await getTerminalBuffer(finished.termId);
+      return { type: "result", sessionId: finished.sessionId, buffer };
+    },
+
+    "pool-capture": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      const { slot } = findSlotBySessionId(msg.sessionId);
+      const buffer = await getTerminalBuffer(slot.termId);
+      return { type: "buffer", sessionId: msg.sessionId, buffer };
+    },
+
+    "pool-result": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      const { slot } = findSlotBySessionId(msg.sessionId);
+      const status = getEffectiveSlotStatus(slot);
+      if (status === "busy" || status === "processing") {
+        throw new Error("Session is still running");
+      }
+      const buffer = await getTerminalBuffer(slot.termId);
+      return { type: "result", sessionId: msg.sessionId, buffer };
+    },
+
+    "pool-input": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (msg.data === undefined) throw new Error("data required");
+      const { slot } = findSlotBySessionId(msg.sessionId);
+      daemonSend({ type: "write", termId: slot.termId, data: msg.data });
+      return { type: "ok" };
+    },
+
+    "pool-clean": async () => {
+      const pool = readPool();
+      if (!pool) throw new Error("Pool not initialized");
+
+      const sessions = getSessions();
+      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+
+      const idleSlots = pool.slots.filter((s) => {
+        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+        return session && session.status === "idle";
+      });
+
+      let cleaned = 0;
+      for (const slot of idleSlots) {
+        const session = sessionMap.get(slot.sessionId);
+        await offloadSession(slot.sessionId, slot.termId, null, {
+          cwd: session?.cwd,
+          gitRoot: session?.gitRoot,
+          pid: slot.pid,
+        });
+        cleaned++;
+      }
+
+      return { type: "cleaned", count: cleaned };
     },
   });
 
