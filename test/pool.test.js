@@ -5,13 +5,30 @@ import os from "os";
 import {
   readPool,
   writePool,
-  createPool,
   createSlot,
-  resolveSlot,
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,
 } from "../src/pool.js";
+
+/** Inline helper — createPool was removed from pool.js (never called in production). */
+function createPool(size) {
+  return {
+    version: 1,
+    poolSize: size,
+    createdAt: new Date().toISOString(),
+    slots: [],
+  };
+}
+
+/** Inline helper — resolveSlot was removed from pool.js (never called in production). */
+function resolveSlot(pool, termId, sessionId) {
+  const slot = pool.slots.find((s) => s.termId === termId);
+  if (!slot) return false;
+  slot.sessionId = sessionId;
+  slot.status = sessionId ? "fresh" : "error";
+  return true;
+}
 
 const TMP_DIR = path.join(os.tmpdir(), "open-cockpit-test-" + process.pid);
 const POOL_FILE = path.join(TMP_DIR, "pool.json");

@@ -27,18 +27,6 @@ function writePool(poolFile, pool) {
 }
 
 /**
- * Create initial pool structure with given size.
- */
-function createPool(size) {
-  return {
-    version: 1,
-    poolSize: size,
-    createdAt: new Date().toISOString(),
-    slots: [],
-  };
-}
-
-/**
  * Create a pool slot from a spawn result.
  */
 function createSlot(index, termId, pid) {
@@ -50,17 +38,6 @@ function createSlot(index, termId, pid) {
     sessionId: null,
     createdAt: new Date().toISOString(),
   };
-}
-
-/**
- * Update a slot's session ID and status after polling.
- */
-function resolveSlot(pool, termId, sessionId) {
-  const slot = pool.slots.find((s) => s.termId === termId);
-  if (!slot) return false;
-  slot.sessionId = sessionId;
-  slot.status = sessionId ? "fresh" : "error";
-  return true;
 }
 
 /**
@@ -159,9 +136,7 @@ function syncStatuses(pool, sessions) {
 module.exports = {
   readPool,
   writePool,
-  createPool,
   createSlot,
-  resolveSlot,
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,

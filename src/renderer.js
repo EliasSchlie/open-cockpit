@@ -963,7 +963,9 @@ async function acquireFreshSlot() {
   const idleSessions = sessions
     .filter(
       (s) =>
-        s.status === "idle" && s.isPool && s.sessionId !== currentSessionId,
+        s.status === "idle" &&
+        s.origin === "pool" &&
+        s.sessionId !== currentSessionId,
     )
     .sort((a, b) => a.idleTs - b.idleTs);
 
@@ -1114,7 +1116,7 @@ async function selectSession(session) {
   }
 
   // External sessions: try to focus their terminal app (iTerm/Cursor)
-  if (!session.isPool && session.alive) {
+  if (session.origin !== "pool" && session.alive) {
     const result = await window.api.focusExternalTerminal(session.pid);
     if (gen !== sessionGeneration) return;
     if (result.focused) {
@@ -1128,7 +1130,7 @@ async function selectSession(session) {
 
   // Restore cached terminals immediately (sync, no race risk)
   if (!restoreSessionTerminals(session.sessionId)) {
-    if (session.isPool) {
+    if (session.origin === "pool") {
       // Pool session: attach to the pool slot's existing Claude TUI
       const pool = await window.api.poolRead();
       if (gen !== sessionGeneration) return;

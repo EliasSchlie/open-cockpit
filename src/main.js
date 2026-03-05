@@ -449,15 +449,12 @@ async function getSessionsUncached() {
     } else {
       s.origin = "ext";
     }
-    // Keep isPool for backward compat (used by offload logic)
-    s.isPool = s.origin === "pool";
   }
 
   // Add offloaded sessions (always pool, skip if live session exists)
   const liveIds = new Set(sessions.map((s) => s.sessionId));
   for (const offloaded of getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
-      offloaded.isPool = true;
       offloaded.origin = "pool";
       sessions.push(offloaded);
     }
