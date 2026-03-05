@@ -1883,11 +1883,32 @@ function isDaemonRunning() {
   }
 }
 
+function getDaemonExecPath() {
+  // On macOS, process.execPath points into an .app bundle
+  // (e.g. Electron.app/Contents/MacOS/Electron). Spawning a detached child
+  // from that path causes macOS to show a second Dock / Cmd+Tab entry.
+  // Work around this by creating a symlink outside the .app bundle — same
+  // binary, same Node ABI, but macOS no longer associates it with the app.
+  if (process.platform !== "darwin") return process.execPath;
+
+  const link = path.join(OPEN_COCKPIT_DIR, "electron-node");
+  try {
+    const target = fs.readlinkSync(link);
+    if (target === process.execPath) return link;
+    fs.unlinkSync(link);
+  } catch (e) {
+    if (e.code !== "ENOENT")
+      debugLog("electron-node symlink issue:", e.message);
+  }
+  fs.symlinkSync(process.execPath, link);
+  return link;
+}
+
 function startDaemon() {
   return new Promise((resolve, reject) => {
     if (isDaemonRunning()) return resolve();
 
-    const child = spawnChild(process.execPath, [DAEMON_SCRIPT], {
+    const child = spawnChild(getDaemonExecPath(), [DAEMON_SCRIPT], {
       detached: true,
       stdio: "ignore",
       cwd: os.homedir(), // Don't inherit app cwd — prevents kill-by-cwd from hitting daemon
