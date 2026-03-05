@@ -88,7 +88,7 @@ const jsonlPathCache = new Map();
 // If a "processing" session's transcript hasn't been written to in this long, treat as idle
 const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
 
-// Deduplicate stale processing log messages (only log once per session)
+// Track stale sessions to detect transitions (stale → not-stale)
 const staleLoggedSessions = new Set();
 
 // Cache hasUserInput results (transcript -> true, once true stays true)
@@ -473,17 +473,20 @@ async function getSessionsUncached() {
       // Fallback: if transcript hasn't been written to in a while, treat as idle
       const mtime = await getJsonlMtime(sessionId);
       if (mtime && Date.now() - mtime > STALE_PROCESSING_MS) {
-        if (!staleLoggedSessions.has(sessionId)) {
-          staleLoggedSessions.add(sessionId);
-          console.warn(
-            `[main] Stale processing detected for session ${sessionId} (no activity for ${Math.round((Date.now() - mtime) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
-          );
-        }
+        // Always log — stale sessions indicate a hook failure and should never happen
+        console.error(
+          `[main] Stale processing detected for session ${sessionId} (no activity for ${Math.round((Date.now() - mtime) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
+        );
+        staleLoggedSessions.add(sessionId);
         status = "idle";
         staleIdle = true;
         idleTs = mtime;
       } else {
-        staleLoggedSessions.delete(sessionId);
+        if (staleLoggedSessions.delete(sessionId)) {
+          console.log(
+            `[main] Session ${sessionId} is no longer stale (resumed processing).`,
+          );
+        }
         const jsonlPath = jsonlPathCache.get(sessionId);
         status = hasUserInput(jsonlPath) ? "processing" : "fresh";
       }
