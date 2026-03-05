@@ -279,8 +279,6 @@ const darkTheme = EditorView.theme(
 // --- xterm.js theme (minimal — let shell theme handle ANSI colors) ---
 const TERM_THEME = {
   background: "#0a0a0a",
-  selectionBackground: "rgba(255, 26, 26, 0.25)",
-  selectionForeground: "#ffffff",
 };
 
 function createTerminal(extraOpts = {}) {
