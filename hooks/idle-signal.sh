@@ -49,20 +49,6 @@ case "${1:-}" in
         # Write signal file as JSON
         printf '{"cwd":"%s","session_id":"%s","transcript":"%s","ts":%d,"trigger":"%s"}\n' \
             "$(json_esc "$(pwd)")" "$(json_esc "$session_id")" "$(json_esc "$transcript")" "$(date +%s)" "$(json_esc "$trigger")" > "$signal_file"
-
-        # Block detection (Stop only): wait, then verify the session didn't continue.
-        # Another Stop hook may have blocked → Claude gets re-prompted → not idle.
-        if [ "$trigger" = "stop" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
-            saved_mtime=$(stat -f '%m' "$transcript" 2>/dev/null || echo 0)
-            sleep 1
-            # If signal was already cleared by UserPromptSubmit/PostToolUse, stop
-            [ -f "$signal_file" ] || exit 0
-            current_mtime=$(stat -f '%m' "$transcript" 2>/dev/null || echo 0)
-            if [ "$current_mtime" -gt "$saved_mtime" ]; then
-                # JSONL was modified after signal → session continued → not idle
-                rm -f "$signal_file"
-            fi
-        fi
         ;;
     clear)
         rm -f "$signal_file"
