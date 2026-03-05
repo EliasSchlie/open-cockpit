@@ -12,6 +12,7 @@ const {
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 const { sortSessions } = require("./sort-sessions");
+const { isTranscriptNewerThanSignal } = require("./session-status");
 const { createApiServer } = require("./api-server");
 const {
   readPool: readPoolFile,
@@ -246,12 +247,14 @@ function getIntentionHeading(filePath) {
   }
 }
 
-// Read idle signal for a PID. Returns {cwd, ts, trigger, session_id} or null.
+// Read idle signal for a PID. Returns {cwd, ts, trigger, session_id, signalMtimeMs} or null.
 function getIdleSignal(pid) {
   try {
     const signalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
-    if (!fs.existsSync(signalFile)) return null;
-    return JSON.parse(fs.readFileSync(signalFile, "utf-8"));
+    const stat = fs.statSync(signalFile);
+    const parsed = JSON.parse(fs.readFileSync(signalFile, "utf-8"));
+    parsed.signalMtimeMs = stat.mtimeMs;
+    return parsed;
   } catch {
     return null;
   }
@@ -415,7 +418,16 @@ async function getSessionsUncached() {
       status = "dead";
     } else if (idleSignal) {
       idleTs = idleSignal.ts || 0;
-      if (!hasUserInput(idleSignal.transcript)) {
+      if (
+        isTranscriptNewerThanSignal(
+          idleSignal.signalMtimeMs,
+          idleSignal.transcript,
+        )
+      ) {
+        // Transcript was written after the idle signal — a Stop hook re-prompted
+        // Claude and it's still processing (no new idle signal yet)
+        status = "processing";
+      } else if (!hasUserInput(idleSignal.transcript)) {
         status = "fresh";
       } else {
         status = "idle";
