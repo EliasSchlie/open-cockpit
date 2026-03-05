@@ -1,5 +1,6 @@
 const net = require("net");
 const fs = require("fs");
+const log = require("./logger")("api");
 
 function createApiServer(socketPath, handlers) {
   const server = net.createServer((socket) => {
@@ -14,11 +15,14 @@ function createApiServer(socketPath, handlers) {
         try {
           handleMessage(socket, JSON.parse(line));
         } catch (err) {
+          log.warn("API parse error", { err: err.message });
           sendTo(socket, { type: "error", error: "Parse error" });
         }
       }
     });
-    socket.on("error", () => {});
+    socket.on("error", (err) => {
+      log.warn("API client socket error", { err: err.message });
+    });
   });
 
   async function handleMessage(socket, msg) {
@@ -46,7 +50,11 @@ function createApiServer(socketPath, handlers) {
   // Clean up stale socket
   try {
     fs.unlinkSync(socketPath);
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      log.warn("Failed to clean stale API socket", { err: err.message });
+    }
+  }
 
   server.listen(socketPath, () => {
     fs.chmodSync(socketPath, 0o600);

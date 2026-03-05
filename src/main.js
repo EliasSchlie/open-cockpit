@@ -11,6 +11,7 @@ const {
 } = require("child_process");
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
+const log = require("./logger")("main");
 const { sortSessions } = require("./sort-sessions");
 const { createApiServer } = require("./api-server");
 const {
@@ -252,7 +253,8 @@ function getIdleSignal(pid) {
     const signalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
     if (!fs.existsSync(signalFile)) return null;
     return JSON.parse(fs.readFileSync(signalFile, "utf-8"));
-  } catch {
+  } catch (err) {
+    log.warn("Failed to parse idle signal", { pid, err: err.message });
     return null;
   }
 }
@@ -311,7 +313,9 @@ function getOffloadedSessions() {
         hasSnapshot: fs.existsSync(snapshotFile),
         origin: meta.origin || null,
       });
-    } catch {}
+    } catch (err) {
+      log.warn("Skipping corrupt offload dir", { dir, err: err.message });
+    }
   }
   return sessions;
 }
@@ -426,8 +430,16 @@ async function getSessionsUncached() {
       if (mtime && Date.now() - mtime > STALE_PROCESSING_MS) {
         if (!staleLoggedSessions.has(sessionId)) {
           staleLoggedSessions.add(sessionId);
+          const staleSec = Math.round((Date.now() - mtime) / 1000);
           console.warn(
-            `[main] Stale processing detected for session ${sessionId} (no activity for ${Math.round((Date.now() - mtime) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
+            `[main] Stale processing detected for session ${sessionId} (no activity for ${staleSec}s) — treating as idle. Idle signal hook may have failed.`,
+          );
+          log.warn(
+            "Stale processing detected — idle signal hook may have failed",
+            {
+              sessionId,
+              staleSec,
+            },
           );
         }
         status = "idle";
@@ -717,7 +729,13 @@ async function offloadSession(
     const resp = await daemonRequest({ type: "list" });
     const pty = resp.ptys.find((p) => p.termId === termId);
     if (pty && pty.buffer) snapshot = pty.buffer;
-  } catch {}
+  } catch (err) {
+    log.warn("Failed to snapshot terminal buffer for offload", {
+      sessionId,
+      termId,
+      err: err.message,
+    });
+  }
 
   const meta = writeOffloadMeta(sessionId, {
     cwd,
@@ -734,7 +752,14 @@ async function offloadSession(
     const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
     try {
       fs.unlinkSync(idleSignalFile);
-    } catch {}
+    } catch (err) {
+      if (err.code !== "ENOENT") {
+        log.warn("Failed to remove idle signal after /clear", {
+          pid,
+          err: err.message,
+        });
+      }
+    }
   }
 
   // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
@@ -929,7 +954,12 @@ function removeOffloadData(sessionId) {
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
   try {
     fs.rmSync(offloadDir, { recursive: true });
-  } catch {}
+  } catch (err) {
+    log.warn("Failed to remove offload data", {
+      sessionId,
+      err: err.message,
+    });
+  }
 }
 
 // Read offload snapshot
@@ -1099,7 +1129,8 @@ async function pollForSessionId(pid, timeoutMs, excludeId = null) {
       { interval: 500, timeout: timeoutMs, label: `session ID for PID ${pid}` },
     );
   } catch {
-    return null; // Timeout → null (preserves original behavior)
+    log.warn("Session ID poll timed out", { pid, timeoutMs });
+    return null;
   }
 }
 
@@ -1286,12 +1317,23 @@ function syncPoolStatuses(sessions) {
 async function killSlotProcess(slot) {
   try {
     await daemonRequest({ type: "kill", termId: slot.termId });
-  } catch {
-    // Daemon kill failed (stale termId or daemon down) — kill by PID directly
+  } catch (err) {
+    log.warn("Daemon kill failed, falling back to PID kill", {
+      termId: slot.termId,
+      pid: slot.pid,
+      err: err.message,
+    });
     if (slot.pid) {
       try {
         process.kill(slot.pid, "SIGTERM");
-      } catch {}
+      } catch (killErr) {
+        if (killErr.code !== "ESRCH") {
+          log.warn("PID kill also failed", {
+            pid: slot.pid,
+            err: killErr.message,
+          });
+        }
+      }
     }
   }
 }
@@ -1306,7 +1348,11 @@ async function poolDestroy() {
     }
     try {
       fs.unlinkSync(POOL_FILE);
-    } catch {}
+    } catch (err) {
+      log.error("Failed to delete pool.json after destroy", {
+        err: err.message,
+      });
+    }
   });
 }
 
@@ -1544,9 +1590,13 @@ function connectToDaemon() {
     });
 
     sock.on("close", () => {
+      if (pendingRequests.size > 0) {
+        log.warn("Daemon socket closed with pending requests", {
+          pending: pendingRequests.size,
+        });
+      }
       daemonSocket = null;
       daemonConnecting = null;
-      // Reject all pending requests
       for (const [, { reject: rej }] of pendingRequests) {
         rej(new Error("Daemon disconnected"));
       }

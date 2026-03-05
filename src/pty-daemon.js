@@ -13,6 +13,7 @@ const net = require("net");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const log = require("./logger")("daemon");
 const pty = require("node-pty");
 
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -76,15 +77,27 @@ function resetIdleTimer() {
 }
 
 function cleanup() {
-  for (const [, entry] of terminals) {
+  for (const [termId, entry] of terminals) {
     try {
       entry.proc.kill();
-    } catch {}
+    } catch (err) {
+      log.warn("Failed to kill terminal during cleanup", {
+        termId,
+        pid: entry.meta.pid,
+        err: err.message,
+      });
+    }
   }
   terminals.clear();
   try {
     fs.unlinkSync(SOCKET_PATH);
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      log.warn("Failed to unlink daemon socket during cleanup", {
+        err: err.message,
+      });
+    }
+  }
 }
 
 // --- Command handlers ---
@@ -186,7 +199,13 @@ function handleKill(socket, msg) {
     if (!entry.meta.exited) {
       try {
         entry.proc.kill();
-      } catch {}
+      } catch (err) {
+        log.warn("Failed to kill PTY process", {
+          termId: msg.termId,
+          pid: entry.meta.pid,
+          err: err.message,
+        });
+      }
     }
     terminals.delete(msg.termId);
   }
@@ -354,7 +373,8 @@ function startServer() {
       resetIdleTimer();
     });
 
-    socket.on("error", () => {
+    socket.on("error", (err) => {
+      log.warn("Client socket error", { err: err.message });
       clients.delete(socket);
       for (const [termId, entry] of terminals) {
         entry.clients.delete(socket);
