@@ -2463,6 +2463,16 @@ app.whenReady().then(async () => {
       writeIntention(msg.sessionId, msg.content);
       return { type: "ok" };
     },
+    "set-editor-has-text": async (msg) => {
+      validateSessionId(msg.sessionId);
+      if (msg.hasText) {
+        editorTextState.set(msg.sessionId, true);
+      } else {
+        editorTextState.delete(msg.sessionId);
+      }
+      invalidateSessionsCache();
+      return { type: "ok" };
+    },
     "pty-list": async () => {
       const resp = await daemonRequest({ type: "list" });
       return { type: "ptys", ptys: resp.ptys };

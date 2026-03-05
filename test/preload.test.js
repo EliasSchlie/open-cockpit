@@ -77,4 +77,9 @@ describe("Preload channel registration", () => {
       expect(preloadSource, `Missing API method: ${method}`).toContain(method);
     }
   });
+
+  it("exposes setEditorHasText for typing state", () => {
+    expect(preloadSource).toContain("setEditorHasText");
+    expect(preloadSource).toContain("set-editor-has-text");
+  });
 });
