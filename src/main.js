@@ -1060,12 +1060,12 @@ function readIntention(sessionId) {
   return fs.readFileSync(file, "utf-8");
 }
 
-// Track the last content we wrote so we can detect external changes
-let lastWrittenContent = null;
+// Track the last content we wrote per session so we can detect external changes
+const lastWrittenContent = new Map();
 
 function writeIntention(sessionId, content) {
   fs.mkdirSync(INTENTIONS_DIR, { recursive: true });
-  lastWrittenContent = content;
+  lastWrittenContent.set(sessionId, content);
   fs.writeFileSync(path.join(INTENTIONS_DIR, `${sessionId}.md`), content);
 }
 
@@ -1076,7 +1076,7 @@ function watchIntention(sessionId) {
     fileWatchers.delete("current");
   }
   // Reset change-detection state so we don't suppress notifications for new session
-  lastWrittenContent = null;
+  lastWrittenContent.delete(sessionId);
 
   const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
   if (!fs.existsSync(file)) {
@@ -1089,8 +1089,8 @@ function watchIntention(sessionId) {
     try {
       const content = fs.readFileSync(file, "utf-8");
       // Skip if this is content we wrote ourselves
-      if (content === lastWrittenContent) return;
-      lastWrittenContent = content;
+      if (content === lastWrittenContent.get(sessionId)) return;
+      lastWrittenContent.set(sessionId, content);
       console.log("[main] External file change detected, sending to renderer");
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("intention-changed", content);
