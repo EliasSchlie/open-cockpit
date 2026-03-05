@@ -13,26 +13,14 @@ describe("Main process menu", () => {
     expect(mainSource).toContain('label: "Navigate"');
   });
 
-  it("registers session navigation accelerators", () => {
-    expect(mainSource).toContain('accelerator: "Alt+Down"');
-    expect(mainSource).toContain('accelerator: "Alt+Up"');
-  });
-
-  it("registers sidebar toggle accelerator", () => {
-    expect(mainSource).toContain('accelerator: "CmdOrCtrl+\\\\"');
-  });
-
-  it("registers focus accelerators", () => {
-    expect(mainSource).toContain('accelerator: "CmdOrCtrl+E"');
-    expect(mainSource).toContain('accelerator: "CmdOrCtrl+`"');
-  });
-
-  it("registers command palette accelerator", () => {
-    expect(mainSource).toContain('accelerator: "CmdOrCtrl+/"');
-  });
-
-  it("registers new session accelerator", () => {
-    expect(mainSource).toContain('accelerator: "CmdOrCtrl+N"');
+  it("uses dynamic accelerators from shortcuts config", () => {
+    // Menu accelerators are now dynamic via accel() helper
+    expect(mainSource).toContain("accel(");
+    expect(mainSource).toContain('accel("new-session")');
+    expect(mainSource).toContain('accel("toggle-sidebar")');
+    expect(mainSource).toContain('accel("focus-editor")');
+    expect(mainSource).toContain('accel("focus-terminal")');
+    expect(mainSource).toContain('accel("toggle-command-palette")');
   });
 
   it("sends correct IPC messages for navigation", () => {
@@ -44,20 +32,27 @@ describe("Main process menu", () => {
       "focus-terminal",
       "toggle-command-palette",
       "new-session",
+      "cycle-pane",
     ];
     for (const msg of ipcMessages) {
       expect(mainSource, `Missing IPC send for "${msg}"`).toContain(`"${msg}"`);
     }
   });
 
-  it("handles Alt+Up/Down in before-input-event", () => {
-    expect(mainSource).toContain("ArrowUp");
-    expect(mainSource).toContain("ArrowDown");
-    expect(mainSource).toContain("input.alt");
+  it("handles input-event-based shortcuts via cached matching", () => {
+    expect(mainSource).toContain("findMatchingInputAction");
+    expect(mainSource).toContain("INPUT_EVENT_ACTIONS");
+    expect(mainSource).toContain("before-input-event");
   });
 
   it("handles Escape for focus-terminal", () => {
     expect(mainSource).toContain('input.key === "Escape"');
     expect(mainSource).toContain("focus-terminal");
+  });
+
+  it("supports menu rebuild on shortcut change", () => {
+    expect(mainSource).toContain("buildMenu()");
+    expect(mainSource).toContain('ipcMain.handle("set-shortcut"');
+    expect(mainSource).toContain('ipcMain.handle("reset-shortcut"');
   });
 });

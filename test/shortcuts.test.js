@@ -10,32 +10,105 @@ function computeNextSessionIndex(currentId, sessions, direction) {
   return (currentIndex + direction + sessions.length) % sessions.length;
 }
 
+// formatShortcutDisplay (mirrors renderer.js)
+function formatShortcutDisplay(accel) {
+  if (!accel) return "";
+  return accel
+    .replace(/CmdOrCtrl\+/gi, "\u2318")
+    .replace(/Cmd\+/gi, "\u2318")
+    .replace(/Ctrl\+/gi, "\u2303")
+    .replace(/Shift\+/gi, "\u21E7")
+    .replace(/Alt\+/gi, "\u2325")
+    .replace(/\+/g, "")
+    .replace(/Tab/gi, "\u21E5")
+    .replace(/Up/gi, "\u2191")
+    .replace(/Down/gi, "\u2193")
+    .replace(/Left/gi, "\u2190")
+    .replace(/Right/gi, "\u2192");
+}
+
+// Shortcut config (default values for testing)
+const shortcutConfig = {
+  "next-session": "Alt+Down",
+  "prev-session": "Alt+Up",
+  "new-session": "CmdOrCtrl+N",
+  "new-terminal-tab": "CmdOrCtrl+T",
+  "close-terminal-tab": "CmdOrCtrl+W",
+  "next-tab": "CmdOrCtrl+Shift+]",
+  "prev-tab": "CmdOrCtrl+Shift+[",
+  "toggle-sidebar": "CmdOrCtrl+\\",
+  "focus-editor": "CmdOrCtrl+E",
+  "focus-terminal": "CmdOrCtrl+`",
+  "toggle-command-palette": "CmdOrCtrl+/",
+  "cycle-pane": "CmdOrCtrl+Shift+Tab",
+  "toggle-pane-focus": "",
+};
+
+function getCommandShortcut(cmd) {
+  if (!cmd.shortcutAction) return "";
+  return formatShortcutDisplay(shortcutConfig[cmd.shortcutAction] || "");
+}
+
 // Command filtering logic (mirrors renderPaletteList)
 function filterCommands(commands, query) {
   const q = query.toLowerCase();
   if (!q) return commands.filter((c) => !c.id.startsWith("tab-"));
   return commands.filter(
     (c) =>
-      c.label.toLowerCase().includes(q) || c.shortcut.toLowerCase().includes(q),
+      c.label.toLowerCase().includes(q) ||
+      getCommandShortcut(c).toLowerCase().includes(q),
   );
 }
 
 // Sample command list matching renderer.js structure
 const COMMANDS = [
-  { id: "next-session", label: "Next Session", shortcut: "Alt+↓" },
-  { id: "prev-session", label: "Previous Session", shortcut: "Alt+↑" },
-  { id: "new-session", label: "New Claude Session", shortcut: "⌘N" },
-  { id: "new-terminal", label: "New Terminal Tab", shortcut: "⌘T" },
-  { id: "close-terminal", label: "Close Terminal Tab", shortcut: "⌘W" },
-  { id: "next-tab", label: "Next Terminal Tab", shortcut: "⌘⇧]" },
-  { id: "prev-tab", label: "Previous Terminal Tab", shortcut: "⌘⇧[" },
-  { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: "⌘\\" },
-  { id: "focus-editor", label: "Focus Editor", shortcut: "⌘E" },
-  { id: "focus-terminal", label: "Focus Terminal", shortcut: "⌘`" },
-  { id: "refresh", label: "Refresh Sessions", shortcut: "" },
-  { id: "command-palette", label: "Command Palette", shortcut: "⌘/" },
-  { id: "tab-1", label: "Switch to Tab 1", shortcut: "⌘1" },
-  { id: "tab-2", label: "Switch to Tab 2", shortcut: "⌘2" },
+  { id: "next-session", label: "Next Session", shortcutAction: "next-session" },
+  {
+    id: "prev-session",
+    label: "Previous Session",
+    shortcutAction: "prev-session",
+  },
+  {
+    id: "new-session",
+    label: "New Claude Session",
+    shortcutAction: "new-session",
+  },
+  {
+    id: "new-terminal",
+    label: "New Terminal Tab",
+    shortcutAction: "new-terminal-tab",
+  },
+  {
+    id: "close-terminal",
+    label: "Close Terminal Tab",
+    shortcutAction: "close-terminal-tab",
+  },
+  { id: "next-tab", label: "Next Terminal Tab", shortcutAction: "next-tab" },
+  {
+    id: "prev-tab",
+    label: "Previous Terminal Tab",
+    shortcutAction: "prev-tab",
+  },
+  {
+    id: "toggle-sidebar",
+    label: "Toggle Sidebar",
+    shortcutAction: "toggle-sidebar",
+  },
+  { id: "cycle-pane", label: "Cycle Pane Focus", shortcutAction: "cycle-pane" },
+  { id: "focus-editor", label: "Focus Editor", shortcutAction: "focus-editor" },
+  {
+    id: "focus-terminal",
+    label: "Focus Terminal",
+    shortcutAction: "focus-terminal",
+  },
+  { id: "refresh", label: "Refresh Sessions" },
+  {
+    id: "command-palette",
+    label: "Command Palette",
+    shortcutAction: "toggle-command-palette",
+  },
+  { id: "tab-1", label: "Switch to Tab 1" },
+  { id: "tab-2", label: "Switch to Tab 2" },
 ];
 
 describe("Session switching", () => {
@@ -73,7 +146,7 @@ describe("Command palette filtering", () => {
   it("returns all non-tab commands when query is empty", () => {
     const result = filterCommands(COMMANDS, "");
     expect(result.every((c) => !c.id.startsWith("tab-"))).toBe(true);
-    expect(result.length).toBe(12); // All except tab-1, tab-2
+    expect(result.length).toBe(13); // All except tab-1, tab-2
   });
 
   it("filters by label substring", () => {
@@ -84,8 +157,8 @@ describe("Command palette filtering", () => {
     ).toBe(true);
   });
 
-  it("filters by shortcut", () => {
-    const result = filterCommands(COMMANDS, "alt");
+  it("filters by shortcut display", () => {
+    const result = filterCommands(COMMANDS, "\u2325"); // ⌥ (Alt symbol)
     expect(result.length).toBe(2);
     expect(result[0].id).toBe("next-session");
     expect(result[1].id).toBe("prev-session");
@@ -124,5 +197,25 @@ describe("Command list completeness", () => {
     for (const cmd of COMMANDS) {
       expect(cmd.label).toBeTruthy();
     }
+  });
+});
+
+describe("formatShortcutDisplay", () => {
+  it("converts CmdOrCtrl+N to symbol", () => {
+    expect(formatShortcutDisplay("CmdOrCtrl+N")).toBe("\u2318N");
+  });
+
+  it("converts Alt+Down to symbol", () => {
+    expect(formatShortcutDisplay("Alt+Down")).toBe("\u2325\u2193");
+  });
+
+  it("converts CmdOrCtrl+Shift+Tab", () => {
+    expect(formatShortcutDisplay("CmdOrCtrl+Shift+Tab")).toBe(
+      "\u2318\u21E7\u21E5",
+    );
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(formatShortcutDisplay("")).toBe("");
   });
 });

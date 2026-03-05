@@ -15,6 +15,16 @@ const { sortSessions } = require("./sort-sessions");
 const { isTranscriptNewerThanSignal } = require("./session-status");
 const { createApiServer } = require("./api-server");
 const {
+  loadShortcuts,
+  getShortcut,
+  getAllShortcuts,
+  getDefaultShortcut,
+  setShortcut,
+  resetShortcut,
+  findMatchingInputAction,
+  INPUT_EVENT_ACTIONS,
+} = require("./shortcuts");
+const {
   readPool: readPoolFile,
   writePool: writePoolFile,
   computePoolHealth,
@@ -210,31 +220,28 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
   // Shortcuts not supported as menu accelerators — handle via input events
+  // Maps input-event action IDs to IPC channels
+  const inputEventChannels = {
+    "next-terminal-tab-alt": "next-terminal-tab",
+    "prev-terminal-tab-alt": "prev-terminal-tab",
+    "next-session": "next-session",
+    "prev-session": "prev-session",
+    "cycle-pane": "cycle-pane",
+  };
+
   mainWindow.webContents.on("before-input-event", (event, input) => {
-    if (input.control && input.key === "Tab") {
-      event.preventDefault();
-      mainWindow.webContents.send(
-        input.shift ? "prev-terminal-tab" : "next-terminal-tab",
-      );
-    }
-    // Alt+Up / Alt+Down — switch sessions
-    if (input.alt && (input.key === "ArrowUp" || input.key === "ArrowDown")) {
-      event.preventDefault();
-      mainWindow.webContents.send(
-        input.key === "ArrowUp" ? "prev-session" : "next-session",
-      );
-    }
-    // Alt+Left / Alt+Right — toggle focus between terminal and editor
-    if (
-      input.alt &&
-      (input.key === "ArrowLeft" || input.key === "ArrowRight")
-    ) {
-      event.preventDefault();
-      mainWindow.webContents.send("toggle-pane-focus");
-    }
     // Escape — focus terminal (only when not in command palette)
     if (input.key === "Escape" && !input.meta && !input.control && !input.alt) {
       mainWindow.webContents.send("focus-terminal");
+      return;
+    }
+
+    // Check all input-event-based shortcuts (uses pre-parsed cache)
+    const matchedAction = findMatchingInputAction(input);
+    if (matchedAction) {
+      event.preventDefault();
+      const channel = inputEventChannels[matchedAction] || matchedAction;
+      mainWindow.webContents.send(channel);
     }
   });
 
@@ -2631,153 +2638,185 @@ app.whenReady().then(async () => {
     }
   };
 
-  // Build menu with keyboard shortcuts
-  const menuTemplate = [
-    {
-      label: app.name,
-      submenu: [
-        { role: "about" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    },
-    {
-      label: "File",
-      submenu: [
-        {
-          label: "New Claude Session",
-          accelerator: "CmdOrCtrl+N",
-          click: () => send("new-session"),
-        },
-        {
-          label: "New Terminal Tab",
-          accelerator: "CmdOrCtrl+T",
-          click: () => send("new-terminal-tab"),
-        },
-        {
-          label: "Close Terminal Tab",
-          accelerator: "CmdOrCtrl+W",
-          click: () => send("close-terminal-tab"),
-        },
-        { type: "separator" },
-        {
-          label: "Next Tab",
-          accelerator: "CmdOrCtrl+Shift+]",
-          click: () => send("next-terminal-tab"),
-        },
-        {
-          label: "Previous Tab",
-          accelerator: "CmdOrCtrl+Shift+[",
-          click: () => send("prev-terminal-tab"),
-        },
-        { type: "separator" },
-        ...Array.from({ length: 9 }, (_, i) => ({
-          label: `Tab ${i + 1}`,
-          accelerator: `CmdOrCtrl+${i + 1}`,
-          click: () => send("switch-terminal-tab", i),
-        })),
-        { type: "separator" },
-        { role: "close" },
-      ],
-    },
-    {
-      label: "Navigate",
-      submenu: [
-        {
-          label: "Next Session",
-          accelerator: "Alt+Down",
-          click: () => send("next-session"),
-        },
-        {
-          label: "Previous Session",
-          accelerator: "Alt+Up",
-          click: () => send("prev-session"),
-        },
-        { type: "separator" },
-        {
-          label: "Toggle Sidebar",
-          accelerator: "CmdOrCtrl+\\",
-          click: () => send("toggle-sidebar"),
-        },
-        {
-          label: "Toggle Pane Focus",
-          accelerator: "Alt+Left",
-          click: () => send("toggle-pane-focus"),
-        },
-        {
-          label: "Focus Editor",
-          accelerator: "CmdOrCtrl+E",
-          click: () => send("focus-editor"),
-        },
-        {
-          label: "Focus Terminal",
-          accelerator: "CmdOrCtrl+`",
-          click: () => send("focus-terminal"),
-        },
-        {
-          label: "Focus External Terminal",
-          accelerator: "CmdOrCtrl+O",
-          click: () => send("focus-external"),
-        },
-        { type: "separator" },
-        {
-          label: "Jump to Recent Idle",
-          accelerator: "CmdOrCtrl+J",
-          click: () => send("jump-recent-idle"),
-        },
-        {
-          label: "Archive Current Session",
-          accelerator: "CmdOrCtrl+D",
-          click: () => send("archive-current-session"),
-        },
-        { type: "separator" },
-        {
-          label: "Command Palette",
-          accelerator: "CmdOrCtrl+/",
-          click: () => send("toggle-command-palette"),
-        },
-      ],
-    },
-    {
-      label: "Edit",
-      submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { role: "togglefullscreen" },
-      ],
-    },
-    {
-      label: "Window",
-      submenu: [
-        { role: "minimize" },
-        { role: "zoom" },
-        { type: "separator" },
-        { role: "front" },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+  // Build menu with keyboard shortcuts (dynamic from config)
+  function buildMenu() {
+    // Helper: only set accelerator if action has a binding and isn't input-event-only
+    function accel(actionId) {
+      if (INPUT_EVENT_ACTIONS.has(actionId)) return undefined;
+      const shortcut = getShortcut(actionId);
+      return shortcut || undefined;
+    }
+
+    const menuTemplate = [
+      {
+        label: app.name,
+        submenu: [
+          { role: "about" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" },
+        ],
+      },
+      {
+        label: "File",
+        submenu: [
+          {
+            label: "New Claude Session",
+            accelerator: accel("new-session"),
+            click: () => send("new-session"),
+          },
+          {
+            label: "New Terminal Tab",
+            accelerator: accel("new-terminal-tab"),
+            click: () => send("new-terminal-tab"),
+          },
+          {
+            label: "Close Terminal Tab",
+            accelerator: accel("close-terminal-tab"),
+            click: () => send("close-terminal-tab"),
+          },
+          { type: "separator" },
+          {
+            label: "Next Tab",
+            accelerator: accel("next-tab"),
+            click: () => send("next-terminal-tab"),
+          },
+          {
+            label: "Previous Tab",
+            accelerator: accel("prev-tab"),
+            click: () => send("prev-terminal-tab"),
+          },
+          { type: "separator" },
+          ...Array.from({ length: 9 }, (_, i) => ({
+            label: `Tab ${i + 1}`,
+            accelerator: `CmdOrCtrl+${i + 1}`,
+            click: () => send("switch-terminal-tab", i),
+          })),
+          { type: "separator" },
+          { role: "close" },
+        ],
+      },
+      {
+        label: "Navigate",
+        submenu: [
+          {
+            label: "Next Session",
+            accelerator: accel("next-session"),
+            click: () => send("next-session"),
+          },
+          {
+            label: "Previous Session",
+            accelerator: accel("prev-session"),
+            click: () => send("prev-session"),
+          },
+          { type: "separator" },
+          {
+            label: "Toggle Sidebar",
+            accelerator: accel("toggle-sidebar"),
+            click: () => send("toggle-sidebar"),
+          },
+          {
+            label: "Cycle Pane Focus",
+            accelerator: accel("cycle-pane"),
+            click: () => send("cycle-pane"),
+          },
+          {
+            label: "Toggle Pane Focus",
+            accelerator: accel("toggle-pane-focus"),
+            click: () => send("toggle-pane-focus"),
+          },
+          {
+            label: "Focus Editor",
+            accelerator: accel("focus-editor"),
+            click: () => send("focus-editor"),
+          },
+          {
+            label: "Focus Terminal",
+            accelerator: accel("focus-terminal"),
+            click: () => send("focus-terminal"),
+          },
+          {
+            label: "Focus External Terminal",
+            accelerator: accel("focus-external"),
+            click: () => send("focus-external"),
+          },
+          { type: "separator" },
+          {
+            label: "Jump to Recent Idle",
+            accelerator: accel("jump-recent-idle"),
+            click: () => send("jump-recent-idle"),
+          },
+          {
+            label: "Archive Current Session",
+            accelerator: accel("archive-current-session"),
+            click: () => send("archive-current-session"),
+          },
+          { type: "separator" },
+          {
+            label: "Command Palette",
+            accelerator: accel("toggle-command-palette"),
+            click: () => send("toggle-command-palette"),
+          },
+        ],
+      },
+      {
+        label: "Edit",
+        submenu: [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "selectAll" },
+        ],
+      },
+      {
+        label: "View",
+        submenu: [
+          { role: "reload" },
+          { role: "forceReload" },
+          { role: "toggleDevTools" },
+          { type: "separator" },
+          { role: "resetZoom" },
+          { role: "zoomIn" },
+          { role: "zoomOut" },
+          { role: "togglefullscreen" },
+        ],
+      },
+      {
+        label: "Window",
+        submenu: [
+          { role: "minimize" },
+          { role: "zoom" },
+          { type: "separator" },
+          { role: "front" },
+        ],
+      },
+    ];
+    Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+  }
+
+  // Load shortcuts config and build initial menu
+  loadShortcuts();
+  buildMenu();
+
+  // IPC handlers for shortcut settings
+  ipcMain.handle("get-shortcuts", () => getAllShortcuts());
+  ipcMain.handle("get-default-shortcut", (_e, actionId) =>
+    getDefaultShortcut(actionId),
+  );
+  ipcMain.handle("set-shortcut", (_e, actionId, accelerator) => {
+    setShortcut(actionId, accelerator);
+    buildMenu(); // Rebuild menu with updated accelerators
+  });
+  ipcMain.handle("reset-shortcut", (_e, actionId) => {
+    resetShortcut(actionId);
+    buildMenu();
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
