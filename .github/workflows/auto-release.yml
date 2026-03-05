@@ -10,10 +10,18 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: open-cockpit,claude-plugins
+
       - name: Checkout plugin repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.MARKETPLACE_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Bump patch version
         id: bump
@@ -36,7 +44,7 @@ jobs:
 
       - name: Update marketplace
         run: |
-          git clone https://x-access-token:${{ secrets.MARKETPLACE_PAT }}@github.com/EliasSchlie/claude-plugins.git /tmp/marketplace
+          git clone https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/EliasSchlie/claude-plugins.git /tmp/marketplace
           cd /tmp/marketplace
           jq --arg v "${{ steps.bump.outputs.version }}" \
             '(.plugins[] | select(.name == "open-cockpit")).version = $v' \

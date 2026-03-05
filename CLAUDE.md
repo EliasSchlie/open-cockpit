@@ -75,7 +75,7 @@ cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-dae
 
 Just push your changes — CI handles version bumping and marketplace sync. For major/minor bumps, manually update `plugin.json` before pushing; CI increments from your number.
 
-**Requires:** `MARKETPLACE_PAT` secret on the repo (GitHub PAT with repo access to both `EliasSchlie/open-cockpit` and `EliasSchlie/claude-plugins`).
+**Requires:** `APP_ID` and `APP_PRIVATE_KEY` secrets on the repo (from the "Plugin Release Bot" GitHub App, installed on `open-cockpit` + `claude-plugins`).
 
 **Manual fallback:** `./release.sh` still works for local releases if CI is unavailable.
 
