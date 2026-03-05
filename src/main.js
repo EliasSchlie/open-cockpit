@@ -1342,6 +1342,7 @@ function trackNewSlot(
     excludeId = null,
     expectedStatus = "starting",
     skipTrustPrompt = false,
+    skipFreshSignal = false,
     onResolved = null,
   } = {},
 ) {
@@ -1354,9 +1355,14 @@ function trackNewSlot(
         const s = p.slots.find((x) => x.termId === slot.termId);
         if (s && s.status === expectedStatus) {
           s.sessionId = sessionId;
-          s.status = sessionId ? "fresh" : "error";
+          if (skipFreshSignal) {
+            // Resume case: keep slot as busy, let real idle hook handle status
+            if (!sessionId) s.status = "error";
+          } else {
+            s.status = sessionId ? "fresh" : "error";
+            if (sessionId) createFreshIdleSignal(s.pid, sessionId);
+          }
           writePool(p);
-          if (sessionId) createFreshIdleSignal(s.pid, sessionId);
         }
       });
       if (onResolved) await onResolved(sessionId);
@@ -1758,6 +1764,7 @@ async function poolResume(sessionId) {
         excludeId: oldSlotSessionId,
         expectedStatus: "busy",
         skipTrustPrompt: true,
+        skipFreshSignal: true,
         onResolved: async (newSessionId) => {
           if (newSessionId) removeOffloadData(sessionId);
           invalidateSessionsCache();
