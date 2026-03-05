@@ -38,6 +38,21 @@ const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
 const DEFAULT_POOL_SIZE = 5;
 
+// Poll a condition until it returns a truthy value, with timeout.
+// Returns the truthy value, or throws on timeout.
+async function poll(
+  checkFn,
+  { interval = 1000, timeout = 300000, label = "poll" } = {},
+) {
+  const start = Date.now();
+  while (true) {
+    const result = await checkFn();
+    if (result) return result;
+    if (Date.now() - start >= timeout) throw new Error(`Timeout: ${label}`);
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}
+
 // Track file watchers and which session each window is viewing
 const fileWatchers = new Map();
 let mainWindow = null;
@@ -495,6 +510,34 @@ function invalidateSessionsCache() {
   sessionsCacheTs = 0;
 }
 
+// Send a command to a terminal: Escape → Ctrl-U → command + Enter
+async function sendCommandToTerminal(
+  termId,
+  command,
+  { escDelay = 200, clearDelay = 100 } = {},
+) {
+  daemonSend({ type: "write", termId, data: "\x1b" });
+  await new Promise((r) => setTimeout(r, escDelay));
+  daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
+  await new Promise((r) => setTimeout(r, clearDelay));
+  daemonSend({ type: "write", termId, data: command + "\r" });
+}
+
+// Create a fresh idle signal file for a pool slot
+function createFreshIdleSignal(pid, sessionId) {
+  fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+  fs.writeFileSync(
+    path.join(IDLE_SIGNALS_DIR, String(pid)),
+    JSON.stringify({
+      cwd: os.homedir(),
+      session_id: sessionId,
+      transcript: "",
+      ts: Math.floor(Date.now() / 1000),
+      trigger: "pool-init",
+    }),
+  );
+}
+
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
 // Pool and external sessions are mixed together in the same sections.
 // Offload a session: save snapshot + meta, then send /clear to terminal
@@ -538,13 +581,10 @@ async function offloadSession(
   );
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
-  // 1. Escape (safe no-op or exits any menu)
-  daemonSend({ type: "write", termId, data: "\x1b" });
-  await new Promise((r) => setTimeout(r, 500));
-  // 2. Ctrl-U to clear any partial input, then /clear
-  daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
-  await new Promise((r) => setTimeout(r, 200));
-  daemonSend({ type: "write", termId, data: "/clear\r" });
+  await sendCommandToTerminal(termId, "/clear", {
+    escDelay: 500,
+    clearDelay: 200,
+  });
 
   // 3. Remove idle signal so session re-detects as fresh after /clear
   if (pid) {
@@ -785,19 +825,7 @@ async function poolInit(size) {
         slot.sessionId = sessionId;
         slot.status = sessionId ? "fresh" : "error";
         // Write idle signal so getSessions detects slot as "fresh" (no user input)
-        if (sessionId) {
-          fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-          fs.writeFileSync(
-            path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
-            JSON.stringify({
-              cwd: os.homedir(),
-              session_id: sessionId,
-              transcript: "",
-              ts: Math.floor(Date.now() / 1000),
-              trigger: "pool-init",
-            }),
-          );
-        }
+        if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
       }),
     );
 
@@ -808,24 +836,24 @@ async function poolInit(size) {
 
 // Poll for a session-pid file to appear (or change from excludeId) for a PID.
 // Used both for initial session discovery and after /clear (which reuses the PID).
-function pollForSessionId(pid, timeoutMs, excludeId = null) {
-  return new Promise((resolve) => {
-    let elapsed = 0;
-    const interval = 500;
-    const initialDelay = excludeId ? 2000 : 0; // Give /clear time to take effect
-    const check = () => {
-      try {
-        const sessionId = fs
-          .readFileSync(path.join(SESSION_PIDS_DIR, String(pid)), "utf-8")
-          .trim();
-        if (sessionId && sessionId !== excludeId) return resolve(sessionId);
-      } catch {} // File doesn't exist yet
-      elapsed += interval;
-      if (elapsed >= timeoutMs) return resolve(null);
-      setTimeout(check, interval);
-    };
-    setTimeout(check, initialDelay);
-  });
+async function pollForSessionId(pid, timeoutMs, excludeId = null) {
+  if (excludeId) await new Promise((r) => setTimeout(r, 2000)); // Give /clear time
+  try {
+    return await poll(
+      () => {
+        try {
+          const sessionId = fs
+            .readFileSync(path.join(SESSION_PIDS_DIR, String(pid)), "utf-8")
+            .trim();
+          if (sessionId && sessionId !== excludeId) return sessionId;
+        } catch {} // File doesn't exist yet
+        return null;
+      },
+      { interval: 500, timeout: timeoutMs, label: `session ID for PID ${pid}` },
+    );
+  } catch {
+    return null; // Timeout → null (preserves original behavior)
+  }
 }
 
 // Resize pool: add or remove slots
@@ -952,19 +980,7 @@ async function reconcilePool() {
                   s.sessionId = sessionId;
                   s.status = sessionId ? "fresh" : "error";
                   writePool(p);
-                  if (sessionId) {
-                    fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-                    fs.writeFileSync(
-                      path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
-                      JSON.stringify({
-                        cwd: os.homedir(),
-                        session_id: sessionId,
-                        transcript: "",
-                        ts: Math.floor(Date.now() / 1000),
-                        trigger: "pool-init",
-                      }),
-                    );
-                  }
+                  if (sessionId) createFreshIdleSignal(slot.pid, sessionId);
                 }
               });
             })
@@ -1522,11 +1538,7 @@ app.whenReady().then(async () => {
   }
 
   async function sendPromptToTerminal(termId, prompt) {
-    daemonSend({ type: "write", termId, data: "\x1b" });
-    await new Promise((r) => setTimeout(r, 200));
-    daemonSend({ type: "write", termId, data: "\x15" });
-    await new Promise((r) => setTimeout(r, 100));
-    daemonSend({ type: "write", termId, data: prompt + "\r" });
+    await sendCommandToTerminal(termId, prompt);
   }
 
   async function getEffectiveSlotStatus(slot) {
@@ -1540,39 +1552,20 @@ app.whenReady().then(async () => {
   }
 
   function waitForSessionIdle(sessionId, timeoutMs = 300000) {
-    return new Promise((resolve, reject) => {
-      let elapsed = 0;
-      let settled = false;
-      const interval = 1000;
-      const check = async () => {
-        if (settled) return;
-        try {
-          const sessions = await getSessions();
-          const session = sessions.find((s) => s.sessionId === sessionId);
-          if (session && session.status === "idle") {
-            settled = true;
-            resolve();
-            return;
-          }
-          if (session && !session.alive) {
-            settled = true;
-            reject(new Error("Session process died"));
-            return;
-          }
-          elapsed += interval;
-          if (elapsed >= timeoutMs) {
-            settled = true;
-            reject(new Error("Timeout waiting for session to become idle"));
-            return;
-          }
-          setTimeout(check, interval);
-        } catch (err) {
-          settled = true;
-          reject(err);
-        }
-      };
-      setTimeout(check, interval);
-    });
+    return poll(
+      async () => {
+        const sessions = await getSessions();
+        const session = sessions.find((s) => s.sessionId === sessionId);
+        if (session && session.status === "idle") return true;
+        if (session && !session.alive) throw new Error("Session process died");
+        return null;
+      },
+      {
+        interval: 1000,
+        timeout: timeoutMs,
+        label: "waiting for session to become idle",
+      },
+    );
   }
 
   // --- Programmatic API server (Unix socket) ---
@@ -1714,38 +1707,23 @@ app.whenReady().then(async () => {
       if (busySlots.length === 0)
         throw new Error("No busy sessions to wait for");
 
-      const finished = await new Promise((resolve, reject) => {
-        let elapsed = 0;
-        let settled = false;
-        const interval = 1000;
-        const check = async () => {
-          if (settled) return;
-          try {
-            const sessions = await getSessions();
-            for (const s of busySlots) {
-              const session = sessions.find(
-                (sess) => sess.sessionId === s.sessionId,
-              );
-              if (session && session.status === "idle") {
-                settled = true;
-                resolve(s);
-                return;
-              }
-            }
-            elapsed += interval;
-            if (elapsed >= timeout) {
-              settled = true;
-              reject(new Error("Timeout waiting for session to become idle"));
-              return;
-            }
-            setTimeout(check, interval);
-          } catch (err) {
-            settled = true;
-            reject(err);
+      const finished = await poll(
+        async () => {
+          const sessions = await getSessions();
+          for (const s of busySlots) {
+            const session = sessions.find(
+              (sess) => sess.sessionId === s.sessionId,
+            );
+            if (session && session.status === "idle") return s;
           }
-        };
-        setTimeout(check, interval);
-      });
+          return null;
+        },
+        {
+          interval: 1000,
+          timeout,
+          label: "waiting for session to become idle",
+        },
+      );
 
       const buffer = await getTerminalBuffer(finished.termId);
       return { type: "result", sessionId: finished.sessionId, buffer };
