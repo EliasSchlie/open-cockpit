@@ -75,23 +75,41 @@ const gitRootCache = new Map();
 // Cache hasUserInput results (transcript -> true, once true stays true)
 const userInputCache = new Map();
 
-// Detect session origin by reading process environment via ps eww (macOS)
-async function detectOrigin(pid) {
-  if (originCache.has(String(pid))) return originCache.get(String(pid));
-  let origin = "ext";
-  try {
-    const { stdout } = await execFileAsync("ps", ["eww", "-p", String(pid)], {
-      encoding: "utf-8",
-      timeout: 3000,
-    });
-    if (/\bOPEN_COCKPIT_POOL=1\b/.test(stdout)) {
-      origin = "pool";
-    } else if (/\bSUB_CLAUDE=1\b/.test(stdout)) {
-      origin = "sub-claude";
+const { parseOrigins } = require("./parse-origins");
+
+// Detect session origin by reading process environment via ps eww (macOS).
+// Batched: resolves all uncached PIDs in a single subprocess call.
+async function batchDetectOrigins(pids) {
+  const results = new Map();
+  const uncached = [];
+  for (const pid of pids) {
+    const key = String(pid);
+    if (originCache.has(key)) {
+      results.set(key, originCache.get(key));
+    } else {
+      uncached.push(key);
     }
-  } catch {}
-  originCache.set(String(pid), origin);
-  return origin;
+  }
+  if (uncached.length > 0) {
+    try {
+      const { stdout } = await execFileAsync(
+        "ps",
+        ["eww", "-p", uncached.join(",")],
+        { encoding: "utf-8", timeout: 3000 },
+      );
+      const parsed = parseOrigins(stdout, uncached);
+      for (const [pid, origin] of parsed) {
+        originCache.set(pid, origin);
+        results.set(pid, origin);
+      }
+    } catch {
+      for (const pid of uncached) {
+        originCache.set(pid, "ext");
+        results.set(pid, "ext");
+      }
+    }
+  }
+  return results;
 }
 
 // --- PTY Daemon Client ---
@@ -467,11 +485,16 @@ async function getSessionsUncached() {
       if (slot.sessionId) poolSessionIds.add(slot.sessionId);
     }
   }
+  // Batch detect origins for all alive non-pool sessions in one ps call
+  const needOriginPids = sessions
+    .filter((s) => s.alive && !poolSessionIds.has(s.sessionId))
+    .map((s) => s.pid);
+  const originMap = await batchDetectOrigins(needOriginPids);
   for (const s of sessions) {
     if (poolSessionIds.has(s.sessionId)) {
       s.origin = "pool";
     } else if (s.alive) {
-      s.origin = await detectOrigin(s.pid);
+      s.origin = originMap.get(String(s.pid)) || "ext";
     } else {
       s.origin = "ext";
     }
@@ -493,17 +516,78 @@ async function getSessionsUncached() {
 // duplicate subprocesses. Second caller reuses the first's result.
 let sessionsInFlight = null;
 
+// Lightweight fingerprint: PID files + idle signal mtimes + offloaded dir.
+// Avoids expensive subprocess calls when nothing changed.
+let lastDirFingerprint = null;
+let lastFullRefreshTs = 0;
+const MAX_FINGERPRINT_AGE = 30000; // Force full refresh every 30s for liveness checks
+
+function computeDirFingerprint() {
+  try {
+    const parts = [];
+    // PID files (session-pids dir)
+    if (fs.existsSync(SESSION_PIDS_DIR)) {
+      const files = fs.readdirSync(SESSION_PIDS_DIR).sort();
+      for (const f of files) {
+        try {
+          const st = fs.statSync(path.join(SESSION_PIDS_DIR, f));
+          parts.push(`p:${f}:${st.mtimeMs}`);
+        } catch {}
+      }
+    }
+    // Idle signal files
+    if (fs.existsSync(IDLE_SIGNALS_DIR)) {
+      const files = fs.readdirSync(IDLE_SIGNALS_DIR).sort();
+      for (const f of files) {
+        try {
+          const st = fs.statSync(path.join(IDLE_SIGNALS_DIR, f));
+          parts.push(`i:${f}:${st.mtimeMs}`);
+        } catch {}
+      }
+    }
+    // Offloaded dir mtime (catches new archives)
+    try {
+      const st = fs.statSync(OFFLOADED_DIR);
+      parts.push(`o:${st.mtimeMs}`);
+    } catch {}
+    // Pool state changes (new slots, killed sessions)
+    try {
+      const st = fs.statSync(POOL_FILE);
+      parts.push(`pool:${st.mtimeMs}`);
+    } catch {}
+    return parts.join("|");
+  } catch {
+    return null; // Force refresh on error
+  }
+}
+
 async function getSessions() {
   const now = Date.now();
   if (sessionsCache && now - sessionsCacheTs < SESSIONS_CACHE_TTL) {
     return sessionsCache;
   }
+
+  // Fast path: if directory state hasn't changed and not too stale, extend cache.
+  // Max age ensures dead processes are detected even when their PID files remain.
+  const fp = computeDirFingerprint();
+  if (
+    sessionsCache &&
+    fp &&
+    fp === lastDirFingerprint &&
+    now - lastFullRefreshTs < MAX_FINGERPRINT_AGE
+  ) {
+    sessionsCacheTs = now;
+    return sessionsCache;
+  }
+
   // Deduplicate concurrent calls
   if (sessionsInFlight) return sessionsInFlight;
   sessionsInFlight = getSessionsUncached()
     .then((result) => {
       sessionsCache = result;
       sessionsCacheTs = Date.now();
+      lastFullRefreshTs = Date.now();
+      lastDirFingerprint = computeDirFingerprint();
       return result;
     })
     .finally(() => {
@@ -516,6 +600,8 @@ async function getSessions() {
 function invalidateSessionsCache() {
   sessionsCache = null;
   sessionsCacheTs = 0;
+  lastDirFingerprint = null;
+  lastFullRefreshTs = 0;
 }
 
 // Read the terminal buffer for a single PTY (lightweight alternative to list)
@@ -1499,6 +1585,28 @@ app.whenReady().then(async () => {
     await reconcilePool();
   } catch (err) {
     console.error("[main] Pool reconciliation failed:", err.message);
+  }
+
+  // Watch session-pids and idle-signals dirs for changes → push updates to renderer.
+  // Debounced: fs.watch fires multiple events per operation.
+  let watchDebounce = null;
+  function onDirChange() {
+    if (watchDebounce) clearTimeout(watchDebounce);
+    watchDebounce = setTimeout(() => {
+      watchDebounce = null;
+      invalidateSessionsCache();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("sessions-changed");
+      }
+    }, 200);
+  }
+  for (const dir of [SESSION_PIDS_DIR, IDLE_SIGNALS_DIR]) {
+    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.watch(dir, { persistent: false }, onDirChange);
+    } catch (err) {
+      console.error(`[main] fs.watch failed on ${dir}:`, err.message);
+    }
   }
 
   ipcMain.handle("get-dir-colors", () => {
