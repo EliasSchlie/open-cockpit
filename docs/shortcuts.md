@@ -40,5 +40,6 @@ All shortcuts should also appear in the command palette (`Cmd+/`). The `COMMANDS
 | `Alt+Left` / `Alt+Right` | Toggle Pane Focus |
 | `Cmd+E` | Focus Editor |
 | `` Cmd+` `` | Focus Terminal |
+| `Cmd+O` | Focus External Terminal |
 | `Escape` | Focus Terminal |
 | `Cmd+/` | Command Palette |

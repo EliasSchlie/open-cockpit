@@ -2675,6 +2675,11 @@ app.whenReady().then(async () => {
           accelerator: "CmdOrCtrl+`",
           click: () => send("focus-terminal"),
         },
+        {
+          label: "Focus External Terminal",
+          accelerator: "CmdOrCtrl+O",
+          click: () => send("focus-external"),
+        },
         { type: "separator" },
         {
           label: "Jump to Recent Idle",
