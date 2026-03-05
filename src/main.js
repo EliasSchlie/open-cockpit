@@ -405,17 +405,19 @@ async function offloadSession(
   }
 
   // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
-  const pool = readPool();
-  if (pool) {
+  await withPoolLock(() => {
+    const pool = readPool();
+    if (!pool) return;
     const slot = pool.slots.find((s) => s.termId === termId);
-    if (slot) {
-      const oldSessionId = slot.sessionId;
-      slot.status = "fresh";
-      slot.sessionId = null;
-      writePool(pool);
+    if (!slot) return;
+    const oldSessionId = slot.sessionId;
+    slot.status = "fresh";
+    slot.sessionId = null;
+    writePool(pool);
 
-      // Poll until the PID file changes from old UUID to new one
-      pollForSessionId(slot.pid, 60000, oldSessionId).then((newSessionId) => {
+    // Poll until the PID file changes from old UUID to new one
+    pollForSessionId(slot.pid, 60000, oldSessionId).then((newSessionId) => {
+      withPoolLock(() => {
         const p = readPool();
         if (!p) return;
         const s = p.slots.find((x) => x.termId === termId);
@@ -425,8 +427,8 @@ async function offloadSession(
           writePool(p);
         }
       });
-    }
-  }
+    });
+  });
 
   return meta;
 }
@@ -570,6 +572,15 @@ async function waitForTrustPromptAndAccept(termId, timeoutMs = 10000) {
   return false;
 }
 
+// Async mutex for pool.json read-modify-write cycles.
+// Serializes all concurrent access to prevent lost updates.
+let _poolLock = Promise.resolve();
+function withPoolLock(fn) {
+  const p = _poolLock.then(fn);
+  _poolLock = p.catch(() => {}); // keep chain alive on errors
+  return p;
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
   const claudePath = resolveClaudePath();
@@ -584,61 +595,59 @@ async function spawnPoolSlot(index) {
 
 // Initialize pool: spawn N Claude sessions via PTY daemon
 async function poolInit(size) {
-  size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
-  const existing = readPool();
-  if (existing) {
-    throw new Error(
-      `Pool already initialized (${existing.slots.length} slots)`,
+  return withPoolLock(async () => {
+    size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
+    const existing = readPool();
+    if (existing) {
+      throw new Error(
+        `Pool already initialized (${existing.slots.length} slots)`,
+      );
+    }
+
+    const pool = {
+      version: 1,
+      poolSize: size,
+      createdAt: new Date().toISOString(),
+      slots: [],
+    };
+
+    // Spawn each slot as a Claude session in a daemon terminal (parallel)
+    const slots = await Promise.all(
+      Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
     );
-  }
+    pool.slots = slots;
 
-  const pool = {
-    version: 1,
-    poolSize: size,
-    createdAt: new Date().toISOString(),
-    slots: [],
-  };
+    // Accept trust prompts: poll terminal buffers for the prompt, then send Enter
+    await Promise.all(
+      pool.slots.map((slot) => waitForTrustPromptAndAccept(slot.termId)),
+    );
 
-  // Spawn each slot as a Claude session in a daemon terminal (parallel)
-  const slots = await Promise.all(
-    Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
-  );
-  pool.slots = slots;
+    // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
+    await Promise.allSettled(
+      pool.slots.map(async (slot) => {
+        const sessionId = await pollForSessionId(slot.pid, 60000);
+        slot.sessionId = sessionId;
+        slot.status = sessionId ? "fresh" : "error";
+        // Write idle signal so getSessions detects slot as "fresh" (no user input)
+        if (sessionId) {
+          fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+          fs.writeFileSync(
+            path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
+            JSON.stringify({
+              cwd: os.homedir(),
+              session_id: sessionId,
+              transcript: "",
+              ts: Math.floor(Date.now() / 1000),
+              trigger: "pool-init",
+            }),
+          );
+        }
+      }),
+    );
 
-  // Accept trust prompts: Claude shows "Do you trust this folder?" even with --dangerously-skip-permissions
-  // Poll each terminal's buffer for the prompt, then send Enter to accept
-  await Promise.all(
-    pool.slots.map((slot) => waitForTrustPromptAndAccept(slot.termId)),
-  );
-
-  writePool(pool);
-
-  // Wait for each slot to get a session ID (Claude starts and hooks write PID mapping).
-  // exec in the spawn command makes daemon PID = Claude PID, so session-pids/<PID> matches.
-  await Promise.allSettled(
-    pool.slots.map(async (slot) => {
-      const sessionId = await pollForSessionId(slot.pid, 60000);
-      slot.sessionId = sessionId;
-      slot.status = sessionId ? "fresh" : "error";
-      // Write idle signal so getSessions detects slot as "fresh" (no user input)
-      if (sessionId) {
-        fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-        fs.writeFileSync(
-          path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
-          JSON.stringify({
-            cwd: os.homedir(),
-            session_id: sessionId,
-            transcript: "",
-            ts: Math.floor(Date.now() / 1000),
-            trigger: "pool-init",
-          }),
-        );
-      }
-    }),
-  );
-
-  writePool(pool);
-  return pool;
+    writePool(pool);
+    return pool;
+  });
 }
 
 // Poll for a session-pid file to appear (or change from excludeId) for a PID.
@@ -665,54 +674,58 @@ function pollForSessionId(pid, timeoutMs, excludeId = null) {
 
 // Resize pool: add or remove slots
 async function poolResize(newSize) {
-  newSize = Math.max(1, Math.min(20, newSize));
-  const pool = readPool();
-  if (!pool) throw new Error("Pool not initialized");
+  return withPoolLock(async () => {
+    newSize = Math.max(1, Math.min(20, newSize));
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
 
-  const currentSize = pool.slots.length;
-  if (newSize === currentSize) return pool;
+    const currentSize = pool.slots.length;
+    if (newSize === currentSize) return pool;
 
-  if (newSize > currentSize) {
-    // Grow: spawn new slots in parallel
-    const newSlots = await Promise.all(
-      Array.from({ length: newSize - currentSize }, (_, j) =>
-        spawnPoolSlot(currentSize + j),
-      ),
-    );
-    pool.slots.push(...newSlots);
+    if (newSize > currentSize) {
+      // Grow: spawn new slots in parallel
+      const newSlots = await Promise.all(
+        Array.from({ length: newSize - currentSize }, (_, j) =>
+          spawnPoolSlot(currentSize + j),
+        ),
+      );
+      pool.slots.push(...newSlots);
 
-    // Resolve session IDs in background (re-reads pool to avoid clobbering)
-    for (const slot of newSlots) {
-      pollForSessionId(slot.pid, 60000).then((sessionId) => {
-        const current = readPool();
-        if (!current) return;
-        const s = current.slots.find((x) => x.termId === slot.termId);
-        if (s) {
-          s.sessionId = sessionId;
-          s.status = sessionId ? "fresh" : "error";
-          writePool(current);
-        }
-      });
+      // Resolve session IDs in background (locked to avoid clobbering)
+      for (const slot of newSlots) {
+        pollForSessionId(slot.pid, 60000).then((sessionId) => {
+          withPoolLock(() => {
+            const current = readPool();
+            if (!current) return;
+            const s = current.slots.find((x) => x.termId === slot.termId);
+            if (s) {
+              s.sessionId = sessionId;
+              s.status = sessionId ? "fresh" : "error";
+              writePool(current);
+            }
+          });
+        });
+      }
+    } else {
+      // Shrink: kill excess slots (prefer fresh, then LRU idle)
+      const toRemove = currentSize - newSize;
+      const candidates = selectShrinkCandidates(pool.slots, toRemove);
+
+      let removed = 0;
+      for (const slot of candidates) {
+        await killSlotProcess(slot);
+        pool.slots = pool.slots.filter((s) => s.index !== slot.index);
+        removed++;
+      }
+
+      // Re-index remaining slots
+      pool.slots.forEach((s, i) => (s.index = i));
     }
-  } else {
-    // Shrink: kill excess slots (prefer fresh, then LRU idle)
-    const toRemove = currentSize - newSize;
-    const candidates = selectShrinkCandidates(pool.slots, toRemove);
 
-    let removed = 0;
-    for (const slot of candidates) {
-      await killSlotProcess(slot);
-      pool.slots = pool.slots.filter((s) => s.index !== slot.index);
-      removed++;
-    }
-
-    // Re-index remaining slots
-    pool.slots.forEach((s, i) => (s.index = i));
-  }
-
-  pool.poolSize = newSize;
-  writePool(pool);
-  return pool;
+    pool.poolSize = newSize;
+    writePool(pool);
+    return pool;
+  });
 }
 
 // Get pool health: enrich pool.json slots with live session data
@@ -733,103 +746,109 @@ function getPoolHealth() {
 // Daemon terminals survive app restarts, so pool slots should still be alive.
 // Update any stale state (dead terminals, changed PIDs, etc.)
 async function reconcilePool() {
-  const pool = readPool();
-  if (!pool) return;
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return;
 
-  let changed = false;
-  let daemonPtys;
-  try {
-    const resp = await daemonRequest({ type: "list" });
-    daemonPtys = new Map(resp.ptys.map((p) => [p.termId, p]));
-  } catch {
-    return; // Daemon not running — can't reconcile
-  }
-
-  for (const slot of pool.slots) {
-    const pty = daemonPtys.get(slot.termId);
-    if (!pty || pty.exited) {
-      if (slot.status !== "dead") {
-        slot.status = "dead";
-        changed = true;
-      }
-      // Kill orphaned process by PID before restarting
-      if (slot.pid) {
-        try {
-          process.kill(slot.pid, "SIGTERM");
-        } catch {}
-      }
-      // Auto-restart dead slot
-      try {
-        const newSlot = await spawnPoolSlot(slot.index);
-        slot.termId = newSlot.termId;
-        slot.pid = newSlot.pid;
-        slot.status = "starting";
-        slot.sessionId = null;
-        changed = true;
-        // Accept trust prompt after spawning (runs in background, no await needed)
-        waitForTrustPromptAndAccept(newSlot.termId);
-        pollForSessionId(slot.pid, 60000).then((sessionId) => {
-          const p = readPool();
-          if (!p) return;
-          const s = p.slots.find((x) => x.index === slot.index);
-          if (s) {
-            s.sessionId = sessionId;
-            s.status = sessionId ? "fresh" : "error";
-            writePool(p);
-            if (sessionId) {
-              fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-              fs.writeFileSync(
-                path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
-                JSON.stringify({
-                  cwd: os.homedir(),
-                  session_id: sessionId,
-                  transcript: "",
-                  ts: Math.floor(Date.now() / 1000),
-                  trigger: "pool-init",
-                }),
-              );
-            }
-          }
-        });
-      } catch (err) {
-        console.error(
-          `[main] Failed to restart slot ${slot.index}:`,
-          err.message,
-        );
-      }
-      continue;
+    let changed = false;
+    let daemonPtys;
+    try {
+      const resp = await daemonRequest({ type: "list" });
+      daemonPtys = new Map(resp.ptys.map((p) => [p.termId, p]));
+    } catch {
+      return; // Daemon not running — can't reconcile
     }
 
-    // Terminal alive — update PID if it changed (shouldn't, but safety)
-    if (pty.pid !== slot.pid) {
-      slot.pid = pty.pid;
-      changed = true;
-    }
-
-    // Re-check session ID mapping
-    const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
-    if (fs.existsSync(pidFile)) {
-      const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
-      if (sessionId && sessionId !== slot.sessionId) {
-        if (slot.sessionId) {
-          saveExternalClearOffload(slot.sessionId, slot.pid);
+    for (const slot of pool.slots) {
+      const pty = daemonPtys.get(slot.termId);
+      if (!pty || pty.exited) {
+        if (slot.status !== "dead") {
+          slot.status = "dead";
+          changed = true;
         }
-        slot.sessionId = sessionId;
-        slot.status = "fresh";
+        // Kill orphaned process by PID before restarting
+        if (slot.pid) {
+          try {
+            process.kill(slot.pid, "SIGTERM");
+          } catch {}
+        }
+        // Auto-restart dead slot
+        try {
+          const newSlot = await spawnPoolSlot(slot.index);
+          slot.termId = newSlot.termId;
+          slot.pid = newSlot.pid;
+          slot.status = "starting";
+          slot.sessionId = null;
+          changed = true;
+          // Accept trust prompt after spawning (runs in background)
+          waitForTrustPromptAndAccept(newSlot.termId);
+          pollForSessionId(slot.pid, 60000).then((sessionId) => {
+            withPoolLock(() => {
+              const p = readPool();
+              if (!p) return;
+              const s = p.slots.find((x) => x.index === slot.index);
+              if (s) {
+                s.sessionId = sessionId;
+                s.status = sessionId ? "fresh" : "error";
+                writePool(p);
+                if (sessionId) {
+                  fs.mkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+                  fs.writeFileSync(
+                    path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
+                    JSON.stringify({
+                      cwd: os.homedir(),
+                      session_id: sessionId,
+                      transcript: "",
+                      ts: Math.floor(Date.now() / 1000),
+                      trigger: "pool-init",
+                    }),
+                  );
+                }
+              }
+            });
+          });
+        } catch (err) {
+          console.error(
+            `[main] Failed to restart slot ${slot.index}:`,
+            err.message,
+          );
+        }
+        continue;
+      }
+
+      // Terminal alive — update PID if it changed (shouldn't, but safety)
+      if (pty.pid !== slot.pid) {
+        slot.pid = pty.pid;
         changed = true;
       }
-    }
-  }
 
-  if (changed) writePool(pool);
+      // Re-check session ID mapping
+      const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
+      if (fs.existsSync(pidFile)) {
+        const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
+        if (sessionId && sessionId !== slot.sessionId) {
+          if (slot.sessionId) {
+            saveExternalClearOffload(slot.sessionId, slot.pid);
+          }
+          slot.sessionId = sessionId;
+          slot.status = "fresh";
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) writePool(pool);
+  });
 }
 
 // Sync pool.json slot statuses with live session state.
 function syncPoolStatuses(sessions) {
-  const pool = readPool();
-  if (!pool) return;
-  const updated = syncStatuses(pool, sessions);
-  if (updated) writePool(updated);
+  withPoolLock(() => {
+    const pool = readPool();
+    if (!pool) return;
+    const updated = syncStatuses(pool, sessions);
+    if (updated) writePool(updated);
+  });
 }
 
 // Kill a pool slot's process: try daemon first, then fall back to PID kill.
@@ -849,14 +868,16 @@ async function killSlotProcess(slot) {
 
 // Destroy pool: kill all slots and remove pool.json
 async function poolDestroy() {
-  const pool = readPool();
-  if (!pool) return;
-  for (const slot of pool.slots) {
-    await killSlotProcess(slot);
-  }
-  try {
-    fs.unlinkSync(POOL_FILE);
-  } catch {}
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return;
+    for (const slot of pool.slots) {
+      await killSlotProcess(slot);
+    }
+    try {
+      fs.unlinkSync(POOL_FILE);
+    } catch {}
+  });
 }
 
 // Validate termId: must be a finite number
