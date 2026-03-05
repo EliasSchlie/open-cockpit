@@ -395,8 +395,8 @@ async function getSessionsUncached() {
   for (const { pid, sessionId, alive } of pidEntries) {
     let cwd = alive ? cwdMap.get(String(pid)) || null : null;
 
-    // Refine CWD via JSONL when spawned from $HOME
-    if (cwd === os.homedir()) {
+    // Refine CWD via JSONL when lsof reports a generic directory
+    if (!cwd || cwd === os.homedir() || cwd === "/") {
       const refined = await getCwdFromJsonl(sessionId);
       if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
         cwd = refined;
