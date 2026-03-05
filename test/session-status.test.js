@@ -35,23 +35,36 @@ describe("isTranscriptNewerThanSignal", () => {
     );
   });
 
-  it("returns true when transcript was written after signal (re-prompt)", () => {
+  it("returns true when transcript was written well after signal (re-prompt)", () => {
+    const transcript = path.join(TMP, "transcript.jsonl");
+    const signal = path.join(TMP, "signal.json");
+    fs.writeFileSync(signal, '{"ts":1234}');
+    // Simulate a re-prompt that happens >5s after the idle signal
+    const signalMtime = mtimeMs(signal) - 6000; // pretend signal was 6s ago
+    fs.writeFileSync(transcript, '{"type":"assistant"}');
+    expect(isTranscriptNewerThanSignal(signalMtime, transcript)).toBe(true);
+  });
+
+  it("returns false when transcript trails signal by <5s (normal flush)", () => {
     const transcript = path.join(TMP, "transcript.jsonl");
     const signal = path.join(TMP, "signal.json");
     fs.writeFileSync(signal, '{"ts":1234}');
     sleep(10);
     fs.writeFileSync(transcript, '{"type":"assistant"}');
-    expect(isTranscriptNewerThanSignal(mtimeMs(signal), transcript)).toBe(true);
+    // Within tolerance — should NOT be treated as re-prompt
+    expect(isTranscriptNewerThanSignal(mtimeMs(signal), transcript)).toBe(
+      false,
+    );
   });
 
-  it("returns true when transcript is appended after signal (mid-session re-prompt)", () => {
+  it("returns true when transcript is appended well after signal (mid-session re-prompt)", () => {
     const transcript = path.join(TMP, "transcript.jsonl");
     const signal = path.join(TMP, "signal.json");
     fs.writeFileSync(transcript, '{"type":"assistant","msg":"first"}\n');
     sleep(10);
     fs.writeFileSync(signal, '{"ts":1234}');
-    const signalMtime = mtimeMs(signal);
-    sleep(10);
+    // Simulate signal being old enough that tolerance is exceeded
+    const signalMtime = mtimeMs(signal) - 6000;
     fs.appendFileSync(transcript, '{"type":"assistant","msg":"reprompt"}\n');
     expect(isTranscriptNewerThanSignal(signalMtime, transcript)).toBe(true);
   });
@@ -96,12 +109,13 @@ describe("isTranscriptNewerThanSignal", () => {
     );
   });
 
-  it("detects near-simultaneous writes correctly on APFS", () => {
+  it("treats near-simultaneous writes as normal flush (within tolerance)", () => {
     const transcript = path.join(TMP, "transcript.jsonl");
     const signal = path.join(TMP, "signal.json");
     fs.writeFileSync(signal, "x");
     const signalMtime = mtimeMs(signal);
     fs.writeFileSync(transcript, "y");
-    expect(isTranscriptNewerThanSignal(signalMtime, transcript)).toBe(true);
+    // Near-simultaneous writes are within the 5s tolerance — not a re-prompt
+    expect(isTranscriptNewerThanSignal(signalMtime, transcript)).toBe(false);
   });
 });
