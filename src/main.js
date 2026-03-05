@@ -707,6 +707,7 @@ async function waitForBufferContent(termId, text, timeoutMs = 3000) {
 
 // Send a command to a terminal: Escape → Ctrl-U → command + Enter
 // Uses buffer polling to confirm each step rendered before proceeding.
+// Throws if the daemon socket is not connected.
 async function sendCommandToTerminal(termId, command) {
   daemonSend({ type: "write", termId, data: "\x1b" });
   await new Promise((r) => setTimeout(r, 200));
@@ -757,7 +758,13 @@ async function offloadSession(
   });
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
-  await sendCommandToTerminal(termId, "/clear");
+  try {
+    await sendCommandToTerminal(termId, "/clear");
+  } catch (err) {
+    console.warn(
+      `[offload] Failed to send /clear for session ${sessionId}: ${err.message}`,
+    );
+  }
 
   // 3. Remove idle signal so session re-detects as fresh after /clear
   if (pid) {
@@ -786,8 +793,8 @@ async function offloadSession(
 
     // Poll until the PID file changes from old UUID to new one
     pollForSessionId(slot.pid, 60000, oldSessionId)
-      .then((newSessionId) => {
-        withPoolLock(() => {
+      .then(async (newSessionId) => {
+        await withPoolLock(() => {
           const p = readPool();
           if (!p) return;
           const s = p.slots.find((x) => x.termId === termId);
@@ -1206,8 +1213,8 @@ async function poolResize(newSize) {
       // Resolve session IDs in background (locked to avoid clobbering)
       for (const slot of newSlots) {
         pollForSessionId(slot.pid, 60000)
-          .then((sessionId) => {
-            withPoolLock(() => {
+          .then(async (sessionId) => {
+            await withPoolLock(() => {
               const current = readPool();
               if (!current) return;
               const s = current.slots.find((x) => x.termId === slot.termId);
@@ -1330,8 +1337,8 @@ async function reconcilePool() {
           // Accept trust prompt after spawning (runs in background)
           waitForTrustPromptAndAccept(newSlot.termId);
           pollForSessionId(slot.pid, 60000)
-            .then((sessionId) => {
-              withPoolLock(() => {
+            .then(async (sessionId) => {
+              await withPoolLock(() => {
                 const p = readPool();
                 if (!p) return;
                 const s = p.slots.find((x) => x.index === slot.index);
@@ -1384,8 +1391,8 @@ async function reconcilePool() {
 }
 
 // Sync pool.json slot statuses with live session state.
-function syncPoolStatuses(sessions) {
-  withPoolLock(() => {
+async function syncPoolStatuses(sessions) {
+  await withPoolLock(() => {
     const pool = readPool();
     if (!pool) return;
     const updated = syncStatuses(pool, sessions);
@@ -1558,8 +1565,8 @@ async function poolResume(sessionId) {
 
     // Async: poll for session ID change after /resume triggers SessionStart hook
     pollForSessionId(slot.pid, 60000, oldSlotSessionId)
-      .then((newSessionId) => {
-        withPoolLock(() => {
+      .then(async (newSessionId) => {
+        await withPoolLock(() => {
           const p = readPool();
           if (!p) return;
           const s = p.slots.find((x) => x.termId === slot.termId);
@@ -1805,9 +1812,10 @@ async function ensureDaemon() {
 }
 
 function daemonSend(msg) {
-  if (daemonSocket && !daemonSocket.destroyed) {
-    daemonSocket.write(JSON.stringify(msg) + "\n");
+  if (!daemonSocket || daemonSocket.destroyed) {
+    throw new Error("Daemon socket is not connected");
   }
+  daemonSocket.write(JSON.stringify(msg) + "\n");
 }
 
 async function daemonRequest(msg) {

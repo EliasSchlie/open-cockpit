@@ -935,13 +935,25 @@ function showSessionContextMenu(e, session) {
     const action = ev.target.dataset.action;
     menu.remove();
     if (action === "archive") {
-      await window.api.archiveSession(session.sessionId);
+      try {
+        await window.api.archiveSession(session.sessionId);
+      } catch (err) {
+        console.error("Failed to archive session:", err);
+      }
       await loadSessions();
     } else if (action === "unarchive") {
-      await window.api.unarchiveSession(session.sessionId);
+      try {
+        await window.api.unarchiveSession(session.sessionId);
+      } catch (err) {
+        console.error("Failed to unarchive session:", err);
+      }
       await loadSessions();
     } else if (action === "restart") {
-      await window.api.unarchiveSession(session.sessionId);
+      try {
+        await window.api.unarchiveSession(session.sessionId);
+      } catch (err) {
+        console.error("Failed to unarchive session for restart:", err);
+      }
       await resumeOffloadedSession(session);
     } else if (action === "resume") {
       await resumeOffloadedSession(session);
@@ -996,7 +1008,13 @@ async function showSessionResumeMenu(session) {
   if (snapshotBtn) {
     snapshotBtn.addEventListener("click", async () => {
       menu.remove();
-      const snapshot = await window.api.readOffloadSnapshot(session.sessionId);
+      let snapshot;
+      try {
+        snapshot = await window.api.readOffloadSnapshot(session.sessionId);
+      } catch (err) {
+        console.error("Failed to read offload snapshot:", err);
+        snapshot = null;
+      }
       showSnapshotViewer(session, snapshot);
     });
   }
@@ -1005,7 +1023,13 @@ async function showSessionResumeMenu(session) {
     .querySelector(".offload-menu-load")
     .addEventListener("click", async () => {
       menu.remove();
-      if (isArchived) await window.api.unarchiveSession(session.sessionId);
+      if (isArchived) {
+        try {
+          await window.api.unarchiveSession(session.sessionId);
+        } catch (err) {
+          console.error("Failed to unarchive session:", err);
+        }
+      }
       await resumeOffloadedSession(session);
     });
 }
@@ -1083,12 +1107,17 @@ async function acquireFreshSlot() {
   const victimSlot = pool.slots.find((s) => s.sessionId === victim.sessionId);
   if (!victimSlot) return null;
 
-  await window.api.offloadSession(
-    victim.sessionId,
-    victimSlot.termId,
-    victim.sessionId, // Claude session UUID = our session ID (same value from hook)
-    { cwd: victim.cwd, gitRoot: victim.gitRoot, pid: victim.pid },
-  );
+  try {
+    await window.api.offloadSession(
+      victim.sessionId,
+      victimSlot.termId,
+      victim.sessionId, // Claude session UUID = our session ID (same value from hook)
+      { cwd: victim.cwd, gitRoot: victim.gitRoot, pid: victim.pid },
+    );
+  } catch (err) {
+    console.error("Failed to offload session:", err);
+    return null;
+  }
 
   // Poll until the slot becomes fresh (idle signal changes after /clear)
   const fresh = await pollForFreshSlot(30000);
@@ -1403,11 +1432,16 @@ function scheduleSave() {
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
     const content = editorView.state.doc.toString();
-    await window.api.writeIntention(currentSessionId, content);
-    saveStatus.textContent = "Saved";
-    setTimeout(() => {
-      if (saveStatus.textContent === "Saved") saveStatus.textContent = "";
-    }, 2000);
+    try {
+      await window.api.writeIntention(currentSessionId, content);
+      saveStatus.textContent = "Saved";
+      setTimeout(() => {
+        if (saveStatus.textContent === "Saved") saveStatus.textContent = "";
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to save intention:", err);
+      saveStatus.textContent = "";
+    }
   }, 500);
 }
 
@@ -1463,7 +1497,11 @@ async function archiveCurrentSession() {
   // Can't archive already-archived sessions
   if (session.status === "archived") return;
 
-  await window.api.archiveSession(currentSessionId);
+  try {
+    await window.api.archiveSession(currentSessionId);
+  } catch (err) {
+    console.error("Failed to archive session:", err);
+  }
   await loadSessions();
   // Jump to the most recent idle session
   const idle = cachedSessions.find((s) => s.status === "idle");

@@ -85,6 +85,9 @@ function cleanup() {
   try {
     fs.unlinkSync(SOCKET_PATH);
   } catch {}
+  try {
+    fs.unlinkSync(path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"));
+  } catch {}
 }
 
 // --- Command handlers ---
@@ -139,7 +142,16 @@ function handleSpawn(socket, msg) {
     entry.chunks.push(data);
     entry.chunksLen += data.length;
     if (entry.chunksLen > BUFFER_SIZE * 2) {
-      const joined = entry.chunks.join("").slice(-BUFFER_SIZE);
+      let joined = entry.chunks.join("").slice(-BUFFER_SIZE);
+      // Skip leading UTF-8 continuation bytes (0x80-0xBF) to avoid starting
+      // mid-character if the slice split a multi-byte sequence (#90)
+      while (
+        joined.length > 0 &&
+        joined.charCodeAt(0) >= 0x80 &&
+        joined.charCodeAt(0) <= 0xbf
+      ) {
+        joined = joined.slice(1);
+      }
       entry.chunks = [joined];
       entry.chunksLen = joined.length;
     }
