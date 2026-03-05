@@ -1043,6 +1043,100 @@ async function selectSession(session) {
 }
 
 // "+" in sidebar: acquire a fresh slot from the pool (or offload LRU idle)
+// --- Setup script picker ---
+function showSetupScriptPicker(scripts) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "setup-script-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "setup-script-dialog";
+
+    const title = document.createElement("div");
+    title.className = "setup-script-title";
+    title.textContent = "Setup Script";
+    dialog.appendChild(title);
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "setup-script-subtitle";
+    subtitle.textContent = "Run a script in the new session";
+    dialog.appendChild(subtitle);
+
+    const list = document.createElement("div");
+    list.className = "setup-script-list";
+
+    let selectedIndex = 0;
+    const items = [];
+
+    // "None" option first
+    const allOptions = ["None", ...scripts];
+
+    for (let i = 0; i < allOptions.length; i++) {
+      const item = document.createElement("div");
+      item.className = "setup-script-item";
+      if (i === 0) item.classList.add("selected");
+      item.textContent = allOptions[i];
+      item.addEventListener("click", () => {
+        cleanup();
+        resolve(i === 0 ? null : allOptions[i]);
+      });
+      list.appendChild(item);
+      items.push(item);
+    }
+
+    dialog.appendChild(list);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function updateSelection() {
+      items.forEach((el, i) =>
+        el.classList.toggle("selected", i === selectedIndex),
+      );
+      items[selectedIndex].scrollIntoView({ block: "nearest" });
+    }
+
+    function cleanup() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+    }
+
+    function onKey(e) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % allOptions.length;
+        updateSelection();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        selectedIndex =
+          (selectedIndex - 1 + allOptions.length) % allOptions.length;
+        updateSelection();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        cleanup();
+        resolve(selectedIndex === 0 ? null : allOptions[selectedIndex]);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup();
+        resolve(null);
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(null);
+      }
+    });
+  });
+}
+
+async function typeSetupScript(termId, scriptContent) {
+  // Each line is typed literally; \r in the text becomes a carriage return
+  const processed = scriptContent.replace(/\\r/g, "\r");
+  await window.api.ptyWrite(termId, processed);
+}
+
 newSessionBtn.addEventListener("click", async () => {
   // Check pool is initialized
   const pool = await window.api.poolRead();
@@ -1058,6 +1152,14 @@ newSessionBtn.addEventListener("click", async () => {
     return;
   }
 
+  // Check for setup scripts before acquiring a slot
+  let selectedScript = null;
+  const scripts = await window.api.listSetupScripts();
+  if (scripts.length > 0) {
+    selectedScript = await showSetupScriptPicker(scripts);
+    // null means "None" or Escape — proceed without script
+  }
+
   const freshSlot = await acquireFreshSlot();
   if (!freshSlot) {
     showNotification(
@@ -1067,6 +1169,21 @@ newSessionBtn.addEventListener("click", async () => {
   }
 
   await selectSession(freshSlot);
+
+  // Type setup script into the session's terminal
+  if (selectedScript) {
+    const content = await window.api.readSetupScript(selectedScript);
+    if (content) {
+      const poolData = await window.api.poolRead();
+      const slot = poolData?.slots.find(
+        (s) => s.sessionId === freshSlot.sessionId,
+      );
+      if (slot) {
+        await typeSetupScript(slot.termId, content);
+      }
+    }
+  }
+
   await loadSessions();
 });
 
