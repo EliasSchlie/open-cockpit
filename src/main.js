@@ -2036,6 +2036,40 @@ app.whenReady().then(async () => {
     }
   }
 
+  // Lightweight periodic liveness check: detect dead processes between fingerprint refreshes.
+  // process.kill(pid, 0) is a single syscall per PID — no subprocess overhead.
+  // Note: PID reuse could cause a false "alive" — extremely unlikely on macOS and harmless
+  // (the stale PID file gets cleaned up on the next full refresh anyway).
+  const LIVENESS_CHECK_INTERVAL = 3000;
+  const knownAlivePids = new Set();
+  setInterval(() => {
+    if (!fs.existsSync(SESSION_PIDS_DIR)) return;
+    let files;
+    try {
+      files = fs.readdirSync(SESSION_PIDS_DIR);
+    } catch {
+      return;
+    }
+    const currentFiles = new Set(files);
+    for (const pid of knownAlivePids) {
+      if (!currentFiles.has(pid)) knownAlivePids.delete(pid);
+    }
+    let anyDied = false;
+    for (const pid of files) {
+      if (!/^\d+$/.test(pid)) continue;
+      try {
+        process.kill(Number(pid), 0);
+        knownAlivePids.add(pid);
+      } catch {
+        if (knownAlivePids.has(pid)) {
+          knownAlivePids.delete(pid);
+          anyDied = true;
+        }
+      }
+    }
+    if (anyDied) onDirChange();
+  }, LIVENESS_CHECK_INTERVAL);
+
   ipcMain.handle("get-dir-colors", () => {
     try {
       return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
