@@ -72,6 +72,15 @@ const cwdFromJsonlCache = new Map();
 // Cache git root lookups (cwd -> gitRoot)
 const gitRootCache = new Map();
 
+// Cache JSONL path lookups (sessionId -> path)
+const jsonlPathCache = new Map();
+
+// If a "processing" session's transcript hasn't been written to in this long, treat as idle
+const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
+
+// Deduplicate stale processing log messages (only log once per session)
+const staleLoggedSessions = new Set();
+
 // Cache hasUserInput results (transcript -> true, once true stays true)
 const userInputCache = new Map();
 
@@ -172,8 +181,8 @@ function createWindow() {
   });
 }
 
-async function getCwdFromJsonl(sessionId) {
-  if (cwdFromJsonlCache.has(sessionId)) return cwdFromJsonlCache.get(sessionId);
+async function findJsonlPath(sessionId) {
+  if (jsonlPathCache.has(sessionId)) return jsonlPathCache.get(sessionId);
   try {
     const { stdout: findOut } = await execFileAsync(
       "find",
@@ -181,6 +190,30 @@ async function getCwdFromJsonl(sessionId) {
       { encoding: "utf-8", timeout: 5000 },
     );
     const jsonlPath = findOut.split("\n")[0].trim();
+    if (jsonlPath) jsonlPathCache.set(sessionId, jsonlPath);
+    return jsonlPath || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getJsonlMtime(sessionId) {
+  let jsonlPath = jsonlPathCache.get(sessionId);
+  if (!jsonlPath) jsonlPath = await findJsonlPath(sessionId);
+  if (!jsonlPath) return null;
+  try {
+    const stat = await fs.promises.stat(jsonlPath);
+    return stat.mtimeMs;
+  } catch {
+    jsonlPathCache.delete(sessionId);
+    return null;
+  }
+}
+
+async function getCwdFromJsonl(sessionId) {
+  if (cwdFromJsonlCache.has(sessionId)) return cwdFromJsonlCache.get(sessionId);
+  try {
+    const jsonlPath = await findJsonlPath(sessionId);
     if (!jsonlPath) return null;
 
     const { stdout: tail } = await execFileAsync("tail", ["-100", jsonlPath], {
@@ -376,6 +409,7 @@ async function getSessionsUncached() {
     const idleSignal = alive ? getIdleSignal(pid) : null;
     let status;
     let idleTs = 0;
+    let staleIdle = false;
 
     if (!alive) {
       status = "dead";
@@ -387,7 +421,22 @@ async function getSessionsUncached() {
         status = "idle";
       }
     } else {
-      status = "processing";
+      // Fallback: if transcript hasn't been written to in a while, treat as idle
+      const mtime = await getJsonlMtime(sessionId);
+      if (mtime && Date.now() - mtime > STALE_PROCESSING_MS) {
+        if (!staleLoggedSessions.has(sessionId)) {
+          staleLoggedSessions.add(sessionId);
+          console.warn(
+            `[main] Stale processing detected for session ${sessionId} (no activity for ${Math.round((Date.now() - mtime) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
+          );
+        }
+        status = "idle";
+        staleIdle = true;
+        idleTs = mtime;
+      } else {
+        staleLoggedSessions.delete(sessionId);
+        status = "processing";
+      }
     }
 
     sessions.push({
@@ -402,6 +451,7 @@ async function getSessionsUncached() {
       intentionHeading,
       status,
       idleTs,
+      staleIdle,
     });
   }
 
