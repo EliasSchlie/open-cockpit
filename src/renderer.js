@@ -264,7 +264,7 @@ const darkTheme = EditorView.theme(
       color: "#e0e0e0",
       height: "100%",
     },
-    ".cm-cursor": { borderLeftColor: "#ff1a1a" },
+    ".cm-cursor": { borderLeftColor: "#c0c0c0" },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
       backgroundColor: "#2a0808",
     },
@@ -279,8 +279,6 @@ const darkTheme = EditorView.theme(
 // --- xterm.js theme (minimal — let shell theme handle ANSI colors) ---
 const TERM_THEME = {
   background: "#0a0a0a",
-  cursor: "#ff1a1a",
-  cursorAccent: "#0a0a0a",
   selectionBackground: "rgba(255, 26, 26, 0.25)",
   selectionForeground: "#ffffff",
 };
