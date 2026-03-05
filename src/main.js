@@ -42,8 +42,9 @@ const DEFAULT_POOL_SIZE = 5;
 // Returns the truthy value, or throws on timeout.
 async function poll(
   checkFn,
-  { interval = 1000, timeout = 300000, label = "poll" } = {},
+  { interval = 1000, timeout = 300000, initialDelay = 0, label = "poll" } = {},
 ) {
+  if (initialDelay > 0) await new Promise((r) => setTimeout(r, initialDelay));
   const start = Date.now();
   while (true) {
     const result = await checkFn();
@@ -1562,6 +1563,7 @@ app.whenReady().then(async () => {
       },
       {
         interval: 1000,
+        initialDelay: 1000,
         timeout: timeoutMs,
         label: "waiting for session to become idle",
       },
@@ -1720,6 +1722,7 @@ app.whenReady().then(async () => {
         },
         {
           interval: 1000,
+          initialDelay: 1000,
           timeout,
           label: "waiting for session to become idle",
         },
