@@ -761,17 +761,39 @@ const STATUS_CLASSES = {
   offloaded: "offloaded",
 };
 
+// Build a fingerprint for a session to detect changes
+function sessionFingerprint(s) {
+  return `${s.sessionId}|${s.status}|${s.intentionHeading || ""}|${s.cwd || ""}|${s.origin || ""}`;
+}
+
+// Track previous session fingerprints for diff-based updates
+let prevSessionFingerprints = null;
+
 async function loadSessions() {
   const sessions = await window.api.getSessions();
   cachedSessions = sessions;
   cleanupStaleTerminals(sessions);
-  sessionList.innerHTML = "";
 
   // Split into sections — pool and external mixed together
   const recent = sessions.filter(
     (s) => s.status === "idle" || s.status === "offloaded",
   );
   const processing = sessions.filter((s) => s.status === "processing");
+
+  // Build fingerprint to check if anything changed
+  const allItems = [...recent, ...processing];
+  const fingerprints = allItems.map(sessionFingerprint).join("\n");
+  if (fingerprints === prevSessionFingerprints) {
+    // Only update active class (selected session may have changed)
+    for (const li of sessionList.querySelectorAll(".session-item")) {
+      li.classList.toggle("active", li.dataset.sessionId === currentSessionId);
+    }
+    return;
+  }
+  prevSessionFingerprints = fingerprints;
+
+  // Full rebuild only when sessions actually changed
+  sessionList.innerHTML = "";
 
   if (recent.length === 0 && processing.length === 0) {
     sessionList.innerHTML =
