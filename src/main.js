@@ -79,9 +79,6 @@ let sessionsCache = null;
 let sessionsCacheTs = 0;
 const SESSIONS_CACHE_TTL = 2000; // 2 seconds
 
-// Cache CWD from JSONL (sessionId -> cwd, rarely changes)
-const cwdFromJsonlCache = new Map();
-
 // Cache git root lookups (cwd -> gitRoot)
 const gitRootCache = new Map();
 
@@ -233,7 +230,6 @@ async function getJsonlMtime(sessionId) {
 }
 
 async function getCwdFromJsonl(sessionId) {
-  if (cwdFromJsonlCache.has(sessionId)) return cwdFromJsonlCache.get(sessionId);
   try {
     const jsonlPath = await findJsonlPath(sessionId);
     if (!jsonlPath) return null;
@@ -250,9 +246,7 @@ async function getCwdFromJsonl(sessionId) {
         if (obj.cwd) cwd = obj.cwd;
       } catch {}
     }
-    const result = cwd || null;
-    if (result) cwdFromJsonlCache.set(sessionId, result);
-    return result;
+    return cwd || null;
   } catch {
     return null;
   }
