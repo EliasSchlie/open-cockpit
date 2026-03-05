@@ -1,10 +1,12 @@
 /**
- * Sort sessions into display order: recent → processing → fresh → archived.
+ * Sort sessions into display order: typing → recent → processing → fresh → archived.
+ * Typing: fresh sessions with editor text (shown first for quick access).
  * Recent (idle + offloaded) sorted by most recently used first, capped at 10.
  * Processing sorted by lowest PID (longest running first).
  * Archived sorted by most recently archived first.
  */
 function sortSessions(sessions) {
+  const typing = sessions.filter((s) => s.status === "typing");
   const recent = sessions.filter(
     (s) => s.status === "idle" || s.status === "offloaded",
   );
@@ -21,6 +23,7 @@ function sortSessions(sessions) {
   archived.sort((a, b) => b.idleTs - a.idleTs);
 
   return [
+    ...typing,
     ...recent.slice(0, 10),
     ...processing,
     ...fresh,

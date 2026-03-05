@@ -17,6 +17,7 @@
   --red: #ff1a1a;
   --yellow: #ffff00;
   --mauve: #ff00ff;
+  --blue: #00aaff;
 }
 
 html,
@@ -158,6 +159,10 @@ body {
 
 .session-status.fresh {
   background: var(--mauve);
+}
+
+.session-status.typing {
+  background: var(--blue);
 }
 
 .session-status.dead {

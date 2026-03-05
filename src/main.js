@@ -148,6 +148,12 @@ const staleLoggedSessions = new Set();
 
 // Track last-seen JSONL file sizes and when they last changed (sessionId -> { size, changedAt })
 const jsonlSizeTracker = new Map();
+// Renderer reports which sessions have text in the editor (sessionId → boolean)
+const editorTextState = new Map();
+
+function freshOrTyping(sessionId) {
+  return editorTextState.get(sessionId) ? "typing" : "fresh";
+}
 
 // Cache hasUserInput results (transcript -> true, once true stays true)
 const userInputCache = new Map();
@@ -547,7 +553,7 @@ async function getSessionsUncached() {
         // Claude and it's still processing (no new idle signal yet)
         status = "processing";
       } else if (!(await hasUserInput(idleSignal.transcript))) {
-        status = "fresh";
+        status = freshOrTyping(sessionId);
       } else {
         status = "idle";
       }
@@ -584,7 +590,9 @@ async function getSessionsUncached() {
           );
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
-        status = (await hasUserInput(jsonlPath)) ? "processing" : "fresh";
+        status = (await hasUserInput(jsonlPath))
+          ? "processing"
+          : freshOrTyping(sessionId);
       }
     }
 
@@ -599,6 +607,7 @@ async function getSessionsUncached() {
       hasIntention,
       intentionHeading,
       status,
+      hasEditorText: !!editorTextState.get(sessionId),
       idleTs,
       staleIdle,
     });
@@ -649,6 +658,7 @@ async function getSessionsUncached() {
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (s.status !== "dead") continue;
+    editorTextState.delete(s.sessionId);
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
@@ -932,6 +942,7 @@ async function offloadSession(
     snapshot,
     origin: "pool",
   });
+  editorTextState.delete(sessionId);
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
   try {
@@ -1662,6 +1673,7 @@ async function poolClean() {
 // Find offload target from pool/sessions without acquiring lock.
 // Returns offload info or null if a fresh slot already exists.
 function findOffloadTarget(pool, sessionMap) {
+  // Only truly fresh slots (no editor text) count — typing sessions are not available
   const hasFresh = pool.slots.some((s) => {
     if (s.status === "fresh") return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
@@ -2215,6 +2227,16 @@ app.whenReady().then(async () => {
     return watchIntention(sessionId);
   });
 
+  ipcMain.handle("set-editor-has-text", (_e, sessionId, hasText) => {
+    validateSessionId(sessionId);
+    if (hasText) {
+      editorTextState.set(sessionId, true);
+    } else {
+      editorTextState.delete(sessionId);
+    }
+    invalidateSessionsCache();
+  });
+
   // PTY IPC handlers — all forwarded to daemon
 
   ipcMain.handle("pty-spawn", async (_e, { cwd, cmd, args, sessionId }) => {
@@ -2383,6 +2405,7 @@ app.whenReady().then(async () => {
     if (session.status === "idle") return "idle";
     if (session.status === "processing") return "busy";
     if (session.status === "fresh") return "fresh";
+    if (session.status === "typing") return "typing";
     return slot.status;
   }
 

@@ -786,6 +786,7 @@ const STATUS_CLASSES = {
   idle: "idle",
   processing: "processing",
   fresh: "fresh",
+  typing: "typing",
   dead: "dead",
   offloaded: "offloaded",
   archived: "archived",
@@ -799,13 +800,13 @@ function sessionFingerprint(s) {
 // Track previous session fingerprints for diff-based updates
 let prevSessionFingerprints = null;
 let archiveExpanded = false;
-
 async function loadSessions() {
   const sessions = await window.api.getSessions();
   cachedSessions = sessions;
   cleanupStaleTerminals(sessions);
 
   // Split into sections — pool and external mixed together
+  const typing = sessions.filter((s) => s.status === "typing");
   const recent = sessions.filter(
     (s) => s.status === "idle" || s.status === "offloaded",
   );
@@ -813,7 +814,7 @@ async function loadSessions() {
   const archived = sessions.filter((s) => s.status === "archived");
 
   // Build fingerprint to check if anything changed
-  const allItems = [...recent, ...processing, ...archived];
+  const allItems = [...typing, ...recent, ...processing, ...archived];
   const fingerprints = allItems.map(sessionFingerprint).join("\n");
   if (fingerprints === prevSessionFingerprints) {
     // Only update active class (selected session may have changed)
@@ -827,7 +828,12 @@ async function loadSessions() {
   // Full rebuild only when sessions actually changed
   sessionList.innerHTML = "";
 
-  if (recent.length === 0 && processing.length === 0 && archived.length === 0) {
+  if (
+    typing.length === 0 &&
+    recent.length === 0 &&
+    processing.length === 0 &&
+    archived.length === 0
+  ) {
     sessionList.innerHTML =
       '<li style="padding: 12px; color: var(--text-dim); font-size: 13px;">No sessions found</li>';
     return;
@@ -844,6 +850,7 @@ async function loadSessions() {
     }
   }
 
+  addSection("Typing", typing);
   addSection("Recent", recent);
   addSection("Processing", processing);
 
@@ -1222,6 +1229,11 @@ async function selectSession(session) {
   // If already viewing this session, nothing to do
   if (session.sessionId === currentSessionId) return;
 
+  // Report editor text state when leaving a session
+  if (currentSessionId && editorView) {
+    window.api.setEditorHasText(currentSessionId, editorHasText());
+  }
+
   hideCurrentTerminals();
 
   currentSessionId = session.sessionId;
@@ -1470,6 +1482,7 @@ newTermBtn.addEventListener("click", async () => {
 function scheduleSave() {
   if (!currentSessionId || !editorView) return;
   saveStatus.textContent = "Editing...";
+  updateTypingState();
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
     const content = editorView.state.doc.toString();
@@ -1490,6 +1503,29 @@ function scheduleSave() {
   }, 500);
 }
 
+function editorHasText() {
+  return !!editorView?.state.doc.toString().trim();
+}
+
+function invalidateSidebar() {
+  prevSessionFingerprints = null;
+  loadSessions();
+}
+
+// Report editor text state to main process and refresh sidebar if changed
+function updateTypingState() {
+  if (!currentSessionId || !editorView) return;
+  const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
+  if (!session || (session.status !== "fresh" && session.status !== "typing")) {
+    return;
+  }
+  const hasText = editorHasText();
+  if (hasText !== session.hasEditorText) {
+    window.api.setEditorHasText(currentSessionId, hasText);
+    invalidateSidebar();
+  }
+}
+
 // Handle external file changes
 window.api.onIntentionChanged((content) => {
   if (!editorView) return;
@@ -1508,9 +1544,13 @@ window.api.onIntentionChanged((content) => {
 
 // --- Session switching ---
 function switchSession(direction) {
-  // Navigate between loaded sessions (idle + processing, pool + external), skip offloaded/fresh/dead
+  // Navigate between loaded sessions (idle + processing + typing), skip offloaded/fresh/dead
   const navigable = cachedSessions.filter(
-    (s) => s.alive && (s.status === "idle" || s.status === "processing"),
+    (s) =>
+      s.alive &&
+      (s.status === "idle" ||
+        s.status === "processing" ||
+        s.status === "typing"),
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
@@ -1556,7 +1596,7 @@ async function archiveCurrentSession() {
   const idle = cachedSessions.find(
     (s) =>
       s.sessionId !== archivingSessionId &&
-      (s.status === "idle" || s.status === "fresh"),
+      (s.status === "idle" || s.status === "fresh" || s.status === "typing"),
   );
   if (idle) {
     selectSession(idle);
