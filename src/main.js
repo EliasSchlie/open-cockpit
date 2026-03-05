@@ -1605,6 +1605,7 @@ function connectToDaemon() {
 
     sock.on("error", (err) => {
       if (!settled) {
+        log.warn("Daemon connection failed", { err: err.message });
         settled = true;
         daemonConnecting = null;
         reject(err);

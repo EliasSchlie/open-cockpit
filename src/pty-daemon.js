@@ -339,7 +339,11 @@ function startServer() {
   // Remove stale socket
   try {
     fs.unlinkSync(SOCKET_PATH);
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      log.warn("Failed to remove stale daemon socket", { err: err.message });
+    }
+  }
 
   const server = net.createServer((socket) => {
     clients.add(socket);
@@ -356,6 +360,7 @@ function startServer() {
         try {
           handleMessage(socket, JSON.parse(line));
         } catch (err) {
+          log.warn("Message parse error", { err: err.message });
           console.error("[pty-daemon] Parse error:", err.message);
         }
       }
@@ -398,6 +403,7 @@ function startServer() {
   });
 
   server.on("error", (err) => {
+    log.error("Daemon server error — exiting", { err: err.message });
     console.error("[pty-daemon] Server error:", err);
     process.exit(1);
   });

@@ -19,9 +19,10 @@ const LOG_FILE = path.join(LOG_DIR, "open-cockpit.log");
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
 
 let fd = null;
+let writeCount = 0;
+const ROTATION_CHECK_INTERVAL = 500; // check size every N writes
 
-function ensureLogDir() {
-  if (fd !== null) return;
+function openLog() {
   fs.mkdirSync(LOG_DIR, { recursive: true });
   rotateIfNeeded();
   fd = fs.openSync(LOG_FILE, "a");
@@ -40,15 +41,34 @@ function rotateIfNeeded() {
   } catch {}
 }
 
+function safeStringify(obj) {
+  try {
+    return JSON.stringify(obj);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 function write(level, category, message, context) {
-  ensureLogDir();
+  if (fd === null) openLog();
   const ts = new Date().toISOString();
-  const ctx = context ? " " + JSON.stringify(context) : "";
+  const ctx = context ? " " + safeStringify(context) : "";
   const line = `${ts} [${level}] [${category}] ${message}${ctx}\n`;
   try {
     fs.writeSync(fd, line);
   } catch {
     // Best-effort — don't crash on log failure
+  }
+  // Periodically check if rotation is needed
+  if (++writeCount % ROTATION_CHECK_INTERVAL === 0) {
+    try {
+      const stat = fs.fstatSync(fd);
+      if (stat.size > MAX_LOG_SIZE) {
+        fs.closeSync(fd);
+        fd = null;
+        openLog();
+      }
+    } catch {}
   }
 }
 
