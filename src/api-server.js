@@ -5,10 +5,12 @@ const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
 function createApiServer(socketPath, handlers) {
   const server = net.createServer((socket) => {
-    let buf = "";
+    const chunks = [];
+    let chunksLen = 0;
     socket.on("data", (chunk) => {
-      buf += chunk.toString();
-      if (buf.length > MAX_BUFFER_SIZE) {
+      chunks.push(chunk);
+      chunksLen += chunk.length;
+      if (chunksLen > MAX_BUFFER_SIZE) {
         sendTo(socket, {
           type: "error",
           error: "Buffer size limit exceeded",
@@ -16,6 +18,8 @@ function createApiServer(socketPath, handlers) {
         socket.destroy();
         return;
       }
+      let buf = Buffer.concat(chunks).toString();
+      chunks.length = 0;
       let idx;
       while ((idx = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, idx);
@@ -27,12 +31,22 @@ function createApiServer(socketPath, handlers) {
           sendTo(socket, { type: "error", error: "Parse error" });
         }
       }
+      if (buf.length > 0) {
+        chunks.push(Buffer.from(buf));
+        chunksLen = buf.length;
+      } else {
+        chunksLen = 0;
+      }
     });
     socket.on("error", (err) => {
       if (err.code !== "ECONNRESET" && err.code !== "EPIPE") {
         const addr = socket.remoteAddress || "unix";
         console.error(`API socket error [${addr}]:`, err.message);
       }
+    });
+    socket.on("close", () => {
+      chunks.length = 0;
+      chunksLen = 0;
     });
   });
 
