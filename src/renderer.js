@@ -283,6 +283,16 @@ const TERM_THEME = {
   selectionForeground: "#ffffff",
 };
 
+function createTerminal(extraOpts = {}) {
+  return new Terminal({
+    theme: TERM_THEME,
+    fontFamily: "'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: false,
+    ...extraOpts,
+  });
+}
+
 // --- Directory color coding ---
 // Neon-friendly palette for directory indicators
 const DIR_COLORS = [
@@ -439,12 +449,7 @@ async function spawnTerminal(cwd, cmd, args) {
   container.style.cssText = "width:100%;height:100%;display:none;";
   terminalMount.appendChild(container);
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-  });
+  const term = createTerminal();
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -514,12 +519,7 @@ async function attachPoolTerminal(poolTermId) {
   container.style.cssText = "width:100%;height:100%;display:none;";
   terminalMount.appendChild(container);
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-  });
+  const term = createTerminal();
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -586,6 +586,7 @@ function switchToTerminal(index) {
       const entry = terminals[index];
       if (!entry) return;
       entry.fitAddon.fit();
+      entry.term.refresh(0, entry.term.rows - 1);
       entry.term.focus();
       window.api.ptyResize(entry.termId, entry.term.cols, entry.term.rows);
     });
@@ -1878,12 +1879,8 @@ async function reconnectTerminal(ptyInfo) {
   container.style.cssText = "width:100%;height:100%;display:none;";
   terminalMount.appendChild(container);
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-    // Match the PTY's current dimensions so replay buffer renders correctly
+  // Match the PTY's current dimensions so replay buffer renders correctly
+  const term = createTerminal({
     ...(ptyInfo.cols && { cols: ptyInfo.cols }),
     ...(ptyInfo.rows && { rows: ptyInfo.rows }),
   });
@@ -2054,12 +2051,7 @@ async function openSlotTerminalPopup(slot) {
   const mountEl = overlay.querySelector(".slot-terminal-mount");
   const closeBtn = overlay.querySelector(".slot-terminal-close");
 
-  const term = new Terminal({
-    theme: TERM_THEME,
-    fontFamily: "'SF Mono', Menlo, monospace",
-    fontSize: 13,
-    cursorBlink: true,
-  });
+  const term = createTerminal();
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
