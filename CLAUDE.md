@@ -197,6 +197,26 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 - **dead** — Claude process exited unexpectedly
 - **archived** — stored session (meta.json `archived: true`), shown in Archive section, resumable
 
+### Idle detection invariants
+
+- **Idle signal = idle.** The app trusts the signal file directly — no mtime/size cross-checks against the JSONL transcript.
+- **Why:** Local commands (`/model`, `/help`, etc.) write to the JSONL without triggering hooks, which would cause false "processing" if we compared transcript mtime with signal mtime.
+- **Safety:** `UserPromptSubmit` always clears the signal before processing begins. Stop-hook re-prompts happen within an already-cleared cycle, so no stale signal persists during processing.
+- **No false idle positives.** The app may trigger notifications on idle transitions — a premature "idle" is worse than a delayed one.
+
+### Debugging session state
+
+Inspect actual runtime data first — don't hypothesize from code alone:
+```bash
+# List sessions with PID, TTY, command, alive status
+for f in ~/.open-cockpit/session-pids/*; do pid=$(basename "$f"); echo "PID=$pid TTY=$(ps -p $pid -o tty= 2>/dev/null) COMM=$(ps -p $pid -o comm= 2>/dev/null) SID=$(cat $f | head -c 12)..."; done
+# Check idle signals
+ls -la ~/.open-cockpit/idle-signals/
+# Check if transcript mtime is newer than idle signal (false processing?)
+cat ~/.open-cockpit/idle-signals/<PID>  # get transcript path
+stat -f "mtime=%m" <transcript_path>    # compare with signal mtime
+```
+
 ### Archiving
 
 - **Auto-archive**: Dead sessions with an intention heading are auto-archived. Sessions that were never used (no intention, no snapshot) are silently discarded to avoid archive spam.
