@@ -1,0 +1,1493 @@
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
+const {
+  execFile,
+  execFileSync,
+  execSync,
+  spawn: spawnChild,
+} = require("child_process");
+const { promisify } = require("util");
+const execFileAsync = promisify(execFile);
+const { Terminal: HeadlessTerminal } = require("@xterm/headless");
+const { createPoolLock } = require("./pool-lock");
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
+const {
+  readPool: readPoolFile,
+  writePool: writePoolFile,
+  computePoolHealth,
+  syncStatuses,
+  createSlot,
+  isSlotPinned,
+  selectShrinkCandidates,
+  findSlotBySessionId: findSlotBySessionIdInPool,
+  findSlotByIndex: findSlotByIndexInPool,
+  resolveSlot: resolveSlotInPool,
+  findOffloadTarget,
+} = require("./pool");
+const { STATUS, POOL_STATUS } = require("./session-statuses");
+const {
+  daemonSend,
+  daemonSendSafe,
+  daemonRequest,
+  ensureDaemon,
+} = require("./daemon-client");
+const {
+  POOL_FILE,
+  IDLE_SIGNALS_DIR,
+  SESSION_PIDS_DIR,
+  OFFLOADED_DIR,
+  INTENTIONS_DIR,
+  SESSION_GRAPH_FILE,
+  DEFAULT_POOL_SIZE,
+  ORPHAN_TERMINAL_TTL_MS,
+  OPEN_COCKPIT_DIR,
+} = require("./paths");
+
+// Lazy require to avoid circular dependency with session-discovery
+function getSessionDiscovery() {
+  return require("./session-discovery");
+}
+
+// --- Init pattern for callbacks ---
+let _debugLog = () => {};
+let _onIntentionChanged = null; // for watchIntention to notify renderer
+let _onPoolSlotsRecovered = null; // for reconcilePool to notify renderer
+
+function init({ debugLog, onIntentionChanged, onPoolSlotsRecovered }) {
+  if (debugLog) _debugLog = debugLog;
+  _onIntentionChanged = onIntentionChanged;
+  _onPoolSlotsRecovered = onPoolSlotsRecovered;
+}
+
+// --- Module-level state ---
+let _cachedClaudePath = null;
+const lastWrittenContent = new Map();
+const fileWatchers = new Map();
+
+const { withPoolLock } = createPoolLock(POOL_FILE);
+
+// Poll a condition until it returns a truthy value, with timeout.
+// Returns the truthy value, or throws on timeout.
+async function poll(
+  checkFn,
+  { interval = 1000, timeout = 300000, initialDelay = 0, label = "poll" } = {},
+) {
+  if (initialDelay > 0) await new Promise((r) => setTimeout(r, initialDelay));
+  const start = Date.now();
+  while (true) {
+    const result = await checkFn();
+    if (result) return result;
+    if (Date.now() - start >= timeout) throw new Error(`Timeout: ${label}`);
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}
+
+// Read the terminal buffer for a single PTY (lightweight alternative to list)
+async function readTerminalBuffer(termId) {
+  try {
+    const resp = await daemonRequest({ type: "read-buffer", termId });
+    return resp.buffer || "";
+  } catch {
+    /* daemon may be disconnected — return empty buffer */
+    return "";
+  }
+}
+
+// Strip ANSI escape codes and normalize line endings.
+function stripAnsi(str) {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[()][AB012]/g, "")
+    .replace(/\x1b\[?\??[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b[>=]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+// Wait until the terminal buffer's tail contains the given text (or timeout).
+// Only checks the last portion of the buffer to avoid false-matching scrollback.
+async function waitForBufferContent(termId, text, timeoutMs = 3000) {
+  const tailSize = text.length + 500; // enough for the input line + prompt
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const buffer = await readTerminalBuffer(termId);
+    const tail = buffer.length > tailSize ? buffer.slice(-tailSize) : buffer;
+    if (tail.includes(text)) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
+// Send a command to a terminal: Escape → Ctrl-U → command + Enter
+// Uses buffer polling to confirm each step rendered before proceeding.
+// Throws if the daemon socket is not connected.
+async function sendCommandToTerminal(termId, command) {
+  daemonSend({ type: "write", termId, data: "\x1b" });
+  await new Promise((r) => setTimeout(r, 200));
+  daemonSend({ type: "write", termId, data: "\x15" }); // Ctrl-U
+  await new Promise((r) => setTimeout(r, 100));
+  daemonSend({ type: "write", termId, data: command });
+  await waitForBufferContent(termId, command);
+  daemonSend({ type: "write", termId, data: "\r" });
+}
+
+// Create a fresh idle signal file for a pool slot
+function createFreshIdleSignal(pid, sessionId) {
+  secureMkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+  secureWriteFileSync(
+    path.join(IDLE_SIGNALS_DIR, String(pid)),
+    JSON.stringify({
+      cwd: os.homedir(),
+      session_id: sessionId,
+      transcript: "",
+      ts: Math.floor(Date.now() / 1000),
+      trigger: "pool-init",
+    }),
+  );
+}
+
+// Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
+// Pool and external sessions are mixed together in the same sections.
+// Offload a session: save snapshot + meta, then send /clear to terminal
+async function offloadSession(
+  sessionId,
+  termId,
+  claudeSessionId,
+  { cwd, gitRoot, pid } = {},
+) {
+  // Get terminal buffer and render to readable text
+  let snapshot = null;
+  try {
+    const resp = await daemonRequest({ type: "list" });
+    const pty = resp.ptys.find((p) => p.termId === termId);
+    if (pty && pty.buffer) snapshot = await renderBufferToText(pty.buffer);
+  } catch (err) {
+    console.error(
+      "[main] Failed to get terminal snapshot for offload of session",
+      sessionId,
+      err.message,
+    );
+  }
+
+  const meta = await writeOffloadMeta(sessionId, {
+    cwd,
+    gitRoot,
+    claudeSessionId,
+    snapshot,
+    origin: "pool",
+  });
+  // Clean up terminal input cache for the offloaded slot
+  const { terminalHasInputCache } = getSessionDiscovery();
+  if (termId) terminalHasInputCache.delete(termId);
+
+  // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
+  try {
+    await sendCommandToTerminal(termId, "/clear");
+  } catch (err) {
+    console.warn(
+      `[offload] Failed to send /clear for session ${sessionId}: ${err.message}`,
+    );
+  }
+
+  // 3. Remove idle signal so session re-detects as fresh after /clear
+  if (pid) {
+    const idleSignalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
+    try {
+      fs.unlinkSync(idleSignalFile);
+    } catch {
+      /* ENOENT race — signal may already be removed */
+    }
+    // Remove stale PID file so the old session doesn't appear as a live "idle"
+    // ghost while /clear is in flight. The SessionStart hook will recreate it
+    // with the new session UUID once /clear completes.
+    try {
+      fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(pid)));
+    } catch {
+      /* ENOENT race — PID file may already be removed */
+    }
+  }
+
+  // 4. Update pool slot: /clear keeps same PID but assigns a new session UUID
+  let slotRef;
+  await withPoolLock(() => {
+    const pool = readPool();
+    if (!pool) return;
+    const slot = pool.slots.find((s) => s.termId === termId);
+    if (!slot) return;
+    slotRef = { termId: slot.termId, pid: slot.pid, excludeId: slot.sessionId };
+    slot.status = POOL_STATUS.STARTING;
+    slot.sessionId = null;
+    writePool(pool);
+  });
+
+  // Track slot in background (session ID polling after /clear)
+  if (slotRef) {
+    trackNewSlot(
+      { termId: slotRef.termId, pid: slotRef.pid },
+      { excludeId: slotRef.excludeId, skipTrustPrompt: true },
+    );
+  }
+
+  return meta;
+}
+
+// Validate sessionId format to prevent path traversal
+function validateSessionId(sessionId) {
+  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+    throw new Error("Invalid session ID format");
+  }
+}
+
+// --- Session graph (parent-child tracking) ---
+
+function readSessionGraph() {
+  try {
+    return JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionGraph(graph) {
+  const data = JSON.stringify(graph, null, 2);
+  const tmp = SESSION_GRAPH_FILE + ".tmp";
+  fs.writeFileSync(tmp, data, { mode: 0o600 });
+  fs.renameSync(tmp, SESSION_GRAPH_FILE);
+}
+
+function recordSessionRelation(sessionId, parentSessionId, initiator) {
+  const graph = readSessionGraph();
+  graph[sessionId] = {
+    parentSessionId: parentSessionId || null,
+    initiator: initiator || "user",
+    createdAt: new Date().toISOString(),
+  };
+  writeSessionGraph(graph);
+}
+
+function enrichSessionsWithGraphData(sessions) {
+  const graph = readSessionGraph();
+  for (const s of sessions) {
+    const rel = graph[s.sessionId];
+    if (rel) {
+      s.parentSessionId = rel.parentSessionId;
+      s.initiator = rel.initiator;
+    }
+  }
+}
+
+// Render raw PTY buffer into readable screen text using a headless terminal.
+async function renderBufferToText(buffer, cols = 200) {
+  if (!buffer) return null;
+  const term = new HeadlessTerminal({
+    cols,
+    rows: 500,
+    scrollback: 5000,
+    allowProposedApi: true,
+  });
+  await new Promise((resolve) => term.write(buffer, resolve));
+  const lines = [];
+  const buf = term.buffer.active;
+  // Only read up to the last non-empty line
+  let lastNonEmpty = -1;
+  for (let i = buf.length - 1; i >= 0; i--) {
+    const line = buf.getLine(i);
+    if (line && line.translateToString(true).trim()) {
+      lastNonEmpty = i;
+      break;
+    }
+  }
+  for (let i = 0; i <= lastNonEmpty; i++) {
+    const line = buf.getLine(i);
+    lines.push(line ? line.translateToString(true) : "");
+  }
+  term.dispose();
+  return lines.join("\n");
+}
+
+// Write offload metadata (and optional snapshot) to disk for a session.
+async function writeOffloadMeta(
+  sessionId,
+  {
+    cwd,
+    gitRoot,
+    claudeSessionId,
+    snapshot,
+    externalClear,
+    origin,
+    archived,
+  } = {},
+) {
+  validateSessionId(sessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, sessionId);
+  secureMkdirSync(offloadDir, { recursive: true });
+
+  if (snapshot) {
+    secureWriteFileSync(path.join(offloadDir, "snapshot.log"), snapshot);
+  }
+
+  const { getIntentionHeading } = getSessionDiscovery();
+  const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+  const intentionHeading = fs.existsSync(intentionFile)
+    ? await getIntentionHeading(intentionFile)
+    : null;
+
+  const meta = {
+    sessionId,
+    claudeSessionId: claudeSessionId || null,
+    cwd: cwd || null,
+    gitRoot: gitRoot || null,
+    intentionHeading,
+    lastInteractionTs: Math.floor(Date.now() / 1000),
+    offloadedAt: new Date().toISOString(),
+  };
+  if (externalClear) meta.externalClear = true;
+  if (origin) meta.origin = origin;
+  if (archived) {
+    meta.archived = true;
+    meta.archivedAt = new Date().toISOString();
+  }
+
+  secureWriteFileSync(
+    path.join(offloadDir, "meta.json"),
+    JSON.stringify(meta, null, 2),
+  );
+
+  return meta;
+}
+
+// Save offload metadata for a session that was cleared externally (e.g. /clear in terminal)
+async function saveExternalClearOffload(oldSessionId, pid) {
+  validateSessionId(oldSessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, oldSessionId);
+  if (fs.existsSync(offloadDir)) return; // already offloaded
+
+  // Gather what metadata we can
+  let cwd = null;
+  if (pid) {
+    try {
+      const lsof = execFileSync(
+        "lsof",
+        ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+      );
+      const m = lsof.match(/^n(.+)$/m);
+      if (m) cwd = m[1];
+    } catch (err) {
+      console.error(
+        "[main] lsof failed to resolve cwd for PID",
+        pid,
+        err.message,
+      );
+    }
+  }
+
+  await writeOffloadMeta(oldSessionId, {
+    cwd,
+    externalClear: true,
+    origin: "ext",
+  });
+}
+
+// Archive a session: mark its offload meta as archived.
+// For live pool sessions, offload first (snapshot + /clear), then mark archived.
+// For already-offloaded sessions, just flip the archived flag.
+async function archiveSession(sessionId) {
+  validateSessionId(sessionId);
+  const { invalidateSessionsCache } = getSessionDiscovery();
+  const meta = readOffloadMeta(sessionId);
+  if (meta) {
+    // Already offloaded — just mark as archived
+    meta.archived = true;
+    meta.archivedAt = meta.archivedAt || new Date().toISOString();
+    secureWriteFileSync(
+      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+      JSON.stringify(meta, null, 2),
+    );
+    invalidateSessionsCache();
+    return;
+  }
+
+  // Live session — need to offload first if it's a pool session
+  const pool = readPool();
+  const slot = pool?.slots?.find((s) => s.sessionId === sessionId);
+  if (slot) {
+    // Pool session: offload it first, then mark archived
+    const { getSessionsUncached } = getSessionDiscovery();
+    const sessions = await getSessionsUncached();
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    await offloadSession(sessionId, slot.termId, sessionId, {
+      cwd: session?.cwd,
+      gitRoot: session?.gitRoot,
+      pid: session?.pid,
+    });
+    // Poll for offload meta to be written (up to 5s)
+    for (let i = 0; i < 50; i++) {
+      if (readOffloadMeta(sessionId)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  // Mark as archived (may have been just written by offloadSession)
+  const updatedMeta = readOffloadMeta(sessionId);
+  if (updatedMeta) {
+    updatedMeta.archived = true;
+    updatedMeta.archivedAt = updatedMeta.archivedAt || new Date().toISOString();
+    secureWriteFileSync(
+      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+      JSON.stringify(updatedMeta, null, 2),
+    );
+  } else {
+    // No offload data yet — create archive-only meta via writeOffloadMeta
+    await writeOffloadMeta(sessionId, {
+      claudeSessionId: sessionId,
+      archived: true,
+    });
+  }
+  // Kill any orphaned extra terminals for this session immediately
+  killOrphanedTerminals(sessionId);
+
+  invalidateSessionsCache();
+}
+
+// Unarchive a session: remove the archived flag from its meta.
+function unarchiveSession(sessionId) {
+  validateSessionId(sessionId);
+  const { invalidateSessionsCache } = getSessionDiscovery();
+  const meta = readOffloadMeta(sessionId);
+  if (!meta) return;
+  delete meta.archived;
+  delete meta.archivedAt;
+  secureWriteFileSync(
+    path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+    JSON.stringify(meta, null, 2),
+  );
+  invalidateSessionsCache();
+}
+
+// Remove offload data for a session (after resume)
+function removeOffloadData(sessionId) {
+  validateSessionId(sessionId);
+  const offloadDir = path.join(OFFLOADED_DIR, sessionId);
+  try {
+    fs.rmSync(offloadDir, { recursive: true });
+  } catch (err) {
+    _debugLog("main", "removeOffloadData failed for", sessionId, err.message);
+  }
+}
+
+// Read offload snapshot (renders legacy raw PTY snapshots on the fly)
+async function readOffloadSnapshot(sessionId) {
+  validateSessionId(sessionId);
+  const snapshotFile = path.join(OFFLOADED_DIR, sessionId, "snapshot.log");
+  let text;
+  try {
+    text = fs.readFileSync(snapshotFile, "utf-8");
+  } catch {
+    /* ENOENT expected — snapshot may not exist */
+    return null;
+  }
+  // Detect legacy raw PTY snapshots (contain ANSI escape sequences)
+  if (text.includes("\x1b[")) {
+    const rendered = await renderBufferToText(text);
+    if (rendered != null) {
+      // Overwrite with rendered version so future reads are fast
+      try {
+        secureWriteFileSync(snapshotFile, rendered);
+      } catch {
+        /* write-back is best-effort */
+      }
+      return rendered;
+    }
+  }
+  return text;
+}
+
+// Read offload meta
+function readOffloadMeta(sessionId) {
+  validateSessionId(sessionId);
+  const metaFile = path.join(OFFLOADED_DIR, sessionId, "meta.json");
+  try {
+    return JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+  } catch {
+    /* ENOENT expected — meta may not exist, or JSON may be corrupted */
+    return null;
+  }
+}
+
+// --- Pool Management ---
+
+function resolveClaudePath() {
+  try {
+    return execFileSync("which", ["claude"], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    /* `which` fails if claude not in PATH — fall through to candidates */
+  }
+  const candidates = [
+    path.join(os.homedir(), ".claude", "local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    path.join(os.homedir(), ".local", "bin", "claude"),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error("Claude binary not found");
+}
+
+function readPool() {
+  return readPoolFile(POOL_FILE);
+}
+
+function writePool(pool) {
+  writePoolFile(POOL_FILE, pool);
+  const { invalidateSessionsCache } = getSessionDiscovery();
+  invalidateSessionsCache();
+}
+
+// Accept Claude's trust prompt by polling the terminal buffer until the prompt
+// appears, then sending Enter. Reliable even when spawning many sessions at once.
+async function acceptTrustPrompt(termId) {
+  try {
+    await poll(
+      async () => {
+        const buf = await readTerminalBuffer(termId);
+        // Buffer contains ANSI cursor-movement codes between words, so match
+        // a keyword that uniquely identifies the trust prompt.
+        return buf.includes("trust?");
+      },
+      { interval: 500, timeout: 15000, label: "trust-prompt" },
+    );
+    // Small delay after prompt appears to ensure the TUI is ready for input
+    await new Promise((r) => setTimeout(r, 200));
+    daemonSendSafe({ type: "write", termId, data: "\r" });
+  } catch {
+    _debugLog("main", `Trust prompt not detected for termId=${termId}`);
+  }
+}
+
+// Cached claude binary path — resolved once, reused for all spawns.
+function getCachedClaudePath() {
+  if (!_cachedClaudePath) _cachedClaudePath = resolveClaudePath();
+  return _cachedClaudePath;
+}
+
+// Spawn a single Claude session via the PTY daemon. Returns a slot object.
+async function spawnPoolSlot(index) {
+  const claudePath = getCachedClaudePath();
+  const resp = await daemonRequest({
+    type: "spawn",
+    cwd: os.homedir(),
+    cmd: claudePath,
+    args: ["--dangerously-skip-permissions"],
+    env: { OPEN_COCKPIT_POOL: "1" },
+  });
+  return createSlot(index, resp.termId, resp.pid);
+}
+
+// Initialize pool: spawn N Claude sessions via PTY daemon.
+// Returns immediately after spawning — slot tracking (session ID discovery)
+// happens in the background. Slots start as "starting" and transition to
+// "fresh" once Claude is ready. The UI handles this via pool health polling.
+async function poolInit(size) {
+  const pool = await withPoolLock(async () => {
+    size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
+    const existing = readPool();
+    if (existing) {
+      throw new Error(
+        `Pool already initialized (${existing.slots.length} slots)`,
+      );
+    }
+
+    const p = {
+      version: 1,
+      poolSize: size,
+      createdAt: new Date().toISOString(),
+      slots: [],
+    };
+
+    // Spawn each slot as a Claude session in a daemon terminal (parallel)
+    p.slots = await Promise.all(
+      Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
+    );
+
+    writePool(p);
+    return p;
+  });
+
+  // Track all slots in background (fire-and-forget, like poolResize).
+  for (const slot of pool.slots) {
+    trackNewSlot(slot);
+  }
+
+  return readPool();
+}
+
+// Poll for a session-pid file to appear (or change from excludeId) for a PID.
+// Used both for initial session discovery and after /clear (which reuses the PID).
+async function pollForSessionId(pid, timeoutMs, excludeId = null) {
+  if (excludeId) await new Promise((r) => setTimeout(r, 2000)); // Give /clear time
+  try {
+    return await poll(
+      () => {
+        try {
+          const sessionId = fs
+            .readFileSync(path.join(SESSION_PIDS_DIR, String(pid)), "utf-8")
+            .trim();
+          if (sessionId && sessionId !== excludeId) return sessionId;
+        } catch {} // File doesn't exist yet
+        return null;
+      },
+      { interval: 200, timeout: timeoutMs, label: `session ID for PID ${pid}` },
+    );
+  } catch {
+    return null; // Timeout → null (preserves original behavior)
+  }
+}
+
+// After spawning, track the slot until it gets a session ID.
+// Runs trust prompt acceptance + session ID polling in background.
+// Updates pool.json via withPoolLock when done.
+// Returns a promise that resolves to the session ID (can be awaited or fire-and-forget).
+function trackNewSlot(
+  slot,
+  {
+    timeout = 60000,
+    excludeId = null,
+    expectedStatus = POOL_STATUS.STARTING,
+    skipTrustPrompt = false,
+    skipFreshSignal = false,
+    onResolved = null,
+  } = {},
+) {
+  if (!skipTrustPrompt) acceptTrustPrompt(slot.termId);
+  return pollForSessionId(slot.pid, timeout, excludeId)
+    .then(async (sessionId) => {
+      await withPoolLock(() => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === slot.termId);
+        if (s && s.status === expectedStatus) {
+          s.sessionId = sessionId;
+          if (skipFreshSignal) {
+            // Resume case: keep slot as busy, let real idle hook handle status
+            if (!sessionId) {
+              s.status = POOL_STATUS.ERROR;
+              _debugLog(
+                "main",
+                `Slot resume failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+              );
+            }
+          } else {
+            s.status = sessionId ? POOL_STATUS.FRESH : POOL_STATUS.ERROR;
+            if (sessionId) {
+              createFreshIdleSignal(s.pid, sessionId);
+            } else {
+              _debugLog(
+                "main",
+                `Slot init failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+              );
+            }
+          }
+          writePool(p);
+        }
+      });
+      if (onResolved) await onResolved(sessionId);
+      return sessionId;
+    })
+    .catch(async (err) => {
+      _debugLog(
+        "main",
+        `Slot tracking failed: termId=${slot.termId} pid=${slot.pid} err=${err.message}`,
+      );
+      await withPoolLock(() => {
+        const p = readPool();
+        if (!p) return;
+        const s = p.slots.find((x) => x.termId === slot.termId);
+        if (s && s.status === expectedStatus) {
+          s.status = POOL_STATUS.ERROR;
+          writePool(p);
+        }
+      });
+    });
+}
+
+// Resize pool: add or remove slots
+async function poolResize(newSize) {
+  return withPoolLock(async () => {
+    newSize = Math.max(1, Math.min(20, newSize));
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
+
+    const currentSize = pool.slots.length;
+    if (newSize === currentSize) return pool;
+
+    if (newSize > currentSize) {
+      // Grow: spawn new slots in parallel
+      const newSlots = await Promise.all(
+        Array.from({ length: newSize - currentSize }, (_, j) =>
+          spawnPoolSlot(currentSize + j),
+        ),
+      );
+      pool.slots.push(...newSlots);
+
+      // Track new slots in background (trust prompt + session ID polling)
+      for (const slot of newSlots) {
+        trackNewSlot(slot);
+      }
+    } else {
+      // Shrink: kill excess slots (prefer fresh, then LRU idle)
+      const toRemove = currentSize - newSize;
+      const candidates = selectShrinkCandidates(pool.slots, toRemove);
+
+      let removed = 0;
+      for (const slot of candidates) {
+        await killSlotProcess(slot);
+        pool.slots = pool.slots.filter((s) => s.index !== slot.index);
+        removed++;
+      }
+
+      // Re-index remaining slots
+      pool.slots.forEach((s, i) => (s.index = i));
+    }
+
+    pool.poolSize = newSize;
+    writePool(pool);
+    return pool;
+  });
+}
+
+// Get pool health: enrich pool.json slots with live session data
+async function getPoolHealth() {
+  const { getSessions } = getSessionDiscovery();
+  const pool = readPool();
+  const sessions = await getSessions();
+  return computePoolHealth(pool, sessions, (pid) => {
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      /* ESRCH expected — process existence check */
+      return false;
+    }
+  });
+}
+
+// Clean up idle signal files for PIDs that no longer exist.
+// Prevents unbounded growth and false idle detection from PID reuse.
+function cleanupStaleIdleSignals() {
+  if (!fs.existsSync(IDLE_SIGNALS_DIR)) return;
+  const sessionPids = new Set(
+    fs.existsSync(SESSION_PIDS_DIR) ? fs.readdirSync(SESSION_PIDS_DIR) : [],
+  );
+  for (const filename of fs.readdirSync(IDLE_SIGNALS_DIR)) {
+    const pid = Number(filename);
+    if (isNaN(pid)) continue;
+    let alive = false;
+    try {
+      process.kill(pid, 0);
+      alive = true;
+    } catch {
+      // process doesn't exist
+    }
+    if (!alive || !sessionPids.has(filename)) {
+      try {
+        fs.unlinkSync(path.join(IDLE_SIGNALS_DIR, filename));
+        console.log(
+          `[main] Removed stale idle signal for PID ${pid}` +
+            (!alive ? " (dead)" : " (no session-pids entry)"),
+        );
+      } catch {
+        // ignore removal errors
+      }
+    }
+  }
+}
+
+// Reconcile pool.json with reality on startup.
+// Daemon terminals survive app restarts, so pool slots should still be alive.
+// Update any stale state (dead terminals, changed PIDs, etc.)
+async function reconcilePool() {
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return;
+
+    const { terminalHasInputCache } = getSessionDiscovery();
+    let changed = false;
+    const recovered = [];
+    let daemonPtys;
+    try {
+      const resp = await daemonRequest({ type: "list" });
+      daemonPtys = new Map(resp.ptys.map((p) => [p.termId, p]));
+    } catch {
+      return; // Daemon not running — can't reconcile
+    }
+
+    for (const slot of pool.slots) {
+      const pty = daemonPtys.get(slot.termId);
+      const needsRestart =
+        !pty || pty.exited || slot.status === POOL_STATUS.ERROR;
+
+      if (needsRestart) {
+        const reason =
+          !pty || pty.exited ? POOL_STATUS.DEAD : POOL_STATUS.ERROR;
+        if (!pty || pty.exited) {
+          if (slot.status !== POOL_STATUS.DEAD) {
+            slot.status = POOL_STATUS.DEAD;
+            changed = true;
+          }
+        }
+        // Clean up terminal input cache for old termId
+        terminalHasInputCache.delete(slot.termId);
+        // Kill old process/PTY before restarting
+        await killSlotProcess(slot);
+        // Auto-restart slot
+        try {
+          _debugLog(
+            "main",
+            `Auto-recovering ${reason} slot ${slot.index} (termId=${slot.termId} pid=${slot.pid})`,
+          );
+          const newSlot = await spawnPoolSlot(slot.index);
+          slot.termId = newSlot.termId;
+          slot.pid = newSlot.pid;
+          slot.status = POOL_STATUS.STARTING;
+          slot.sessionId = null;
+          changed = true;
+          recovered.push({ index: slot.index, reason });
+          trackNewSlot(slot);
+        } catch (err) {
+          _debugLog(
+            "main",
+            `Failed to restart slot ${slot.index}: ${err.message}`,
+          );
+        }
+        continue;
+      }
+
+      // Terminal alive — update PID if it changed (shouldn't, but safety)
+      if (pty.pid !== slot.pid) {
+        slot.pid = pty.pid;
+        changed = true;
+      }
+
+      // Re-check session ID mapping
+      const pidFile = path.join(SESSION_PIDS_DIR, String(slot.pid));
+      if (fs.existsSync(pidFile)) {
+        const sessionId = fs.readFileSync(pidFile, "utf-8").trim();
+        if (sessionId && sessionId !== slot.sessionId) {
+          if (slot.sessionId) {
+            await saveExternalClearOffload(slot.sessionId, slot.pid);
+          }
+          slot.sessionId = sessionId;
+          slot.status = POOL_STATUS.FRESH;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) writePool(pool);
+
+    // Notify renderer about recovered slots
+    if (recovered.length > 0 && _onPoolSlotsRecovered) {
+      _onPoolSlotsRecovered(recovered);
+    }
+
+    // Prune session graph — remove entries for sessions that no longer exist
+    pruneSessionGraph(pool);
+  });
+}
+
+function getPoolTermIds() {
+  const pool = readPool();
+  const ids = new Set();
+  if (pool) {
+    for (const slot of pool.slots) ids.add(slot.termId);
+  }
+  return ids;
+}
+
+// Kill all orphaned extra terminals for a specific session.
+function killOrphanedTerminals(sessionId) {
+  const poolTermIds = getPoolTermIds();
+  daemonRequest({ type: "list" })
+    .then((resp) => {
+      for (const pty of resp.ptys) {
+        if (pty.sessionId === sessionId && !poolTermIds.has(pty.termId)) {
+          daemonRequest({ type: "kill", termId: pty.termId }).catch((err) =>
+            _debugLog(
+              "main",
+              `Failed to kill orphaned terminal ${pty.termId}: ${err.message}`,
+            ),
+          );
+        }
+      }
+    })
+    .catch((err) => {
+      _debugLog("main", `killOrphanedTerminals failed: ${err.message}`);
+    });
+}
+
+// Kill orphaned extra terminals for sessions offloaded > TTL or archived.
+// Runs after reconcilePool on the same 30s interval.
+async function reapOrphanedTerminals() {
+  let ptys;
+  try {
+    const resp = await daemonRequest({ type: "list" });
+    ptys = resp.ptys;
+  } catch {
+    return; // Daemon not running
+  }
+
+  const poolTermIds = getPoolTermIds();
+
+  // Batch-read offload metadata by unique sessionId (avoid N+1 reads)
+  const candidatePtys = ptys.filter(
+    (p) => p.sessionId && !p.exited && !poolTermIds.has(p.termId),
+  );
+  const sessionIds = [...new Set(candidatePtys.map((p) => p.sessionId))];
+  const metaBySession = new Map();
+  for (const sid of sessionIds) {
+    const meta = readOffloadMeta(sid);
+    if (meta) metaBySession.set(sid, meta);
+  }
+
+  const now = Date.now();
+  for (const pty of candidatePtys) {
+    const meta = metaBySession.get(pty.sessionId);
+    if (!meta) continue; // Session still live — not our concern
+
+    const shouldKill =
+      meta.archived ||
+      (meta.offloadedAt &&
+        now - new Date(meta.offloadedAt).getTime() > ORPHAN_TERMINAL_TTL_MS);
+
+    if (shouldKill) {
+      _debugLog(
+        "main",
+        `Reaping orphaned terminal ${pty.termId} for ${meta.archived ? "archived" : "stale offloaded"} session ${pty.sessionId}`,
+      );
+      try {
+        await daemonRequest({ type: "kill", termId: pty.termId });
+      } catch (err) {
+        _debugLog(
+          "main",
+          `Failed to reap terminal ${pty.termId}: ${err.message}`,
+        );
+      }
+    }
+  }
+}
+
+function pruneSessionGraph(pool) {
+  const graph = readSessionGraph();
+  const graphKeys = Object.keys(graph);
+  if (graphKeys.length === 0) return;
+
+  // Collect all known session IDs: pool slots + live sessions + offloaded/archived
+  const knownIds = new Set();
+  for (const slot of pool.slots) {
+    if (slot.sessionId) knownIds.add(slot.sessionId);
+  }
+  // Include live non-pool sessions (ext, sub-claude) from session-pids
+  try {
+    for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
+      try {
+        const sessionId = fs
+          .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
+          .trim();
+        if (sessionId) knownIds.add(sessionId);
+      } catch {
+        /* ENOENT race — file removed between readdir and read */
+      }
+    }
+  } catch {
+    /* SESSION_PIDS_DIR may not exist */
+  }
+  try {
+    for (const dir of fs.readdirSync(OFFLOADED_DIR)) {
+      knownIds.add(dir);
+    }
+  } catch {
+    /* OFFLOADED_DIR may not exist */
+  }
+
+  let pruned = false;
+  for (const id of graphKeys) {
+    if (!knownIds.has(id)) {
+      delete graph[id];
+      pruned = true;
+    }
+  }
+  if (pruned) writeSessionGraph(graph);
+}
+
+// Sync pool.json slot statuses with live session state.
+async function syncPoolStatuses(sessions) {
+  await withPoolLock(() => {
+    const pool = readPool();
+    if (!pool) return;
+    const updated = syncStatuses(pool, sessions);
+    if (updated) writePool(updated);
+  });
+}
+
+// Kill a pool slot's process: try daemon first, then fall back to PID kill.
+// This prevents orphans when the daemon was restarted and termIds are stale.
+async function killSlotProcess(slot) {
+  try {
+    await daemonRequest({ type: "kill", termId: slot.termId });
+  } catch (err) {
+    // Daemon kill failed (stale termId or daemon down) — kill by PID directly
+    console.error(
+      "[main] Daemon kill failed for slot",
+      slot.index,
+      "termId",
+      slot.termId,
+      err.message,
+    );
+    if (slot.pid) {
+      try {
+        process.kill(slot.pid, "SIGTERM");
+      } catch {
+        /* ESRCH expected — process may already be dead */
+      }
+    }
+  }
+}
+
+// Destroy pool: kill all slots and remove pool.json
+async function poolDestroy() {
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return;
+    const { terminalHasInputCache, getOffloadedSessions } =
+      getSessionDiscovery();
+    for (const slot of pool.slots) {
+      await killSlotProcess(slot);
+      // Clean up idle-signal and session-pid files so destroyed slots
+      // don't appear as ghost "ext fresh" sessions after pool removal.
+      for (const dir of [IDLE_SIGNALS_DIR, SESSION_PIDS_DIR]) {
+        try {
+          fs.unlinkSync(path.join(dir, String(slot.pid)));
+        } catch {}
+      }
+    }
+    terminalHasInputCache.clear();
+    try {
+      fs.unlinkSync(POOL_FILE);
+    } catch (err) {
+      _debugLog(
+        "main",
+        "poolDestroy: failed to unlink pool.json:",
+        err.message,
+      );
+    }
+    // Archive non-archived offloaded sessions so they don't linger in Recent
+    for (const s of await getOffloadedSessions()) {
+      if (s.status === STATUS.OFFLOADED) await archiveSession(s.sessionId);
+    }
+  });
+}
+
+// Validate termId: must be a finite number
+function validateTermId(termId) {
+  if (typeof termId !== "number" || !Number.isFinite(termId)) {
+    throw new Error("Invalid termId: must be a number");
+  }
+}
+
+function readIntention(sessionId) {
+  const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+  if (!fs.existsSync(file)) return "";
+  return fs.readFileSync(file, "utf-8");
+}
+
+// Track the last content we wrote per session so we can detect external changes
+function writeIntention(sessionId, content) {
+  secureMkdirSync(INTENTIONS_DIR, { recursive: true });
+  lastWrittenContent.set(sessionId, content);
+  secureWriteFileSync(path.join(INTENTIONS_DIR, `${sessionId}.md`), content);
+}
+
+async function poolClean() {
+  const { getSessions } = getSessionDiscovery();
+  const pool = readPool();
+  if (!pool) throw new Error("Pool not initialized");
+  const sessions = await getSessions();
+  const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+  const idleSlots = pool.slots.filter((s) => {
+    const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+    return session && session.status === STATUS.IDLE;
+  });
+  let cleaned = 0;
+  for (const slot of idleSlots) {
+    // Re-check status before offloading (slot may have become busy since we read)
+    const currentSessions = await getSessions();
+    const currentSession = currentSessions.find(
+      (s) => s.sessionId === slot.sessionId,
+    );
+    if (!currentSession || currentSession.status !== STATUS.IDLE) {
+      continue;
+    }
+    await offloadSession(slot.sessionId, slot.termId, null, {
+      cwd: currentSession.cwd,
+      gitRoot: currentSession.gitRoot,
+      pid: slot.pid,
+    });
+    await archiveSession(slot.sessionId);
+    cleaned++;
+  }
+  return cleaned;
+}
+
+// Ensure a fresh slot exists, then atomically claim and return it.
+// The claimFn receives (pool, slot) inside the lock and should perform
+// the slot-specific work (send prompt / resume command, mark busy, etc.).
+// Returns whatever claimFn returns.
+async function withFreshSlot(claimFn) {
+  const { getSessions } = getSessionDiscovery();
+  // Phase 1: check if offload is needed (inside lock)
+  const needsOffload = await withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
+    const sessions = await getSessions();
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+    return findOffloadTarget(pool, sessionMap);
+  });
+
+  // Phase 2: offload outside lock (offloadSession acquires its own lock)
+  if (needsOffload) {
+    await offloadSession(needsOffload.sessionId, needsOffload.termId, null, {
+      cwd: needsOffload.cwd,
+      gitRoot: needsOffload.gitRoot,
+      pid: needsOffload.pid,
+    });
+    await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
+  }
+
+  // Phase 3: claim fresh slot atomically (inside lock — no gap for races)
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) throw new Error("Pool not initialized");
+    const sessions = await getSessions();
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+
+    const slot = pool.slots.find((s) => {
+      if (s.status === POOL_STATUS.FRESH) return true;
+      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+      return session && session.status === STATUS.FRESH;
+    });
+    if (!slot) throw new Error("No fresh slots available");
+
+    return claimFn(pool, slot);
+  });
+}
+
+async function poolResume(sessionId) {
+  const { invalidateSessionsCache } = getSessionDiscovery();
+  validateSessionId(sessionId);
+  const meta = readOffloadMeta(sessionId);
+  if (!meta) throw new Error("No offload data for session");
+  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
+  if (!claudeSessionId) throw new Error("No Claude session ID stored");
+
+  // Atomically ensure a fresh slot and claim it for /resume.
+  // Unarchive only after the slot is claimed — if withFreshSlot fails,
+  // the session stays archived instead of getting stuck in recents.
+  return withFreshSlot(async (pool, slot) => {
+    if (readOffloadMeta(sessionId)?.archived) unarchiveSession(sessionId);
+    const oldSlotSessionId = slot.sessionId;
+
+    try {
+      await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
+    } catch (err) {
+      console.error("[main] /resume command failed:", err.message);
+      throw err; // slot stays fresh (withFreshSlot default)
+    }
+    slot.status = POOL_STATUS.BUSY;
+    writePool(pool);
+
+    // Track slot in background (session ID polling after /resume)
+    trackNewSlot(
+      { termId: slot.termId, pid: slot.pid },
+      {
+        excludeId: oldSlotSessionId,
+        expectedStatus: POOL_STATUS.BUSY,
+        skipTrustPrompt: true,
+        skipFreshSignal: true,
+        onResolved: async (newSessionId) => {
+          // Re-tag orphaned extra terminals from old session to new session
+          if (newSessionId) {
+            try {
+              const resp = await daemonRequest({ type: "list" });
+              const orphaned = resp.ptys.filter(
+                (p) => p.sessionId === sessionId && !p.exited,
+              );
+              await Promise.all(
+                orphaned.map((pty) =>
+                  daemonRequest({
+                    type: "set-session",
+                    termId: pty.termId,
+                    sessionId: newSessionId,
+                  }),
+                ),
+              );
+            } catch (err) {
+              _debugLog(
+                "main",
+                `Failed to re-tag orphaned terminals: ${err.message}`,
+              );
+            }
+            removeOffloadData(sessionId);
+          }
+          invalidateSessionsCache();
+        },
+      },
+    );
+
+    return {
+      type: "resumed",
+      sessionId,
+      termId: slot.termId,
+      slotIndex: slot.index,
+    };
+  });
+}
+
+function watchIntention(sessionId) {
+  // Clean up previous watcher
+  if (fileWatchers.has("current")) {
+    fs.unwatchFile(fileWatchers.get("current"));
+    fileWatchers.delete("current");
+  }
+  // Reset change-detection state so we don't suppress notifications for new session
+  lastWrittenContent.delete(sessionId);
+
+  const file = path.join(INTENTIONS_DIR, `${sessionId}.md`);
+  secureMkdirSync(INTENTIONS_DIR, { recursive: true });
+
+  // Use polling (fs.watchFile) — reliable on macOS unlike fs.watch.
+  // Works on non-existent files too (detects when file appears).
+  fs.watchFile(file, { interval: 500 }, () => {
+    let content;
+    try {
+      content = fs.readFileSync(file, "utf-8");
+    } catch (err) {
+      if (err.code === "ENOENT") return; // File not yet created
+      console.error(
+        "[main] Failed to read intention file on change",
+        file,
+        err.message,
+      );
+      return;
+    }
+    // Skip if this is content we wrote ourselves
+    if (content === lastWrittenContent.get(sessionId)) return;
+    lastWrittenContent.set(sessionId, content);
+    console.log("[main] External file change detected, sending to renderer");
+    if (_onIntentionChanged) {
+      _onIntentionChanged(content);
+    }
+  });
+
+  fileWatchers.set("current", file);
+}
+
+// Open the session's project directory in Cursor.
+// Checks for .code-workspace files (matching project name or inside folder).
+async function openInCursor(cwd) {
+  if (!cwd) return;
+
+  const projectName = path.basename(cwd);
+  const workspaceDir = path.join(
+    os.homedir(),
+    "Documents",
+    "Projects",
+    "VS code workspaces",
+  );
+
+  // Check named workspace file
+  const namedWorkspace = path.join(
+    workspaceDir,
+    `${projectName}.code-workspace`,
+  );
+  if (fs.existsSync(namedWorkspace)) {
+    await execFileAsync("open", ["-a", "Cursor", namedWorkspace]);
+    return;
+  }
+
+  // Check in-folder workspace file
+  try {
+    const entries = fs.readdirSync(cwd);
+    const localWs = entries.find((e) => e.endsWith(".code-workspace"));
+    if (localWs) {
+      await execFileAsync("open", ["-a", "Cursor", path.join(cwd, localWs)]);
+      return;
+    }
+  } catch {
+    /* ignore read errors */
+  }
+
+  // Fall back to opening the folder
+  await execFileAsync("open", ["-a", "Cursor", cwd]);
+}
+
+// Try to focus the external terminal (iTerm or Cursor) where a Claude session is running.
+// Returns { focused: true, app: "iTerm"/"Cursor" } or { focused: false }.
+function focusExternalTerminal(pid) {
+  if (!/^\d+$/.test(String(pid))) return { focused: false };
+
+  const { execFileSync } = require("child_process");
+
+  // Get the TTY of the Claude process
+  let tty;
+  try {
+    tty = execFileSync("ps", ["-p", String(pid), "-o", "tty="], {
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    /* process may have exited — can't determine TTY */
+    return { focused: false };
+  }
+  if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty))
+    return { focused: false };
+
+  const EXEC_TIMEOUT = 3000;
+
+  // Try iTerm: find the session with this TTY and focus it
+  try {
+    const result = execFileSync(
+      "osascript",
+      [
+        "-e",
+        `tell application "System Events"
+  if not (exists process "iTerm2") then return "not_running"
+end tell
+tell application "iTerm"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s ends with "${tty}" then
+          select t
+          set index of w to 1
+          activate
+          return "focused"
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return "not_found"
+end tell`,
+      ],
+      { encoding: "utf-8", timeout: EXEC_TIMEOUT },
+    ).trim();
+    if (result === "focused") return { focused: true, app: "iTerm" };
+  } catch (err) {
+    console.error(
+      "[main] iTerm focus check via osascript failed:",
+      err.message,
+    );
+  }
+
+  // Try Cursor / VS Code: walk process tree to find terminal app ancestor
+  const TERMINAL_APPS = [
+    { match: /\/Cursor(\.app\/|\s|$)/, app: "Cursor", activate: "Cursor" },
+    {
+      match: /\/Code(\.app\/|\s|$)/,
+      app: "VS Code",
+      activate: "Visual Studio Code",
+    },
+  ];
+  try {
+    let checkPid = String(pid);
+    for (let i = 0; i < 10; i++) {
+      const ppid = execFileSync("ps", ["-p", checkPid, "-o", "ppid="], {
+        encoding: "utf-8",
+        timeout: EXEC_TIMEOUT,
+      }).trim();
+      if (!ppid || ppid === "0" || ppid === "1") break;
+      const pname = execFileSync("ps", ["-p", ppid, "-o", "comm="], {
+        encoding: "utf-8",
+        timeout: EXEC_TIMEOUT,
+      }).trim();
+      for (const { match, app, activate } of TERMINAL_APPS) {
+        if (match.test(pname)) {
+          execFileSync("osascript", [
+            "-e",
+            `tell application "${activate}" to activate`,
+          ]);
+          return { focused: true, app };
+        }
+      }
+      checkPid = ppid;
+    }
+  } catch (err) {
+    console.error(
+      "[main] Terminal focus process tree walk failed for PID",
+      pid,
+      err.message,
+    );
+  }
+
+  return { focused: false };
+}
+
+module.exports = {
+  init,
+  withPoolLock,
+  poll,
+  fileWatchers,
+  readTerminalBuffer,
+  stripAnsi,
+  waitForBufferContent,
+  sendCommandToTerminal,
+  createFreshIdleSignal,
+  offloadSession,
+  validateSessionId,
+  readSessionGraph,
+  writeSessionGraph,
+  recordSessionRelation,
+  enrichSessionsWithGraphData,
+  renderBufferToText,
+  writeOffloadMeta,
+  saveExternalClearOffload,
+  archiveSession,
+  unarchiveSession,
+  removeOffloadData,
+  readOffloadSnapshot,
+  readOffloadMeta,
+  resolveClaudePath,
+  readPool,
+  writePool,
+  acceptTrustPrompt,
+  getCachedClaudePath,
+  spawnPoolSlot,
+  poolInit,
+  pollForSessionId,
+  trackNewSlot,
+  poolResize,
+  getPoolHealth,
+  cleanupStaleIdleSignals,
+  reconcilePool,
+  getPoolTermIds,
+  killOrphanedTerminals,
+  reapOrphanedTerminals,
+  pruneSessionGraph,
+  syncPoolStatuses,
+  killSlotProcess,
+  poolDestroy,
+  validateTermId,
+  readIntention,
+  writeIntention,
+  lastWrittenContent,
+  poolClean,
+  withFreshSlot,
+  poolResume,
+  watchIntention,
+  openInCursor,
+  focusExternalTerminal,
+};
