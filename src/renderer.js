@@ -1069,12 +1069,26 @@ function showSnapshotViewer(session, snapshotText) {
   `;
 
   document.body.appendChild(viewer);
-  viewer.addEventListener("click", (e) => {
-    if (e.target === viewer) viewer.remove();
-  });
-  viewer.querySelector(".snapshot-close").addEventListener("click", () => {
+
+  function closeViewer() {
+    document.removeEventListener("keydown", escHandler, true);
     viewer.remove();
+  }
+  function escHandler(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeViewer();
+    }
+  }
+  document.addEventListener("keydown", escHandler, true);
+
+  viewer.addEventListener("click", (e) => {
+    if (e.target === viewer) closeViewer();
   });
+  viewer
+    .querySelector(".snapshot-close")
+    .addEventListener("click", closeViewer);
 }
 
 // Show snapshot content inline in the terminal pane for offloaded/archived sessions
@@ -2457,13 +2471,16 @@ function renderPoolCountsHtml(health) {
 
 function closePoolSettings(overlay) {
   stopPoolSettingsPolling();
+  if (overlay._escHandler) {
+    document.removeEventListener("keydown", overlay._escHandler, true);
+  }
   overlay.remove();
 }
 
 async function showPoolSettings() {
   stopPoolSettingsPolling();
   const existing = document.getElementById("pool-settings");
-  if (existing) existing.remove();
+  if (existing) closePoolSettings(existing);
 
   const health = await window.api.poolHealth();
 
@@ -2513,6 +2530,17 @@ async function showPoolSettings() {
   `;
 
   document.body.appendChild(overlay);
+
+  // Close on Escape (skip if a terminal popup is open on top)
+  overlay._escHandler = (e) => {
+    if (e.key === "Escape" && !document.getElementById("slot-terminal-popup")) {
+      e.preventDefault();
+      e.stopPropagation();
+      closePoolSettings(overlay);
+    }
+  };
+  document.addEventListener("keydown", overlay._escHandler, true);
+
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) closePoolSettings(overlay);
   });
@@ -2758,8 +2786,19 @@ async function showShortcutSettings() {
 
   function closeDialog() {
     cleanupRecording();
+    document.removeEventListener("keydown", escHandler, true);
     overlay.remove();
   }
+
+  // Close on Escape (only when not recording a shortcut)
+  function escHandler(e) {
+    if (e.key === "Escape" && !activeKeyHandler) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDialog();
+    }
+  }
+  document.addEventListener("keydown", escHandler, true);
 
   // Close on overlay click or close button
   overlay.addEventListener("click", (e) => {
