@@ -2466,7 +2466,7 @@ async function openSlotTerminalPopup(slot) {
   overlay.innerHTML = `
     <div class="slot-terminal-dialog">
       <div class="slot-terminal-header">
-        <span class="slot-terminal-title">${label}</span>
+        <span class="slot-terminal-title">${escapeHtml(label)}</span>
         <button class="snapshot-close slot-terminal-close">\u2715</button>
       </div>
       <div class="slot-terminal-mount"></div>
@@ -2590,7 +2590,7 @@ function renderPoolSlotsHtml(health) {
         : "";
       return `<div class="pool-slot-row pool-slot-clickable" data-slot-index="${slot.index}">
         ${poolStatusDot(status)}
-        <span class="pool-slot-label">${label}</span>
+        <span class="pool-slot-label">${escapeHtml(label)}</span>
         ${pinBadge}
         <span class="pool-slot-status">${status}</span>
       </div>`;
