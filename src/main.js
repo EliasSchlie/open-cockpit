@@ -35,6 +35,7 @@ const {
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
 } = require("./pool");
+const { STATUS, POOL_STATUS } = require("./session-statuses");
 const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 
 // Secure file helpers — restrict to owner-only access
@@ -176,7 +177,7 @@ async function pollTerminalInput() {
     const pool = readPool();
     if (!pool) return;
 
-    const freshSlots = pool.slots.filter((s) => s.status === "fresh");
+    const freshSlots = pool.slots.filter((s) => s.status === POOL_STATUS.FRESH);
     if (freshSlots.length === 0) return;
 
     // Single daemon call to get all terminal buffers
@@ -235,7 +236,7 @@ function triggerPollOnWrite(termId) {
     const pool = readPool();
     if (!pool) return;
     const slot = pool.slots.find(
-      (s) => s.termId === termId && s.status === "fresh",
+      (s) => s.termId === termId && s.status === POOL_STATUS.FRESH,
     );
     if (!slot) return;
     pollTerminalInput().catch((err) =>
@@ -249,7 +250,7 @@ function triggerPollOnWrite(termId) {
 }
 
 function freshOrTyping(hasIntentionContent, hasTermInput) {
-  return hasIntentionContent || hasTermInput ? "typing" : "fresh";
+  return hasIntentionContent || hasTermInput ? STATUS.TYPING : STATUS.FRESH;
 }
 
 // Cache transcriptContains results (key -> true, once true stays true)
@@ -551,7 +552,7 @@ async function getOffloadedSessions() {
         project: meta.cwd ? path.basename(meta.cwd) : null,
         hasIntention: meta.intentionHeading != null,
         intentionHeading: meta.intentionHeading || null,
-        status: isArchived ? "archived" : "offloaded",
+        status: isArchived ? STATUS.ARCHIVED : STATUS.OFFLOADED,
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
         hasSnapshot,
@@ -702,7 +703,7 @@ async function getSessionsUncached() {
     const isActivated = activatedSessions.has(sessionId);
 
     if (!alive) {
-      status = "dead";
+      status = STATUS.DEAD;
     } else if (idleSignal) {
       // IMPORTANT: Idle signal presence = session is idle. No false positives allowed.
       // This is safe because UserPromptSubmit always clears the signal before
@@ -717,7 +718,7 @@ async function getSessionsUncached() {
         isActivated ||
         (await transcriptContains(idleSignal.transcript, '"type":"assistant"'))
       ) {
-        status = "idle";
+        status = STATUS.IDLE;
       } else {
         status = freshOrTyping(hasIntentionContent, hasTermInput);
       }
@@ -744,7 +745,7 @@ async function getSessionsUncached() {
           `[main] Stale processing detected for session ${sessionId} (transcript size unchanged for ${Math.round((now - unchangedSince) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
         );
         staleLoggedSessions.add(sessionId);
-        status = "idle";
+        status = STATUS.IDLE;
         staleIdle = true;
         idleTs = Math.round(unchangedSince / 1000);
       } else {
@@ -755,12 +756,12 @@ async function getSessionsUncached() {
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
         if (isActivated) {
-          status = "processing";
+          status = STATUS.PROCESSING;
         } else {
           // "user" needle: this path only runs when idle signal is absent
           // (prompt just submitted), so "user" entries are real, not /clear artifacts.
           status = (await transcriptContains(jsonlPath, '"type":"user"'))
-            ? "processing"
+            ? STATUS.PROCESSING
             : freshOrTyping(hasIntentionContent, hasTermInput);
         }
       }
@@ -768,7 +769,7 @@ async function getSessionsUncached() {
 
     // Build a preview of typed text for "typing" sessions with no heading
     let intentionPreview = null;
-    if (status === "typing" && !intentionHeading) {
+    if (status === STATUS.TYPING && !intentionHeading) {
       if (intentionContent) {
         // Strip markdown heading if present (shouldn't be, but defensive)
         const preview = intentionContent.replace(/^#\s+.*\n?/, "").trim();
@@ -845,7 +846,7 @@ async function getSessionsUncached() {
   }
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
-    if (s.status !== "dead") continue;
+    if (s.status !== STATUS.DEAD) continue;
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
@@ -1214,7 +1215,7 @@ async function offloadSession(
     const slot = pool.slots.find((s) => s.termId === termId);
     if (!slot) return;
     slotRef = { termId: slot.termId, pid: slot.pid, excludeId: slot.sessionId };
-    slot.status = "starting";
+    slot.status = POOL_STATUS.STARTING;
     slot.sessionId = null;
     writePool(pool);
   });
@@ -1681,7 +1682,7 @@ function trackNewSlot(
   {
     timeout = 60000,
     excludeId = null,
-    expectedStatus = "starting",
+    expectedStatus = POOL_STATUS.STARTING,
     skipTrustPrompt = false,
     skipFreshSignal = false,
     onResolved = null,
@@ -1699,14 +1700,14 @@ function trackNewSlot(
           if (skipFreshSignal) {
             // Resume case: keep slot as busy, let real idle hook handle status
             if (!sessionId) {
-              s.status = "error";
+              s.status = POOL_STATUS.ERROR;
               debugLog(
                 "main",
                 `Slot resume failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
               );
             }
           } else {
-            s.status = sessionId ? "fresh" : "error";
+            s.status = sessionId ? POOL_STATUS.FRESH : POOL_STATUS.ERROR;
             if (sessionId) {
               createFreshIdleSignal(s.pid, sessionId);
             } else {
@@ -1732,7 +1733,7 @@ function trackNewSlot(
         if (!p) return;
         const s = p.slots.find((x) => x.termId === slot.termId);
         if (s && s.status === expectedStatus) {
-          s.status = "error";
+          s.status = POOL_STATUS.ERROR;
           writePool(p);
         }
       });
@@ -1850,13 +1851,15 @@ async function reconcilePool() {
 
     for (const slot of pool.slots) {
       const pty = daemonPtys.get(slot.termId);
-      const needsRestart = !pty || pty.exited || slot.status === "error";
+      const needsRestart =
+        !pty || pty.exited || slot.status === POOL_STATUS.ERROR;
 
       if (needsRestart) {
-        const reason = !pty || pty.exited ? "dead" : "error";
+        const reason =
+          !pty || pty.exited ? POOL_STATUS.DEAD : POOL_STATUS.ERROR;
         if (!pty || pty.exited) {
-          if (slot.status !== "dead") {
-            slot.status = "dead";
+          if (slot.status !== POOL_STATUS.DEAD) {
+            slot.status = POOL_STATUS.DEAD;
             changed = true;
           }
         }
@@ -1873,7 +1876,7 @@ async function reconcilePool() {
           const newSlot = await spawnPoolSlot(slot.index);
           slot.termId = newSlot.termId;
           slot.pid = newSlot.pid;
-          slot.status = "starting";
+          slot.status = POOL_STATUS.STARTING;
           slot.sessionId = null;
           changed = true;
           recovered.push({ index: slot.index, reason });
@@ -1902,7 +1905,7 @@ async function reconcilePool() {
             await saveExternalClearOffload(slot.sessionId, slot.pid);
           }
           slot.sessionId = sessionId;
-          slot.status = "fresh";
+          slot.status = POOL_STATUS.FRESH;
           changed = true;
         }
       }
@@ -2101,7 +2104,7 @@ async function poolDestroy() {
     }
     // Archive non-archived offloaded sessions so they don't linger in Recent
     for (const s of await getOffloadedSessions()) {
-      if (s.status === "offloaded") await archiveSession(s.sessionId);
+      if (s.status === STATUS.OFFLOADED) await archiveSession(s.sessionId);
     }
   });
 }
@@ -2135,7 +2138,7 @@ async function poolClean() {
   const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
   const idleSlots = pool.slots.filter((s) => {
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "idle";
+    return session && session.status === STATUS.IDLE;
   });
   let cleaned = 0;
   for (const slot of idleSlots) {
@@ -2144,7 +2147,7 @@ async function poolClean() {
     const currentSession = currentSessions.find(
       (s) => s.sessionId === slot.sessionId,
     );
-    if (!currentSession || currentSession.status !== "idle") {
+    if (!currentSession || currentSession.status !== STATUS.IDLE) {
       continue;
     }
     await offloadSession(slot.sessionId, slot.termId, null, {
@@ -2164,16 +2167,16 @@ async function poolClean() {
 function findOffloadTarget(pool, sessionMap) {
   // Only truly fresh slots count — typing sessions (user has started composing) are not available
   const hasFresh = pool.slots.some((s) => {
-    if (s.status === "fresh") return true;
+    if (s.status === POOL_STATUS.FRESH) return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "fresh";
+    return session && session.status === STATUS.FRESH;
   });
   if (hasFresh) return null;
 
   const idleSlots = pool.slots.filter((s) => {
     if (isSlotPinned(s)) return false;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "idle";
+    return session && session.status === STATUS.IDLE;
   });
   if (idleSlots.length === 0)
     throw new Error("No fresh or idle slots available");
@@ -2225,9 +2228,9 @@ async function withFreshSlot(claimFn) {
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
     const slot = pool.slots.find((s) => {
-      if (s.status === "fresh") return true;
+      if (s.status === POOL_STATUS.FRESH) return true;
       const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-      return session && session.status === "fresh";
+      return session && session.status === STATUS.FRESH;
     });
     if (!slot) throw new Error("No fresh slots available");
 
@@ -2256,7 +2259,7 @@ async function poolResume(sessionId) {
       console.error("[main] /resume command failed:", err.message);
       throw err; // slot stays fresh (withFreshSlot default)
     }
-    slot.status = "busy";
+    slot.status = POOL_STATUS.BUSY;
     writePool(pool);
 
     // Track slot in background (session ID polling after /resume)
@@ -2264,7 +2267,7 @@ async function poolResume(sessionId) {
       { termId: slot.termId, pid: slot.pid },
       {
         excludeId: oldSlotSessionId,
-        expectedStatus: "busy",
+        expectedStatus: POOL_STATUS.BUSY,
         skipTrustPrompt: true,
         skipFreshSignal: true,
         onResolved: async (newSessionId) => {
@@ -3001,10 +3004,10 @@ app.whenReady().then(async () => {
     const sessions = await getSessions();
     const session = sessions.find((s) => s.sessionId === slot.sessionId);
     if (!session) return slot.status;
-    if (session.status === "idle") return "idle";
-    if (session.status === "processing") return "busy";
-    if (session.status === "fresh") return "fresh";
-    if (session.status === "typing") return "typing";
+    if (session.status === STATUS.IDLE) return POOL_STATUS.IDLE;
+    if (session.status === STATUS.PROCESSING) return POOL_STATUS.BUSY;
+    if (session.status === STATUS.FRESH) return POOL_STATUS.FRESH;
+    if (session.status === STATUS.TYPING) return STATUS.TYPING;
     return slot.status;
   }
 
@@ -3013,7 +3016,7 @@ app.whenReady().then(async () => {
       async () => {
         const sessions = await getSessions();
         const session = sessions.find((s) => s.sessionId === sessionId);
-        if (session && session.status === "idle") return true;
+        if (session && session.status === STATUS.IDLE) return true;
         if (session && !session.alive) throw new Error("Session process died");
         return null;
       },
@@ -3101,7 +3104,7 @@ app.whenReady().then(async () => {
       if (!msg.prompt) throw new Error("prompt required");
       const result = await withFreshSlot(async (pool, slot) => {
         await sendPromptToTerminal(slot.termId, msg.prompt);
-        slot.status = "busy";
+        slot.status = POOL_STATUS.BUSY;
         writePool(pool);
 
         return {
@@ -3131,11 +3134,11 @@ app.whenReady().then(async () => {
         const { pool, slot } = findSlotBySessionId(msg.sessionId);
 
         const status = await getEffectiveSlotStatus(slot);
-        if (status !== "idle")
+        if (status !== POOL_STATUS.IDLE)
           throw new Error(`Session is ${status}, expected idle`);
 
         await sendPromptToTerminal(slot.termId, msg.prompt);
-        slot.status = "busy";
+        slot.status = POOL_STATUS.BUSY;
         writePool(pool);
 
         return {
@@ -3177,7 +3180,7 @@ app.whenReady().then(async () => {
               const session = sessions.find(
                 (s) => s.sessionId === slot.sessionId,
               );
-              if (session && session.status === "idle") return slot;
+              if (session && session.status === STATUS.IDLE) return slot;
               if (session && !session.alive)
                 throw new Error("Session process died");
               return null;
@@ -3199,7 +3202,7 @@ app.whenReady().then(async () => {
       // No sessionId or slotIndex: wait for any busy session to become idle
       const pool = readPool();
       if (!pool) throw new Error("Pool not initialized");
-      const busySlots = pool.slots.filter((s) => s.status === "busy");
+      const busySlots = pool.slots.filter((s) => s.status === POOL_STATUS.BUSY);
       if (busySlots.length === 0)
         throw new Error("No busy sessions to wait for");
 
@@ -3210,7 +3213,7 @@ app.whenReady().then(async () => {
             const session = sessions.find(
               (sess) => sess.sessionId === s.sessionId,
             );
-            if (session && session.status === "idle") return s;
+            if (session && session.status === STATUS.IDLE) return s;
           }
           return null;
         },
@@ -3240,7 +3243,7 @@ app.whenReady().then(async () => {
     "pool-result": async (msg) => {
       const { slot } = resolveSlot(msg);
       const status = await getEffectiveSlotStatus(slot);
-      if (status === "busy" || status === "processing") {
+      if (status === POOL_STATUS.BUSY || status === STATUS.PROCESSING) {
         throw new Error("Session is still running");
       }
       const buffer = await getTerminalBuffer(slot.termId);
