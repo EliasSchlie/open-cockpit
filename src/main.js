@@ -250,7 +250,7 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
   return hasIntentionContent || hasTermInput ? "typing" : "fresh";
 }
 
-// Cache hasUserInput results (transcript -> true, once true stays true)
+// Cache transcriptContains results (key -> true, once true stays true)
 const userInputCache = new Map();
 
 const { parseOrigins } = require("./parse-origins");
@@ -438,17 +438,16 @@ async function getIdleSignal(pid) {
   }
 }
 
-// Check if a session's JSONL transcript contains any human turn.
-// Uses the transcript path from the idle signal to avoid a `find` call.
-async function hasUserInput(transcriptPath) {
+// Check if a JSONL transcript contains a given needle string.
+// Reads in 64KB chunks to avoid loading the entire file into memory.
+async function transcriptContains(transcriptPath, needle) {
   if (!transcriptPath) return false;
-  if (userInputCache.get(transcriptPath)) return true;
+  const cacheKey = transcriptPath + "\0" + needle;
+  if (userInputCache.get(cacheKey)) return true;
   try {
-    // Read in chunks — check early lines first (human turns appear near the start)
     const fh = await fs.promises.open(transcriptPath, "r");
     const buf = Buffer.alloc(64 * 1024); // 64KB chunks
     let offset = 0;
-    const needle = '"type":"user"';
     try {
       let result;
       while (
@@ -456,7 +455,7 @@ async function hasUserInput(transcriptPath) {
         result.bytesRead > 0
       ) {
         if (buf.toString("utf-8", 0, result.bytesRead).includes(needle)) {
-          userInputCache.set(transcriptPath, true);
+          userInputCache.set(cacheKey, true);
           return true;
         }
         offset += result.bytesRead;
@@ -681,7 +680,11 @@ async function getSessionsUncached() {
       // local commands (e.g. /model, /help) write to the JSONL without triggering
       // hooks, which would cause permanent false "processing" detection.
       idleTs = idleSignal.ts || 0;
-      if (!(await hasUserInput(idleSignal.transcript))) {
+      // Use "assistant" needle — post-/clear transcripts have "user" entries
+      // from local-command metadata but never assistant responses.
+      if (
+        !(await transcriptContains(idleSignal.transcript, '"type":"assistant"'))
+      ) {
         status = freshOrTyping(hasIntentionContent, hasTermInput);
       } else {
         status = "idle";
@@ -719,7 +722,9 @@ async function getSessionsUncached() {
           );
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
-        status = (await hasUserInput(jsonlPath))
+        // Use "user" needle — this path only runs when idle signal is absent
+        // (prompt just submitted), so "user" entries are real, not /clear artifacts.
+        status = (await transcriptContains(jsonlPath, '"type":"user"'))
           ? "processing"
           : freshOrTyping(hasIntentionContent, hasTermInput);
       }
@@ -917,11 +922,16 @@ async function getSessionsUncached() {
     if (!liveIds.has(id)) jsonlSizeTracker.delete(id);
   }
 
-  // Add offloaded/archived sessions, skip if live session exists
+  // Add offloaded/archived sessions, skip if live session exists.
+  // If a live session has the same ID as an offloaded one (e.g. /clear kept
+  // the same UUID), remove the stale offload data from disk.
   for (const offloaded of await getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
       if (!offloaded.origin) offloaded.origin = "pool";
       sessions.push(offloaded);
+    } else if (!offloaded.archived) {
+      // Live session supersedes non-archived offload data — clean up
+      removeOffloadData(offloaded.sessionId);
     }
   }
 
