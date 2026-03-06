@@ -446,7 +446,7 @@ function getActiveTermIndex() {
     const leafId = dock.getTabLeafId(tabId);
     if (leafId && dock.getActiveTabInLeaf(leafId) === tabId) return i;
   }
-  return terminals.length > 0 ? 0 : -1;
+  return -1;
 }
 // Generation counter to detect stale async operations after session switches
 let sessionGeneration = 0;
@@ -692,9 +692,7 @@ async function closeTerminal(index) {
   const entry = terminals[index];
   if (entry.isPoolTui) return; // Can't close the main Claude terminal
   await window.api.ptyDetach(entry.termId).catch(() => {});
-  if (!entry.isPoolTui) {
-    await window.api.ptyKill(entry.termId);
-  }
+  await window.api.ptyKill(entry.termId);
   disposeTerminalEntry(entry, dock);
   terminals.splice(index, 1);
 
@@ -710,12 +708,8 @@ async function closeTerminal(index) {
 function hideCurrentTerminals() {
   removeInlineSnapshot();
   if (currentSessionId && terminals.length > 0) {
+    syncSessionCache();
     for (const entry of terminals) teardownTerminalResize(entry);
-    sessionTerminals.set(currentSessionId, {
-      terminals: [...terminals],
-      dockLayout: dock ? dock.getLayout() : null,
-      lastAccessed: Date.now(),
-    });
   }
   terminals = [];
   shellCounter = 0;
@@ -1458,6 +1452,7 @@ async function selectSession(session) {
   if (saveStatus) saveStatus.textContent = "";
 
   await window.api.watchIntention(session.sessionId);
+  if (gen !== sessionGeneration) return;
 
   // Auto-focus the Claude terminal so the user can type immediately
   focusTerminal();
@@ -1763,8 +1758,10 @@ function toggleSidebar() {
 // --- Focus management ---
 function focusTerminal() {
   const idx = getActiveTermIndex();
-  if (idx >= 0 && terminals[idx]) {
-    terminals[idx].term.focus();
+  const entry = idx >= 0 ? terminals[idx] : terminals[0];
+  if (entry) {
+    if (entry.dockTabId && dock) dock.activateTab(entry.dockTabId);
+    entry.term.focus();
   }
 }
 

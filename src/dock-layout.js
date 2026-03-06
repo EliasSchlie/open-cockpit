@@ -374,6 +374,7 @@ export class DockLayout {
         node.activeTab = i;
         this._showActiveContent(node, el);
         this._updateTabActive(tabList, i);
+        window.dispatchEvent(new Event("dock-resize"));
         if (this.callbacks.onTabActivate) this.callbacks.onTabActivate(tabId);
       });
 
