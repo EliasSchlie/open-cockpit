@@ -95,6 +95,7 @@ export class DockLayout {
     this._updateTabActive(tabList, targetLeaf.activeTab);
     this._showActiveContent(targetLeaf, leafEl);
     window.dispatchEvent(new Event("dock-resize"));
+    if (this.callbacks.onTabActivate) this.callbacks.onTabActivate(tabId);
   }
 
   getTabLeafId(tabId) {
