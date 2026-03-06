@@ -129,4 +129,31 @@ describe("parseTerminalHasInput", () => {
   it("returns false for buffer without prompt", async () => {
     expect(await parseTerminalHasInput("just some text\r\n", 80)).toBe(false);
   });
+
+  // Regression: pollTerminalInput previously used per-slot `read-buffer` daemon
+  // requests that silently failed (returning "") when the daemon didn't support
+  // that command. This caused parseTerminalHasInput to always return false,
+  // hiding typed text. The fix uses `list` (which returns all buffers) instead.
+  // This test verifies the core invariant: a buffer with visible text after the
+  // prompt MUST return true, never be silently swallowed by empty-string fallback.
+  it("never misses input when given the actual buffer (regression: silent empty fallback)", async () => {
+    const bufferWithText = [
+      "\x1b[2J\x1b[H",
+      " ▐▛███▜▌   Claude Code v2.1.69\r\n",
+      "▝▜█████▛▘  Opus 4.6 · Claude Max\r\n",
+      "  ▘▘ ▝▝    /Users/test\r\n",
+      "\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+      "❯ implement the feature\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+    ].join("");
+
+    // With the actual buffer: must detect input
+    expect(await parseTerminalHasInput(bufferWithText)).toBe(true);
+
+    // With empty string (what readTerminalBuffer returned on daemon error):
+    // must NOT detect input — this is correct behavior, but the bug was that
+    // pollTerminalInput always got empty strings due to silent daemon errors
+    expect(await parseTerminalHasInput("")).toBe(false);
+  });
 });

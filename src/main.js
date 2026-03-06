@@ -156,6 +156,8 @@ const TERMINAL_POLL_MS = 10_000;
 
 // Poll fresh pool slots for terminal input by parsing their PTY buffers.
 // Runs periodically to keep terminalHasInputCache in sync with ground truth.
+// Uses `list` (returns all PTY buffers in one call) instead of per-slot
+// `read-buffer` to work with any daemon version.
 let pollInFlight = false;
 async function pollTerminalInput() {
   if (pollInFlight) return;
@@ -167,17 +169,45 @@ async function pollTerminalInput() {
     const freshSlots = pool.slots.filter((s) => s.status === "fresh");
     if (freshSlots.length === 0) return;
 
+    // Single daemon call to get all terminal buffers
+    let ptys;
+    try {
+      const resp = await daemonRequest({ type: "list" });
+      ptys = resp.ptys || [];
+    } catch (err) {
+      debugLog("main", "pollTerminalInput: daemon unavailable", err.message);
+      return;
+    }
+
+    const freshTermIds = new Set(freshSlots.map((s) => s.termId));
+    const ptyTermIds = new Set(ptys.map((p) => p.termId));
+
+    // Parse fresh-slot buffers in parallel
+    const freshPtys = ptys.filter((p) => freshTermIds.has(p.termId));
+    const results = await Promise.all(
+      freshPtys.map(async (pty) => ({
+        termId: pty.termId,
+        hasInput: await parseTerminalHasInput(pty.buffer || ""),
+      })),
+    );
+
     let changed = false;
-    for (const slot of freshSlots) {
-      const buffer = await readTerminalBuffer(slot.termId);
-      const hasInput = await parseTerminalHasInput(buffer);
-      const prev = terminalHasInputCache.get(slot.termId) || false;
+    for (const { termId, hasInput } of results) {
+      const prev = terminalHasInputCache.get(termId) || false;
       if (hasInput !== prev) {
         if (hasInput) {
-          terminalHasInputCache.set(slot.termId, true);
+          terminalHasInputCache.set(termId, true);
         } else {
-          terminalHasInputCache.delete(slot.termId);
+          terminalHasInputCache.delete(termId);
         }
+        changed = true;
+      }
+    }
+
+    // Clear stale cache entries for fresh slots whose PTY disappeared
+    for (const termId of freshTermIds) {
+      if (!ptyTermIds.has(termId) && terminalHasInputCache.has(termId)) {
+        terminalHasInputCache.delete(termId);
         changed = true;
       }
     }
