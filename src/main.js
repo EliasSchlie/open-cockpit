@@ -2760,7 +2760,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("get-sessions", async () => {
     const sessions = await getSessions();
-    syncPoolStatuses(sessions);
+    await syncPoolStatuses(sessions);
     // Enrich with pinned status and session graph
     const pool = readPool();
     if (pool) {
