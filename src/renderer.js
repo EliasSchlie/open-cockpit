@@ -794,7 +794,7 @@ const STATUS_CLASSES = {
 
 // Build a fingerprint for a session to detect changes
 function sessionFingerprint(s) {
-  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.cwd || ""}|${s.origin || ""}`;
+  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}`;
 }
 
 // Track previous session fingerprints for diff-based updates
@@ -910,7 +910,7 @@ function createSessionItem(s) {
     <div class="session-item-content">
       <div class="session-project">
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
-        ${isPreview ? `<span class="session-preview">${escapeHtml(heading)}</span>` : escapeHtml(heading || "No intention yet")}
+        <span class="session-title${isPreview ? " session-preview" : ""}">${escapeHtml(heading || "No intention yet")}</span>
         ${originTag}${staleTag}
       </div>
       <div class="session-cwd">${escapeHtml(dp)}</div>
@@ -1534,10 +1534,31 @@ function updateTypingState() {
   if (!session || (session.status !== "fresh" && session.status !== "typing")) {
     return;
   }
-  // Sidebar will refresh after the debounced save writes the file
-  // Main process detects content from the file, so just invalidate
+  // Immediately update sidebar preview from local editor content (no round-trip)
+  updateTypingPreview();
+  // Also schedule full refresh so main process picks up the status change
   clearTimeout(typingRefreshTimeout);
   typingRefreshTimeout = setTimeout(invalidateSidebar, 600); // after 500ms save debounce
+}
+
+// Update the current session's sidebar preview directly from local editor content
+function updateTypingPreview() {
+  if (!currentSessionId || !editorView) return;
+  const li = sessionList.querySelector(
+    `[data-session-id="${currentSessionId}"]`,
+  );
+  if (!li) return;
+  const titleSpan = li.querySelector(".session-title");
+  if (!titleSpan) return;
+  const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
+  if (!session || session.intentionHeading) return;
+  const raw = editorView.state.doc.toString().trim();
+  const preview = raw
+    .replace(/^#\s+.*\n?/, "")
+    .trim()
+    .slice(0, 80);
+  titleSpan.textContent = preview || "No intention yet";
+  titleSpan.classList.toggle("session-preview", !!preview);
 }
 
 // Handle external file changes
