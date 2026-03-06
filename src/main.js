@@ -1573,7 +1573,7 @@ async function acceptTrustPrompt(termId) {
 let _poolLock = Promise.resolve();
 let _poolLockHeld = false;
 function withPoolLock(fn) {
-  const p = _poolLock.then(() => {
+  const p = _poolLock.then(async () => {
     if (_poolLockHeld) {
       throw new Error(
         "withPoolLock called while lock is held — nested calls deadlock. " +
@@ -1581,9 +1581,11 @@ function withPoolLock(fn) {
       );
     }
     _poolLockHeld = true;
-    return Promise.resolve(fn()).finally(() => {
+    try {
+      return await fn();
+    } finally {
       _poolLockHeld = false;
-    });
+    }
   });
   _poolLock = p.catch(() => {}); // keep chain alive on errors
   return p;
@@ -2224,12 +2226,13 @@ async function poolResume(sessionId) {
   const claudeSessionId = meta.claudeSessionId || meta.sessionId;
   if (!claudeSessionId) throw new Error("No Claude session ID stored");
 
-  if (meta.archived) {
-    unarchiveSession(sessionId);
-  }
+  const wasArchived = !!meta.archived;
 
-  // Atomically ensure a fresh slot and claim it for /resume
+  // Atomically ensure a fresh slot and claim it for /resume.
+  // Unarchive only after the slot is claimed — if withFreshSlot fails,
+  // the session stays archived instead of getting stuck in recents.
   return withFreshSlot(async (pool, slot) => {
+    if (wasArchived) unarchiveSession(sessionId);
     const oldSlotSessionId = slot.sessionId;
 
     try {
