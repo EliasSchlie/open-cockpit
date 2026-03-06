@@ -7,7 +7,12 @@ description: Use when needing to run shell commands, check server output, or do 
 
 Your session has **terminal tabs** visible in the Open Cockpit sidebar. Tab 0 is the Claude TUI (you). Additional tabs are persistent shells — the user can see, type into, and read them in real-time, and so can you.
 
-All `cockpit-cli term` commands auto-detect your session ID — no target argument needed.
+The CLI lives at `~/.open-cockpit/bin/cockpit-cli`. All `term` commands auto-detect your session ID — no target argument needed.
+
+**First, set up an alias** (run once per session):
+```bash
+alias cockpit-cli=~/.open-cockpit/bin/cockpit-cli
+```
 
 ## Quick Start
 

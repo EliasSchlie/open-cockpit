@@ -700,6 +700,78 @@ describe("cockpit-cli", () => {
     });
   });
 
+  describe("socket auto-detection", () => {
+    it("falls back to api-dev.sock when api.sock missing", async () => {
+      // Move api.sock to api-dev.sock
+      const ocDir = path.join(TMP_DIR, ".open-cockpit");
+      const prodSock = path.join(ocDir, "api.sock");
+      const devSock = path.join(ocDir, "api-dev.sock");
+      fs.renameSync(prodSock, devSock);
+
+      try {
+        const r = await runCli(["ping"]);
+        expect(r.code).toBe(0);
+        expect(r.stdout).toContain("pong");
+      } finally {
+        // Restore
+        fs.renameSync(devSock, prodSock);
+      }
+    });
+
+    it("prefers api.sock when both exist", async () => {
+      // Create a dev socket that returns a different response
+      const ocDir = path.join(TMP_DIR, ".open-cockpit");
+      const devSock = path.join(ocDir, "api-dev.sock");
+      const devServer = net.createServer((socket) => {
+        socket.on("data", () => {
+          socket.write(
+            JSON.stringify({ type: "error", error: "wrong socket" }) + "\n",
+          );
+        });
+      });
+
+      await new Promise((resolve) => devServer.listen(devSock, resolve));
+
+      try {
+        // api.sock exists and works, so it should be preferred
+        const r = await runCli(["ping"]);
+        expect(r.code).toBe(0);
+        expect(r.stdout).toContain("pong");
+      } finally {
+        devServer.close();
+      }
+    });
+
+    it("respects COCKPIT_SOCKET env override", async () => {
+      const ocDir = path.join(TMP_DIR, ".open-cockpit");
+      const customSock = path.join(ocDir, "custom.sock");
+      const customServer = net.createServer((socket) => {
+        let buf = "";
+        socket.on("data", (chunk) => {
+          buf += chunk.toString();
+          let idx;
+          while ((idx = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, idx);
+            buf = buf.slice(idx + 1);
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            socket.write(JSON.stringify({ type: "pong", id: msg.id }) + "\n");
+          }
+        });
+      });
+
+      await new Promise((resolve) => customServer.listen(customSock, resolve));
+
+      try {
+        const r = await runCli(["ping"], { COCKPIT_SOCKET: customSock });
+        expect(r.code).toBe(0);
+        expect(r.stdout).toContain("pong");
+      } finally {
+        customServer.close();
+      }
+    });
+  });
+
   describe("help", () => {
     it("shows help text", async () => {
       const r = await runCli(["help"]);
