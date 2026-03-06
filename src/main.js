@@ -1205,6 +1205,17 @@ function recordSessionRelation(sessionId, parentSessionId, initiator) {
   writeSessionGraph(graph);
 }
 
+function enrichSessionsWithGraphData(sessions) {
+  const graph = readSessionGraph();
+  for (const s of sessions) {
+    const rel = graph[s.sessionId];
+    if (rel) {
+      s.parentSessionId = rel.parentSessionId;
+      s.initiator = rel.initiator;
+    }
+  }
+}
+
 // Write offload metadata (and optional snapshot) to disk for a session.
 async function writeOffloadMeta(
   sessionId,
@@ -2474,14 +2485,7 @@ app.whenReady().then(async () => {
         if (slot?.pinnedUntil) s.pinnedUntil = slot.pinnedUntil;
       }
     }
-    const graph = readSessionGraph();
-    for (const s of sessions) {
-      const rel = graph[s.sessionId];
-      if (rel) {
-        s.parentSessionId = rel.parentSessionId;
-        s.initiator = rel.initiator;
-      }
-    }
+    enrichSessionsWithGraphData(sessions);
     return sessions;
   });
   ipcMain.handle("read-intention", (_e, sessionId) => {
@@ -2720,14 +2724,7 @@ app.whenReady().then(async () => {
     ping: async () => ({ type: "pong" }),
     "get-sessions": async () => {
       const sessions = await getSessions();
-      const graph = readSessionGraph();
-      for (const s of sessions) {
-        const rel = graph[s.sessionId];
-        if (rel) {
-          s.parentSessionId = rel.parentSessionId;
-          s.initiator = rel.initiator;
-        }
-      }
+      enrichSessionsWithGraphData(sessions);
       return { type: "sessions", sessions };
     },
     "pool-init": async (msg) => ({

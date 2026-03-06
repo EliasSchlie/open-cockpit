@@ -53,32 +53,18 @@ detect_parent_session() {
   echo ""
 }
 
-# Extract last assistant response from JSONL transcript
+# Extract last assistant response from JSONL transcript. Args: <jsonl_path>
 parse_jsonl_response() {
-  local session_id="$1"
-  local jsonl_path
-  jsonl_path=$(find_jsonl "$session_id")
-  if [[ -z "$jsonl_path" ]]; then
-    echo "(no transcript found)" >&2
-    return 1
-  fi
-  tail -50 "$jsonl_path" | jq -rs '
+  tail -50 "$1" | jq -rs '
     [.[] | select(.type == "assistant") |
       (.message.content // []) | map(select(.type == "text") | .text) | join("\n")
     ] | last // "(no response)"
   '
 }
 
-# Extract full conversation from JSONL transcript
+# Extract full conversation from JSONL transcript. Args: <jsonl_path>
 parse_jsonl_conversation() {
-  local session_id="$1"
-  local jsonl_path
-  jsonl_path=$(find_jsonl "$session_id")
-  if [[ -z "$jsonl_path" ]]; then
-    echo "(no transcript found)" >&2
-    return 1
-  fi
-  tail -200 "$jsonl_path" | jq -r '
+  tail -200 "$1" | jq -r '
     if .type == "user" then
       (.message.content // .message) as $c |
       if ($c | type) == "string" then
@@ -104,8 +90,19 @@ apply_verbosity() {
   case "$VERBOSITY" in
     raw) printf '%s' "$raw_buffer" ;;
     full) printf '%s' "$raw_buffer" | strip_ansi ;;
-    response) parse_jsonl_response "$session_id" ;;
-    conversation) parse_jsonl_conversation "$session_id" ;;
+    response|conversation)
+      local jsonl_path
+      jsonl_path=$(find_jsonl "$session_id")
+      if [[ -z "$jsonl_path" ]]; then
+        echo "(no transcript found)" >&2
+        return 1
+      fi
+      if [[ "$VERBOSITY" == "response" ]]; then
+        parse_jsonl_response "$jsonl_path"
+      else
+        parse_jsonl_conversation "$jsonl_path"
+      fi
+      ;;
     *) echo "Unknown verbosity: $VERBOSITY" >&2; exit 1 ;;
   esac
 }
