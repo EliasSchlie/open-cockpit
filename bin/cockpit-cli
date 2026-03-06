@@ -658,7 +658,7 @@ case "$CMD" in
     else
       json="{\"type\":\"pool-start\",\"id\":1,\"prompt\":$PROMPT_JSON}"
     fi
-    RESULT=$(send_api "$json")
+    RESULT=$(send_api "$json" 60)
     check_error "$RESULT"
     SESSION_ID=$(json_field "$RESULT" "sessionId")
 

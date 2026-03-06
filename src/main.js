@@ -2994,13 +2994,15 @@ app.whenReady().then(async () => {
       const stopPid = slot.pid;
       const stopSessionId = msg.sessionId;
       if (stopPid) {
-        setTimeout(() => {
+        setTimeout(async () => {
           const sigFile = path.join(IDLE_SIGNALS_DIR, String(stopPid));
           if (fs.existsSync(sigFile)) return; // hook already wrote it
+          const transcript = (await findJsonlPath(stopSessionId)) || "";
+          const cwd = (await getCwdFromJsonl(stopSessionId)) || "";
           const signal = JSON.stringify({
-            cwd: "",
+            cwd,
             session_id: stopSessionId,
-            transcript: "",
+            transcript,
             ts: Math.floor(Date.now() / 1000),
             trigger: "api-stop",
           });
