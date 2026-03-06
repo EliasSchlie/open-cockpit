@@ -2894,9 +2894,12 @@ app.whenReady().then(async () => {
 
       // Wait by slot index (used by resume --block where session ID changes)
       if (msg.slotIndex !== undefined) {
+        // Validate slot exists before entering poll loop
+        findSlotByIndex(msg.slotIndex);
         try {
           const result = await poll(
             async () => {
+              // Re-read pool each iteration: sessionId changes after /resume
               const pool = readPool();
               const slot = pool?.slots?.[msg.slotIndex];
               if (!slot?.sessionId) return null;
