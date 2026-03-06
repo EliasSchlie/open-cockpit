@@ -190,7 +190,7 @@ case "$CMD" in
             .status,
             (.origin // "?"),
             (.project // "-"),
-            (if .intentionHeading then (.intentionHeading | .[0:50]) else "-" end),
+            (if .intentionHeading then (.intentionHeading | .[0:50]) elif .intentionPreview then (.intentionPreview | .[0:50]) else "-" end),
             (.sessionId | .[0:8])
           ] | @tsv
         )
