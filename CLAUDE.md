@@ -199,7 +199,7 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 
 ### Archiving
 
-- **Auto-archive**: All dead sessions (including external) are auto-archived. Previously only dead sessions with intentions were archived.
+- **Auto-archive**: Dead sessions with an intention heading are auto-archived. Sessions that were never used (no intention, no snapshot) are silently discarded to avoid archive spam.
 - **Manual archive**: Right-click any session → "Archive". Pool sessions are auto-offloaded (snapshot + `/clear`) before archiving.
 - **Sidebar**: Archive section appears below Processing. Archived sessions are dimmed.
 - **Resume**: Click an archived session → "Restart Session" dialog → acquires a fresh pool slot, runs `/resume <uuid>`, moves back to Recent.
