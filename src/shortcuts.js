@@ -30,6 +30,7 @@ const DEFAULT_SHORTCUTS = {
   "focus-external": "CmdOrCtrl+O",
   "jump-recent-idle": "CmdOrCtrl+J",
   "archive-current-session": "CmdOrCtrl+D",
+  "open-in-cursor": "Ctrl+Alt+Cmd+C",
   "toggle-command-palette": "CmdOrCtrl+/",
   // Dock panel management
   "focus-next-pane": "CmdOrCtrl+Alt+]",

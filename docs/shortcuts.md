@@ -53,6 +53,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+E` | Focus Editor |
 | `` Cmd+` `` | Focus Terminal |
 | `Cmd+O` | Focus External Terminal |
+| `Ctrl+Alt+Cmd+C` | Open in Cursor |
 | `Escape` | Focus Terminal |
 | `Cmd+/` | Command Palette |
 | `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
