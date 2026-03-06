@@ -36,6 +36,7 @@ const {
   resolveSlot: resolveSlotInPool,
 } = require("./pool");
 const { Terminal: HeadlessTerminal } = require("@xterm/headless");
+const { createPoolLock } = require("./pool-lock");
 
 // Secure file helpers — restrict to owner-only access
 function secureMkdirSync(dirPath, opts = {}) {
@@ -1567,29 +1568,7 @@ async function acceptTrustPrompt(termId) {
   }
 }
 
-// Async mutex for pool.json read-modify-write cycles.
-// Serializes all concurrent access to prevent lost updates.
-// NOT reentrant — calling withPoolLock from inside withPoolLock will deadlock.
-let _poolLock = Promise.resolve();
-let _poolLockHeld = false;
-function withPoolLock(fn) {
-  const p = _poolLock.then(async () => {
-    if (_poolLockHeld) {
-      throw new Error(
-        "withPoolLock called while lock is held — nested calls deadlock. " +
-          "Restructure to avoid nesting (see withFreshSlot pattern).",
-      );
-    }
-    _poolLockHeld = true;
-    try {
-      return await fn();
-    } finally {
-      _poolLockHeld = false;
-    }
-  });
-  _poolLock = p.catch(() => {}); // keep chain alive on errors
-  return p;
-}
+const { withPoolLock } = createPoolLock();
 
 // Cached claude binary path — resolved once, reused for all spawns.
 let _cachedClaudePath = null;
@@ -2226,13 +2205,11 @@ async function poolResume(sessionId) {
   const claudeSessionId = meta.claudeSessionId || meta.sessionId;
   if (!claudeSessionId) throw new Error("No Claude session ID stored");
 
-  const wasArchived = !!meta.archived;
-
   // Atomically ensure a fresh slot and claim it for /resume.
   // Unarchive only after the slot is claimed — if withFreshSlot fails,
   // the session stays archived instead of getting stuck in recents.
   return withFreshSlot(async (pool, slot) => {
-    if (wasArchived) unarchiveSession(sessionId);
+    if (readOffloadMeta(sessionId)?.archived) unarchiveSession(sessionId);
     const oldSlotSessionId = slot.sessionId;
 
     try {

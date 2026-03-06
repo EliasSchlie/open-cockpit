@@ -2,7 +2,9 @@
 // Serializes all concurrent access to prevent lost updates.
 // NOT reentrant — calling withPoolLock from inside withPoolLock will deadlock.
 
-export function createPoolLock() {
+module.exports = { createPoolLock };
+
+function createPoolLock() {
   let _poolLock = Promise.resolve();
   let _poolLockHeld = false;
 
@@ -21,7 +23,10 @@ export function createPoolLock() {
         _poolLockHeld = false;
       }
     });
-    _poolLock = p.catch(() => {}); // keep chain alive on errors
+    _poolLock = p.then(
+      () => {},
+      () => {},
+    ); // keep chain alive, don't retain resolved values
     return p;
   }
 
