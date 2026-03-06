@@ -489,6 +489,30 @@ async function getOffloadedSessions() {
       if (!meta) continue;
       const snapshotFile = path.join(OFFLOADED_DIR, dir, "snapshot.log");
       const hasSnapshot = fs.existsSync(snapshotFile);
+
+      // Delete empty sessions (no snapshot + no intention) — they were never used
+      if (!hasSnapshot && !meta.intentionHeading) {
+        try {
+          fs.rmSync(path.join(OFFLOADED_DIR, dir), { recursive: true });
+          // Clean up empty intention file if it exists
+          const intentionPath = path.join(INTENTIONS_DIR, `${dir}.md`);
+          try {
+            const stat = fs.statSync(intentionPath);
+            if (stat.size === 0) fs.unlinkSync(intentionPath);
+          } catch {
+            /* no file or non-empty */
+          }
+        } catch (err) {
+          debugLog(
+            "main",
+            "failed to clean up empty session",
+            dir,
+            err.message,
+          );
+        }
+        continue;
+      }
+
       // Sessions without a snapshot can't be meaningfully resumed — treat as archived
       const isArchived = meta.archived || !hasSnapshot;
       if (!meta.archived && !hasSnapshot) {
@@ -774,6 +798,30 @@ async function getSessionsUncached() {
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
+      // Skip archiving sessions that were never used (no intention = no user prompt)
+      if (!s.intentionHeading) {
+        try {
+          fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(s.pid)));
+        } catch (err) {
+          debugLog(
+            "main",
+            "failed to remove dead PID file",
+            s.pid,
+            err.message,
+          );
+        }
+        // Clean up empty intention file if it exists
+        try {
+          const intentionPath = path.join(INTENTIONS_DIR, `${s.sessionId}.md`);
+          const stat = fs.statSync(intentionPath);
+          if (stat.size === 0) fs.unlinkSync(intentionPath);
+        } catch {
+          /* no intention file or non-empty — fine */
+        }
+        sessions.splice(i, 1);
+        continue;
+      }
+
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
