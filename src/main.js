@@ -241,11 +241,6 @@ function triggerPollOnWrite(termId) {
   }, TERMINAL_WRITE_DEBOUNCE_MS);
 }
 
-// Check if an intention file has non-whitespace content (reuses readIntention below)
-function intentionHasContent(sessionId) {
-  return !!readIntention(sessionId).trim();
-}
-
 function freshOrTyping(hasIntentionContent, hasTermInput) {
   return hasIntentionContent || hasTermInput ? "typing" : "fresh";
 }
@@ -665,9 +660,8 @@ async function getSessionsUncached() {
     let staleIdle = false;
     const poolSlot = poolSlotMap.get(sessionId);
     // Only check intention content for pool sessions (avoids unnecessary file reads for external/idle)
-    const hasIntentionContent = poolSlot
-      ? intentionHasContent(sessionId)
-      : false;
+    const intentionContent = poolSlot ? readIntention(sessionId).trim() : "";
+    const hasIntentionContent = !!intentionContent;
     const hasTermInput = !!(
       poolSlot && terminalHasInputCache.get(poolSlot.termId)
     );
@@ -729,10 +723,9 @@ async function getSessionsUncached() {
     // Build a preview of typed text for "typing" sessions with no heading
     let intentionPreview = null;
     if (status === "typing" && !intentionHeading) {
-      if (hasIntentionContent) {
-        const raw = readIntention(sessionId).trim();
+      if (intentionContent) {
         // Strip markdown heading if present (shouldn't be, but defensive)
-        const preview = raw.replace(/^#\s+.*\n?/, "").trim();
+        const preview = intentionContent.replace(/^#\s+.*\n?/, "").trim();
         if (preview) intentionPreview = preview.slice(0, 80);
       }
       if (!intentionPreview && hasTermInput) {
