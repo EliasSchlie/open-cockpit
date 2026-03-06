@@ -54,7 +54,8 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/shortcuts.json` — User keyboard shortcut overrides (only non-default values)
 - `~/.open-cockpit/setup-scripts/` — Setup script files for Cmd+N picker
 - `~/.open-cockpit/debug.log` — Debug log (both main + renderer, rotates at 2 MB)
-- `~/.open-cockpit/api.sock` — Programmatic API Unix socket
+- `~/.open-cockpit/api.sock` — Programmatic API Unix socket (production)
+- `~/.open-cockpit/api-dev.sock` — API socket for dev instances (isolated from production)
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
 
