@@ -1979,6 +1979,87 @@ window.api.onCloseTerminalTab(() => {
   if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
 });
 
+// API-spawned terminal: attach to it and show a tab (if it belongs to current session)
+window.api.onApiTermOpened(async (sessionId, termId) => {
+  if (sessionId !== currentSessionId) return;
+  // Check not already attached
+  if (terminals.some((t) => t.termId === termId)) return;
+
+  const container = document.createElement("div");
+  container.style.cssText = "width:100%;height:100%;display:none;";
+  terminalMount.appendChild(container);
+
+  const term = createTerminal();
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+
+  const entry = {
+    termId,
+    pid: null,
+    term,
+    fitAddon,
+    resizeObserver: null,
+    container,
+    isPoolTui: false,
+  };
+  terminals.push(entry);
+
+  pendingTerminals.set(termId, entry);
+  try {
+    await window.api.ptyAttach(termId);
+  } catch (err) {
+    debugLog("api-term", `attach failed termId=${termId}`, err.message);
+    const idx = terminals.indexOf(entry);
+    if (idx !== -1) terminals.splice(idx, 1);
+    term.dispose();
+    container.remove();
+    pendingTerminals.delete(termId);
+    return;
+  }
+  pendingTerminals.delete(termId);
+
+  term.onData((data) => window.api.ptyWrite(termId, data));
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (container.style.display !== "none") {
+      fitAddon.fit();
+      window.api.ptyResize(termId, term.cols, term.rows);
+    }
+  });
+  resizeObserver.observe(terminalMount);
+  entry.resizeObserver = resizeObserver;
+
+  renderTerminalTabs();
+  switchToTerminal(terminals.length - 1);
+  syncSessionCache();
+});
+
+// API-closed terminal: clean up the renderer side
+window.api.onApiTermClosed((sessionId, termId) => {
+  if (sessionId !== currentSessionId) return;
+  const idx = terminals.findIndex((t) => t.termId === termId);
+  if (idx === -1) return;
+
+  const entry = terminals[idx];
+  window.api.ptyDetach(entry.termId).catch(() => {});
+  entry.resizeObserver.disconnect();
+  entry.term.dispose();
+  entry.container.remove();
+  terminals.splice(idx, 1);
+
+  if (terminals.length === 0) {
+    activeTermIndex = -1;
+    sessionView.classList.add("hidden");
+    emptyState.classList.remove("hidden");
+  } else {
+    switchToTerminal(Math.min(idx, terminals.length - 1));
+  }
+
+  syncSessionCache();
+  renderTerminalTabs();
+});
+
 window.api.onNextTerminalTab(() => {
   if (terminals.length > 1) {
     switchToTerminal((activeTermIndex + 1) % terminals.length);

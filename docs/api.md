@@ -68,6 +68,34 @@ cockpit-cli input <id> "y"                           # Send raw input
 cockpit-cli clean                                    # Offload finished sessions
 ```
 
+### Session terminals (per-session tab access)
+
+All `term` commands auto-detect the session when called from within a Claude session (walks PID ancestry to find `session-pids/` entry). Specify `<target>` to override.
+
+```bash
+cockpit-cli term ls                                  # List tabs (auto-detect session)
+cockpit-cli term ls @2                               # List terminal tabs for slot 2
+cockpit-cli term read 1                              # Read shell tab (auto-detect)
+cockpit-cli term read @2 1                           # Read shell tab content
+cockpit-cli term write 1 'npm test\r'                # Type into shell tab (auto-detect)
+cockpit-cli term write @2 1 'npm test\r'             # Type into shell tab
+cockpit-cli term key 1 ctrl-c                        # Send Ctrl+C (auto-detect)
+cockpit-cli term key @2 1 ctrl-c                     # Send Ctrl+C to shell tab
+cockpit-cli term watch 1                             # Follow shell tab output (auto-detect)
+cockpit-cli term watch @2 1                          # Follow shell tab output
+cockpit-cli term open                                # Open new shell tab (auto-detect)
+cockpit-cli term open @2                             # Open new shell tab
+cockpit-cli term open @2 /path/to/dir               # Open shell tab at specific dir
+cockpit-cli term close 1                             # Close shell tab (auto-detect)
+cockpit-cli term close @2 1                          # Close shell tab
+cockpit-cli term run 1 'npm test'                    # Run command, return output (auto-detect)
+cockpit-cli term run @2 1 'npm test'                 # Run command in tab 1 of slot 2
+cockpit-cli term run 1 'make' --timeout 120          # Run with 120s timeout
+cockpit-cli term exec 'npm test'                     # Open tab → run → output → close (auto-detect)
+cockpit-cli term exec @2 'npm test'                  # Ephemeral shell in slot 2
+cockpit-cli term exec 'make build' --timeout 120     # With 120s timeout
+```
+
 ### Pool management
 
 ```bash
@@ -156,7 +184,23 @@ Direct slot access by pool index. Works even on error-status slots that have no 
 | `read-intention` | `sessionId` | `{ type: "intention", content }` |
 | `write-intention` | `sessionId`, `content` | `{ type: "ok" }` |
 
-### Terminals
+### Session Terminal Access
+| Command | Fields | Response |
+|---------|--------|----------|
+| `session-terminals` | `sessionId` | `{ type: "terminals", terminals: [{ termId, index, label, isTui, pid, cwd }] }` |
+| `session-term-read` | `sessionId`, `tabIndex` | `{ type: "buffer", termId, buffer }` |
+| `session-term-write` | `sessionId`, `tabIndex`, `data` | `{ type: "ok" }` |
+| `session-term-open` | `sessionId`, `cwd` (optional) | `{ type: "spawned", termId, tabIndex }` |
+| `session-term-close` | `sessionId`, `tabIndex` | `{ type: "ok" }` |
+| `session-term-run` | `sessionId`, `tabIndex`, `command`, `timeout` (optional, ms, default 30000) | `{ type: "output", output, termId }` |
+
+`session-terminals` lists all terminal tabs for a session, sorted by creation order. The `isTui` flag marks the Claude TUI tab (pool sessions only). Tab indices are stable within a call but may shift after open/close.
+
+`session-term-open` spawns a new shell at the session's cwd (or an explicit `cwd`). `session-term-close` refuses to close the TUI tab on pool sessions.
+
+`session-term-run` sends a command to a shell tab, polls for a shell prompt to reappear, and returns the output (everything between the command echo and the next prompt). Refuses TUI tabs. Throws on timeout with partial output.
+
+### Terminals (low-level)
 | Command | Fields | Response |
 |---------|--------|----------|
 | `pty-list` | -- | `{ type: "ptys", ptys }` |

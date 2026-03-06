@@ -1034,6 +1034,18 @@ async function readTerminalBuffer(termId) {
   }
 }
 
+// Strip ANSI escape codes and normalize line endings.
+function stripAnsi(str) {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[()][AB012]/g, "")
+    .replace(/\x1b\[?\??[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b[>=]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
 // Wait until the terminal buffer's tail contains the given text (or timeout).
 // Only checks the last portion of the buffer to avoid false-matching scrollback.
 async function waitForBufferContent(termId, text, timeoutMs = 3000) {
@@ -2597,6 +2609,33 @@ app.whenReady().then(async () => {
     return pty ? pty.buffer || "" : "";
   }
 
+  async function getSessionTerminals(sessionId) {
+    validateSessionId(sessionId);
+    const resp = await daemonRequest({ type: "list" });
+    const pool = readPool();
+    const slot = pool?.slots.find((s) => s.sessionId === sessionId);
+    const tuiTermId = slot?.termId ?? null;
+
+    const terms = resp.ptys
+      .filter((p) => p.sessionId === sessionId && !p.exited)
+      .sort((a, b) => a.termId - b.termId);
+
+    let shellCount = 0;
+    return terms.map((p, i) => {
+      const isTui = p.termId === tuiTermId;
+      if (!isTui) shellCount++;
+      return {
+        termId: p.termId,
+        index: i,
+        label: isTui ? "Claude" : `Shell ${shellCount}`,
+        isTui,
+        pid: p.pid,
+        cwd: p.cwd,
+        buffer: p.buffer || "",
+      };
+    });
+  }
+
   async function sendPromptToTerminal(termId, prompt) {
     await sendCommandToTerminal(termId, prompt);
   }
@@ -2863,6 +2902,154 @@ app.whenReady().then(async () => {
           createdAt: slot.createdAt,
         },
       };
+    },
+
+    // --- Session terminal access (per-session tab control) ---
+
+    "session-terminals": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      const terminals = await getSessionTerminals(msg.sessionId);
+      return {
+        type: "terminals",
+        terminals: terminals.map(({ buffer, ...rest }) => rest),
+      };
+    },
+
+    "session-term-read": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (msg.tabIndex === undefined) throw new Error("tabIndex required");
+      const terminals = await getSessionTerminals(msg.sessionId);
+      const tab = terminals[msg.tabIndex];
+      if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
+      return { type: "buffer", termId: tab.termId, buffer: tab.buffer };
+    },
+
+    "session-term-write": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (msg.tabIndex === undefined) throw new Error("tabIndex required");
+      if (msg.data === undefined) throw new Error("data required");
+      const terminals = await getSessionTerminals(msg.sessionId);
+      const tab = terminals[msg.tabIndex];
+      if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
+      daemonSendSafe({ type: "write", termId: tab.termId, data: msg.data });
+      return { type: "ok" };
+    },
+
+    "session-term-open": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      validateSessionId(msg.sessionId);
+      let cwd = msg.cwd;
+      if (!cwd) {
+        // Get cwd from existing terminals (cheaper than getSessions)
+        const existing = await getSessionTerminals(msg.sessionId);
+        if (existing.length > 0) cwd = existing[0].cwd;
+      }
+      const resp = await daemonRequest({
+        type: "spawn",
+        cwd: cwd || os.homedir(),
+        sessionId: msg.sessionId,
+      });
+      // New terminal always gets highest termId, so tab index = count of existing
+      const terminals = await getSessionTerminals(msg.sessionId);
+      const newTab = terminals.find((t) => t.termId === resp.termId);
+      // Notify renderer so it can attach and show the tab
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(
+          "api-term-opened",
+          msg.sessionId,
+          resp.termId,
+        );
+      }
+      return {
+        type: "spawned",
+        termId: resp.termId,
+        tabIndex: newTab ? newTab.index : terminals.length - 1,
+      };
+    },
+
+    "session-term-run": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (msg.tabIndex === undefined) throw new Error("tabIndex required");
+      if (!msg.command) throw new Error("command required");
+      const timeoutMs = msg.timeout || 30000;
+
+      const terminals = await getSessionTerminals(msg.sessionId);
+      const tab = terminals[msg.tabIndex];
+      if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
+      if (tab.isTui)
+        throw new Error("Cannot run commands in the Claude TUI tab");
+
+      // Snapshot current buffer
+      const beforeBuffer = tab.buffer;
+
+      // Write command + Enter
+      daemonSendSafe({
+        type: "write",
+        termId: tab.termId,
+        data: msg.command + "\r",
+      });
+
+      // Poll until a shell prompt appears after the command output
+      const promptRe = /[\$❯%#>] *$/; /* common prompt endings */
+      const deadline = Date.now() + timeoutMs;
+
+      // Wait a short initial delay for the command to start producing output
+      await new Promise((r) => setTimeout(r, 300));
+
+      while (Date.now() < deadline) {
+        const buf = await readTerminalBuffer(tab.termId);
+
+        // Check if buffer has new content beyond what was there before,
+        // and the last non-empty line looks like a shell prompt
+        if (buf.length > beforeBuffer.length) {
+          const newContent = buf.slice(beforeBuffer.length);
+          const clean = stripAnsi(newContent);
+          const lines = clean.split("\n").filter((l) => l.trim());
+          if (lines.length > 1) {
+            const lastLine = lines[lines.length - 1].trimEnd();
+            if (promptRe.test(lastLine)) {
+              // Extract output: everything between command echo and final prompt
+              // Skip first line (command echo) and last line (prompt)
+              const outputLines = lines.slice(1, -1);
+              return {
+                type: "output",
+                output: outputLines.join("\n"),
+                termId: tab.termId,
+              };
+            }
+          }
+        }
+
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      // Timeout — return whatever we have
+      const finalBuf = await readTerminalBuffer(tab.termId);
+      const delta = finalBuf.slice(beforeBuffer.length);
+      throw new Error(
+        `Command timed out after ${timeoutMs}ms. Partial output: ${stripAnsi(delta).trim()}`,
+      );
+    },
+
+    "session-term-close": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (msg.tabIndex === undefined) throw new Error("tabIndex required");
+      const terminals = await getSessionTerminals(msg.sessionId);
+      const tab = terminals[msg.tabIndex];
+      if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
+      if (tab.isTui) {
+        throw new Error("Cannot close the Claude TUI tab");
+      }
+      await daemonRequest({ type: "kill", termId: tab.termId });
+      // Notify renderer so it can remove the tab
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(
+          "api-term-closed",
+          msg.sessionId,
+          tab.termId,
+        );
+      }
+      return { type: "ok" };
     },
   });
 
