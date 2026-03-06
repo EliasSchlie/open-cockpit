@@ -29,6 +29,7 @@ const {
   computePoolHealth,
   syncStatuses,
   createSlot,
+  isSlotPinned,
   selectShrinkCandidates,
   findSlotBySessionId: findSlotBySessionIdInPool,
   findSlotByIndex: findSlotByIndexInPool,
@@ -61,6 +62,7 @@ const POOL_FILE = path.join(
   OWN_POOL ? "pool-dev.json" : "pool.json",
 );
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
+const SESSION_GRAPH_FILE = path.join(OPEN_COCKPIT_DIR, "session-graph.json");
 const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
 const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
 const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
@@ -1179,6 +1181,30 @@ function validateSessionId(sessionId) {
   }
 }
 
+// --- Session graph (parent-child tracking) ---
+
+function readSessionGraph() {
+  try {
+    return JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionGraph(graph) {
+  secureWriteFileSync(SESSION_GRAPH_FILE, JSON.stringify(graph, null, 2));
+}
+
+function recordSessionRelation(sessionId, parentSessionId, initiator) {
+  const graph = readSessionGraph();
+  graph[sessionId] = {
+    parentSessionId: parentSessionId || null,
+    initiator: initiator || "user",
+    createdAt: new Date().toISOString(),
+  };
+  writeSessionGraph(graph);
+}
+
 // Write offload metadata (and optional snapshot) to disk for a session.
 async function writeOffloadMeta(
   sessionId,
@@ -1896,6 +1922,7 @@ function findOffloadTarget(pool, sessionMap) {
   if (hasFresh) return null;
 
   const idleSlots = pool.slots.filter((s) => {
+    if (isSlotPinned(s)) return false;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
     return session && session.status === "idle";
   });
@@ -2672,10 +2699,18 @@ app.whenReady().then(async () => {
   // --- Programmatic API server (Unix socket) ---
   const apiServer = createApiServer(API_SOCKET, {
     ping: async () => ({ type: "pong" }),
-    "get-sessions": async () => ({
-      type: "sessions",
-      sessions: await getSessions(),
-    }),
+    "get-sessions": async () => {
+      const sessions = await getSessions();
+      const graph = readSessionGraph();
+      for (const s of sessions) {
+        const rel = graph[s.sessionId];
+        if (rel) {
+          s.parentSessionId = rel.parentSessionId;
+          s.initiator = rel.initiator;
+        }
+      }
+      return { type: "sessions", sessions };
+    },
     "pool-init": async (msg) => ({
       type: "pool",
       pool: await poolInit(msg.size),
@@ -2740,7 +2775,7 @@ app.whenReady().then(async () => {
 
     "pool-start": async (msg) => {
       if (!msg.prompt) throw new Error("prompt required");
-      return withFreshSlot(async (pool, slot) => {
+      const result = await withFreshSlot(async (pool, slot) => {
         await sendPromptToTerminal(slot.termId, msg.prompt);
         slot.status = "busy";
         writePool(pool);
@@ -2752,6 +2787,12 @@ app.whenReady().then(async () => {
           slotIndex: slot.index,
         };
       });
+      recordSessionRelation(
+        result.sessionId,
+        msg.parentSessionId || null,
+        msg.parentSessionId ? "model" : "user",
+      );
+      return result;
     },
 
     "pool-resume": async (msg) => {
@@ -2864,6 +2905,41 @@ app.whenReady().then(async () => {
       const cleaned = await poolClean();
       return { type: "cleaned", count: cleaned };
     },
+
+    "pool-pin": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      const duration = msg.duration || 120;
+      return withPoolLock(async () => {
+        const { pool, slot } = findSlotBySessionId(msg.sessionId);
+        slot.pinnedUntil = new Date(Date.now() + duration * 1000).toISOString();
+        writePool(pool);
+        return { type: "ok", pinnedUntil: slot.pinnedUntil };
+      });
+    },
+
+    "pool-unpin": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      return withPoolLock(async () => {
+        const { pool, slot } = findSlotBySessionId(msg.sessionId);
+        delete slot.pinnedUntil;
+        writePool(pool);
+        return { type: "ok" };
+      });
+    },
+
+    "pool-stop-session": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      const { slot } = findSlotBySessionId(msg.sessionId);
+      daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
+      await new Promise((r) => setTimeout(r, 100));
+      daemonSendSafe({ type: "write", termId: slot.termId, data: "\x03" });
+      return { type: "ok", sessionId: msg.sessionId };
+    },
+
+    "get-session-graph": async () => ({
+      type: "session-graph",
+      graph: readSessionGraph(),
+    }),
 
     // --- Slot access commands (by index, works without sessionId) ---
 
