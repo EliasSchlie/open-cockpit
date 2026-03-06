@@ -148,56 +148,43 @@ const staleLoggedSessions = new Set();
 
 // Track last-seen JSONL file sizes and when they last changed (sessionId -> { size, changedAt })
 const jsonlSizeTracker = new Map();
-// Track terminal input characters per termId (incremented on printable, decremented on backspace)
-// Reset on Enter (prompt submitted) or /clear. Used to detect if Claude's input box has text.
-const terminalInputChars = new Map();
+// Terminal input detection via buffer parsing (true ground truth).
+// Cached results refreshed by pollTerminalInput() every TERMINAL_POLL_MS.
+const terminalHasInputCache = new Map(); // termId → boolean
+const { parseTerminalHasInput } = require("./terminal-input");
+const TERMINAL_POLL_MS = 10_000;
 
-function trackTerminalInput(termId, data) {
-  let count = terminalInputChars.get(termId) || 0;
-  for (let i = 0; i < data.length; i++) {
-    const c = data.charCodeAt(i);
-    if (c === 0x0d || c === 0x0a) {
-      // Enter — prompt submitted, reset
-      count = 0;
-    } else if (c === 0x7f || c === 0x08) {
-      // Backspace/DEL
-      count = Math.max(0, count - 1);
-    } else if (c === 0x15) {
-      // Ctrl-U — kill line
-      count = 0;
-    } else if (c === 0x1b) {
-      // Escape sequence — skip entirely (not printable input)
-      if (i + 1 < data.length) {
-        const next = data[i + 1];
-        if (next === "[") {
-          // CSI: ESC [ ... <0x40-0x7e>
-          i += 2;
-          while (i < data.length && data.charCodeAt(i) < 0x40) i++;
-        } else if (next === "]") {
-          // OSC: ESC ] ... (ST or BEL)
-          i += 2;
-          while (i < data.length && data[i] !== "\x07" && data[i] !== "\x1b")
-            i++;
-          if (i < data.length && data[i] === "\x1b") i++; // skip ESC of ST
+// Poll fresh pool slots for terminal input by parsing their PTY buffers.
+// Runs periodically to keep terminalHasInputCache in sync with ground truth.
+let pollInFlight = false;
+async function pollTerminalInput() {
+  if (pollInFlight) return;
+  pollInFlight = true;
+  try {
+    const pool = readPool();
+    if (!pool) return;
+
+    const freshSlots = pool.slots.filter((s) => s.status === "fresh");
+    if (freshSlots.length === 0) return;
+
+    let changed = false;
+    for (const slot of freshSlots) {
+      const buffer = await readTerminalBuffer(slot.termId);
+      const hasInput = await parseTerminalHasInput(buffer);
+      const prev = terminalHasInputCache.get(slot.termId) || false;
+      if (hasInput !== prev) {
+        if (hasInput) {
+          terminalHasInputCache.set(slot.termId, true);
         } else {
-          // Two-char sequence (SS2/SS3/etc): ESC + one char
-          i++;
+          terminalHasInputCache.delete(slot.termId);
         }
+        changed = true;
       }
-    } else if (c >= 0x20) {
-      // Printable character
-      count++;
     }
-  }
-  const prevCount = terminalInputChars.get(termId) || 0;
-  if (count > 0) {
-    terminalInputChars.set(termId, count);
-  } else {
-    terminalInputChars.delete(termId);
-  }
-  // Invalidate cache if typing state changed
-  if (prevCount > 0 !== count > 0) {
-    invalidateSessionsCache();
+
+    if (changed) invalidateSessionsCache();
+  } finally {
+    pollInFlight = false;
   }
 }
 
@@ -597,7 +584,7 @@ async function getSessionsUncached() {
     const hasIntentionContent = intentionHasContent(sessionId);
     const poolSlot = pool?.slots.find((s) => s.sessionId === sessionId);
     const hasTermInput = !!(
-      poolSlot && terminalInputChars.has(poolSlot.termId)
+      poolSlot && terminalHasInputCache.get(poolSlot.termId)
     );
 
     if (!alive) {
@@ -1002,8 +989,8 @@ async function offloadSession(
     snapshot,
     origin: "pool",
   });
-  // Clean up terminal input tracking for the offloaded slot
-  if (termId) terminalInputChars.delete(termId);
+  // Clean up terminal input cache for the offloaded slot
+  if (termId) terminalHasInputCache.delete(termId);
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
   try {
@@ -1569,8 +1556,8 @@ async function reconcilePool() {
           slot.status = "dead";
           changed = true;
         }
-        // Clean up terminal input tracking for old termId
-        terminalInputChars.delete(slot.termId);
+        // Clean up terminal input cache for old termId
+        terminalHasInputCache.delete(slot.termId);
         // Kill orphaned process by PID before restarting
         if (slot.pid) {
           try {
@@ -1672,6 +1659,7 @@ async function poolDestroy() {
         } catch {}
       }
     }
+    terminalHasInputCache.clear();
     try {
       fs.unlinkSync(POOL_FILE);
     } catch (err) {
@@ -2261,6 +2249,9 @@ app.whenReady().then(async () => {
     if (anyDied) onDirChange();
   }, LIVENESS_CHECK_INTERVAL);
 
+  // Poll fresh terminal buffers for input detection (ground truth)
+  setInterval(() => pollTerminalInput().catch(() => {}), TERMINAL_POLL_MS);
+
   ipcMain.on("debug-log", (_e, tag, args) => {
     debugLog(tag, ...args);
   });
@@ -2305,7 +2296,6 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("pty-write", async (_e, termId, data) => {
     await ensureDaemon();
-    trackTerminalInput(termId, data);
     daemonSendSafe({ type: "write", termId, data });
   });
 
@@ -2523,7 +2513,6 @@ app.whenReady().then(async () => {
     },
     "pty-write": async (msg) => {
       validateTermId(msg.termId);
-      trackTerminalInput(msg.termId, msg.data);
       daemonSendSafe({ type: "write", termId: msg.termId, data: msg.data });
       return { type: "ok" };
     },
