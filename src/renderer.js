@@ -26,6 +26,7 @@ import {
   getFocusedTabId,
   focusLeafContent,
 } from "./dock-helpers.js";
+import { STATUS, POOL_STATUS } from "./session-statuses.js";
 
 // --- Debug logging (writes to ~/.open-cockpit/debug.log via main process) ---
 function debugLog(tag, ...args) {
@@ -834,13 +835,13 @@ window.api.onPtyExit((termId) => {
 });
 
 const STATUS_CLASSES = {
-  idle: "idle",
-  processing: "processing",
-  fresh: "fresh",
-  typing: "typing",
-  dead: "dead",
-  offloaded: "offloaded",
-  archived: "archived",
+  [STATUS.IDLE]: "idle",
+  [STATUS.PROCESSING]: "processing",
+  [STATUS.FRESH]: "fresh",
+  [STATUS.TYPING]: "typing",
+  [STATUS.DEAD]: "dead",
+  [STATUS.OFFLOADED]: "offloaded",
+  [STATUS.ARCHIVED]: "archived",
 };
 
 // Build a fingerprint for a session to detect changes
@@ -888,12 +889,12 @@ async function loadSessions() {
   updatePoolHealthBadge();
 
   // Split into sections — pool and external mixed together
-  const typing = sessions.filter((s) => s.status === "typing");
+  const typing = sessions.filter((s) => s.status === STATUS.TYPING);
   const recent = sessions.filter(
-    (s) => s.status === "idle" || s.status === "offloaded",
+    (s) => s.status === STATUS.IDLE || s.status === STATUS.OFFLOADED,
   );
-  const processing = sessions.filter((s) => s.status === "processing");
-  const archived = sessions.filter((s) => s.status === "archived");
+  const processing = sessions.filter((s) => s.status === STATUS.PROCESSING);
+  const archived = sessions.filter((s) => s.status === STATUS.ARCHIVED);
 
   // Build fingerprint to check if anything changed
   const allItems = [...typing, ...recent, ...processing, ...archived];
@@ -983,7 +984,7 @@ async function loadSessions() {
 
 function createSessionItem(s) {
   const li = document.createElement("li");
-  li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === "offloaded" || s.status === "archived" ? " offloaded" : ""}`;
+  li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED ? " offloaded" : ""}`;
   li.dataset.sessionId = s.sessionId;
   const heading = s.intentionHeading || s.intentionPreview || null;
   const isPreview = !s.intentionHeading && !!s.intentionPreview;
@@ -993,7 +994,7 @@ function createSessionItem(s) {
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
     : "background: transparent";
   const showOrigin =
-    s.origin && s.status !== "offloaded" && s.status !== "archived";
+    s.origin && s.status !== STATUS.OFFLOADED && s.status !== STATUS.ARCHIVED;
   const originTag = showOrigin
     ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
     : "";
@@ -1034,8 +1035,8 @@ function showSessionContextMenu(e, session) {
   menu.style.left = `${e.clientX}px`;
   menu.style.top = `${e.clientY}px`;
 
-  const isArchived = session.status === "archived";
-  const isOffloaded = session.status === "offloaded";
+  const isArchived = session.status === STATUS.ARCHIVED;
+  const isOffloaded = session.status === STATUS.OFFLOADED;
 
   if (isArchived) {
     menu.innerHTML = `
@@ -1131,7 +1132,7 @@ function showSnapshotViewer(session, snapshotText) {
 
 // Show snapshot content inline as a dock tab for offloaded/archived sessions
 async function showInlineSnapshot(session, gen) {
-  const isArchived = session.status === "archived";
+  const isArchived = session.status === STATUS.ARCHIVED;
   const btnLabel = isArchived ? "Restart" : "Resume";
 
   let snapshotText = null;
@@ -1198,7 +1199,8 @@ function escapeHtml(str) {
 
 function isFreshPoolSlot(s) {
   return (
-    s.origin === "pool" && (s.status === "fresh" || s.poolStatus === "fresh")
+    s.origin === "pool" &&
+    (s.status === STATUS.FRESH || s.poolStatus === STATUS.FRESH)
   );
 }
 
@@ -1218,7 +1220,7 @@ async function acquireFreshSlot() {
   const idleSessions = sessions
     .filter(
       (s) =>
-        s.status === "idle" &&
+        s.status === STATUS.IDLE &&
         s.origin === "pool" &&
         s.sessionId !== currentSessionId,
     )
@@ -1361,7 +1363,7 @@ async function pollForResumedSession(termId, timeoutMs) {
     const pool = await window.api.poolRead();
     if (!pool) continue;
     const slot = pool.slots.find(
-      (s) => s.termId === termId && s.status !== "fresh",
+      (s) => s.termId === termId && s.status !== STATUS.FRESH,
     );
     if (slot?.sessionId) {
       const sessions = await window.api.getSessions();
@@ -1450,7 +1452,10 @@ async function selectSession(session) {
   }
 
   // Offloaded/archived: show snapshot inline instead of a terminal
-  if (session.status === "offloaded" || session.status === "archived") {
+  if (
+    session.status === STATUS.OFFLOADED ||
+    session.status === STATUS.ARCHIVED
+  ) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
@@ -1696,7 +1701,10 @@ function invalidateSidebar() {
 function updateTypingState() {
   if (!currentSessionId) return;
   const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
-  if (!session || (session.status !== "fresh" && session.status !== "typing")) {
+  if (
+    !session ||
+    (session.status !== STATUS.FRESH && session.status !== STATUS.TYPING)
+  ) {
     return;
   }
   // Immediately update sidebar preview from local editor content (no round-trip)
@@ -1748,9 +1756,9 @@ function switchSession(direction) {
   const navigable = cachedSessions.filter(
     (s) =>
       s.alive &&
-      (s.status === "idle" ||
-        s.status === "processing" ||
-        s.status === "typing"),
+      (s.status === STATUS.IDLE ||
+        s.status === STATUS.PROCESSING ||
+        s.status === STATUS.TYPING),
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
@@ -1769,7 +1777,7 @@ function switchSession(direction) {
 // --- Jump to most recent idle session ---
 function jumpToRecentIdle() {
   const idle = cachedSessions.find(
-    (s) => s.status === "idle" && s.sessionId !== currentSessionId,
+    (s) => s.status === STATUS.IDLE && s.sessionId !== currentSessionId,
   );
   if (idle) selectSession(idle);
 }
@@ -1788,7 +1796,7 @@ async function archiveCurrentSession() {
   const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
   if (!session) return;
   // Can't archive already-archived sessions
-  if (session.status === "archived") return;
+  if (session.status === STATUS.ARCHIVED) return;
 
   const archivingSessionId = currentSessionId;
 
@@ -1796,7 +1804,9 @@ async function archiveCurrentSession() {
   const idle = cachedSessions.find(
     (s) =>
       s.sessionId !== archivingSessionId &&
-      (s.status === "idle" || s.status === "fresh" || s.status === "typing"),
+      (s.status === STATUS.IDLE ||
+        s.status === STATUS.FRESH ||
+        s.status === STATUS.TYPING),
   );
   if (idle) {
     selectSession(idle);
@@ -2452,7 +2462,7 @@ refreshBtn.addEventListener("click", async () => {
 async function openSlotTerminalPopup(slot) {
   // Don't open popup for dead/unknown slots — no terminal to attach to
   const status = slot.healthStatus || slot.status;
-  if (status === "dead" || !slot.termId) {
+  if (status === STATUS.DEAD || !slot.termId) {
     showNotification("Cannot open terminal for dead slot");
     return;
   }
@@ -2559,7 +2569,7 @@ let poolSettingsInterval = null;
 async function updatePoolHealthBadge() {
   const pool = await window.api.poolRead();
   const errors = pool
-    ? pool.slots.filter((s) => s.status === "error").length
+    ? pool.slots.filter((s) => s.status === POOL_STATUS.ERROR).length
     : 0;
   poolSettingsBtn.dataset.errors = errors;
   poolSettingsBtn.title =

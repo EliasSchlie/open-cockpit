@@ -4,6 +4,7 @@
  */
 const path = require("path");
 const fs = require("fs");
+const { STATUS, POOL_STATUS } = require("./session-statuses");
 
 /**
  * Read pool.json from disk. Returns parsed object or null on failure.
@@ -34,7 +35,7 @@ function createSlot(index, termId, pid) {
     index,
     termId,
     pid,
-    status: "starting",
+    status: POOL_STATUS.STARTING,
     sessionId: null,
     createdAt: new Date().toISOString(),
   };
@@ -53,7 +54,13 @@ function isSlotPinned(slot) {
  * Pinned slots are excluded from candidates.
  */
 function selectShrinkCandidates(slots, count) {
-  const priority = { fresh: 0, idle: 1, starting: 2, busy: 3, error: 4 };
+  const priority = {
+    [POOL_STATUS.FRESH]: 0,
+    [POOL_STATUS.IDLE]: 1,
+    [POOL_STATUS.STARTING]: 2,
+    [POOL_STATUS.BUSY]: 3,
+    [POOL_STATUS.ERROR]: 4,
+  };
   const candidates = [...slots]
     .filter((s) => !isSlotPinned(s))
     .sort((a, b) => {
@@ -77,22 +84,26 @@ function computePoolHealth(pool, sessions, isProcessAlive) {
 
     const alive = slot.pid ? isProcessAlive(slot.pid) : false;
     if (!alive) {
-      result.healthStatus = "dead";
+      result.healthStatus = POOL_STATUS.DEAD;
       return result;
     }
 
     const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
     if (!session) {
       result.healthStatus =
-        slot.status === "starting" || slot.status === "fresh"
-          ? "starting"
+        slot.status === POOL_STATUS.STARTING ||
+        slot.status === POOL_STATUS.FRESH
+          ? POOL_STATUS.STARTING
           : "unknown";
       return result;
     }
 
     // Override "processing" for pool-fresh slots (Claude still initializing)
-    if (slot.status === "fresh" && session.status === "processing") {
-      result.healthStatus = "starting";
+    if (
+      slot.status === POOL_STATUS.FRESH &&
+      session.status === STATUS.PROCESSING
+    ) {
+      result.healthStatus = POOL_STATUS.STARTING;
     } else {
       result.healthStatus = session.status;
     }
@@ -126,17 +137,17 @@ function syncStatuses(pool, sessions) {
   let changed = false;
 
   for (const slot of pool.slots) {
-    if (slot.status === "starting") continue;
+    if (slot.status === POOL_STATUS.STARTING) continue;
     const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
     if (!session) continue;
 
     // Allow dead slots to recover if their process came back alive
-    if (slot.status === "dead" && !session.alive) continue;
+    if (slot.status === POOL_STATUS.DEAD && !session.alive) continue;
 
     let newStatus = slot.status;
-    if (session.status === "idle") newStatus = "idle";
-    else if (session.status === "processing") newStatus = "busy";
-    else if (session.status === "fresh") newStatus = "fresh";
+    if (session.status === STATUS.IDLE) newStatus = POOL_STATUS.IDLE;
+    else if (session.status === STATUS.PROCESSING) newStatus = POOL_STATUS.BUSY;
+    else if (session.status === STATUS.FRESH) newStatus = POOL_STATUS.FRESH;
 
     if (newStatus !== slot.status) {
       slot.status = newStatus;

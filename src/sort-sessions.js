@@ -1,3 +1,5 @@
+const { STATUS } = require("./session-statuses");
+
 /**
  * Sort sessions into display order: typing → recent → processing → fresh → archived.
  * Typing: fresh sessions with editor text (shown first for quick access).
@@ -6,14 +8,14 @@
  * Archived sorted by most recently archived first.
  */
 function sortSessions(sessions) {
-  const typing = sessions.filter((s) => s.status === "typing");
+  const typing = sessions.filter((s) => s.status === STATUS.TYPING);
   const recent = sessions.filter(
-    (s) => s.status === "idle" || s.status === "offloaded",
+    (s) => s.status === STATUS.IDLE || s.status === STATUS.OFFLOADED,
   );
-  const processing = sessions.filter((s) => s.status === "processing");
-  const fresh = sessions.filter((s) => s.status === "fresh");
-  const dead = sessions.filter((s) => s.status === "dead");
-  const archived = sessions.filter((s) => s.status === "archived");
+  const processing = sessions.filter((s) => s.status === STATUS.PROCESSING);
+  const fresh = sessions.filter((s) => s.status === STATUS.FRESH);
+  const dead = sessions.filter((s) => s.status === STATUS.DEAD);
+  const archived = sessions.filter((s) => s.status === STATUS.ARCHIVED);
 
   // Recent: most recently used first (highest idleTs)
   recent.sort((a, b) => b.idleTs - a.idleTs);
