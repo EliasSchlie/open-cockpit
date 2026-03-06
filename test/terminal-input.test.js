@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseTerminalHasInput } from "../src/terminal-input.js";
+import {
+  parseTerminalHasInput,
+  checkTerminalInputs,
+} from "../src/terminal-input.js";
 
 // These tests verify ground-truth detection of text in Claude's TUI input box
 // by parsing the rendered terminal buffer with a headless terminal emulator.
@@ -155,5 +158,64 @@ describe("parseTerminalHasInput", () => {
     // must NOT detect input — this is correct behavior, but the bug was that
     // pollTerminalInput always got empty strings due to silent daemon errors
     expect(await parseTerminalHasInput("")).toBe(false);
+  });
+});
+
+// Integration test: verifies that checkTerminalInputs (used by pollTerminalInput)
+// correctly detects input from daemon `list` response buffers.
+// This is the test that would have caught the original bug — if the function
+// receives empty buffers (as happened with the broken `read-buffer` path),
+// it correctly returns false; with real buffers, it returns true.
+describe("checkTerminalInputs", () => {
+  const makeBuffer = (promptText) =>
+    [
+      "\x1b[2J\x1b[H",
+      " ▐▛███▜▌   Claude Code v2.1.69\r\n",
+      "▝▜█████▛▘  Opus 4.6 · Claude Max\r\n",
+      "  ▘▘ ▝▝    /Users/test\r\n",
+      "\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+      `❯${promptText}\r\n`,
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+    ].join("");
+
+  it("detects input from real daemon list buffers", async () => {
+    const ptys = [
+      { termId: 1, buffer: makeBuffer(" fix the bug") },
+      { termId: 2, buffer: makeBuffer("") },
+      { termId: 3, buffer: makeBuffer(" deploy to prod") },
+      { termId: 99, buffer: makeBuffer(" not fresh — should be ignored") },
+    ];
+    const freshTermIds = new Set([1, 2, 3]);
+
+    const results = await checkTerminalInputs(ptys, freshTermIds);
+
+    expect(results.get(1)).toBe(true);
+    expect(results.get(2)).toBe(false);
+    expect(results.get(3)).toBe(true);
+    expect(results.has(99)).toBe(false); // not fresh, excluded
+  });
+
+  it("returns empty map when daemon returns empty buffers (regression)", async () => {
+    // Simulates the old bug: daemon returns empty/missing buffers
+    const ptys = [
+      { termId: 1, buffer: "" },
+      { termId: 2, buffer: undefined },
+    ];
+    const freshTermIds = new Set([1, 2]);
+
+    const results = await checkTerminalInputs(ptys, freshTermIds);
+
+    expect(results.get(1)).toBe(false);
+    expect(results.get(2)).toBe(false);
+  });
+
+  it("returns empty map when no fresh PTYs in list", async () => {
+    const ptys = [{ termId: 99, buffer: makeBuffer(" some text") }];
+    const freshTermIds = new Set([1, 2]);
+
+    const results = await checkTerminalInputs(ptys, freshTermIds);
+
+    expect(results.size).toBe(0);
   });
 });

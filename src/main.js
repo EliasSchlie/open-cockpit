@@ -151,8 +151,12 @@ const jsonlSizeTracker = new Map();
 // Terminal input detection via buffer parsing (true ground truth).
 // Cached results refreshed by pollTerminalInput() every TERMINAL_POLL_MS.
 const terminalHasInputCache = new Map(); // termId → boolean
-const { parseTerminalHasInput } = require("./terminal-input");
+const {
+  parseTerminalHasInput,
+  checkTerminalInputs,
+} = require("./terminal-input");
 const TERMINAL_POLL_MS = 10_000;
+const TERMINAL_WRITE_DEBOUNCE_MS = 500;
 
 // Poll fresh pool slots for terminal input by parsing their PTY buffers.
 // Runs periodically to keep terminalHasInputCache in sync with ground truth.
@@ -181,18 +185,10 @@ async function pollTerminalInput() {
 
     const freshTermIds = new Set(freshSlots.map((s) => s.termId));
     const ptyTermIds = new Set(ptys.map((p) => p.termId));
-
-    // Parse fresh-slot buffers in parallel
-    const freshPtys = ptys.filter((p) => freshTermIds.has(p.termId));
-    const results = await Promise.all(
-      freshPtys.map(async (pty) => ({
-        termId: pty.termId,
-        hasInput: await parseTerminalHasInput(pty.buffer || ""),
-      })),
-    );
+    const results = await checkTerminalInputs(ptys, freshTermIds);
 
     let changed = false;
-    for (const { termId, hasInput } of results) {
+    for (const [termId, hasInput] of results) {
       const prev = terminalHasInputCache.get(termId) || false;
       if (hasInput !== prev) {
         if (hasInput) {
@@ -216,6 +212,29 @@ async function pollTerminalInput() {
   } finally {
     pollInFlight = false;
   }
+}
+
+// Trigger a poll shortly after a keystroke is written to a fresh pool terminal.
+// Debounced so rapid typing doesn't flood — only the trailing edge fires.
+// Pool check is inside the callback to avoid disk I/O on every keystroke.
+let writeDebounceTimer = null;
+function triggerPollOnWrite(termId) {
+  clearTimeout(writeDebounceTimer);
+  writeDebounceTimer = setTimeout(() => {
+    const pool = readPool();
+    if (!pool) return;
+    const slot = pool.slots.find(
+      (s) => s.termId === termId && s.status === "fresh",
+    );
+    if (!slot) return;
+    pollTerminalInput().catch((err) =>
+      debugLog(
+        "main",
+        "pollTerminalInput (write-triggered) failed",
+        err.message,
+      ),
+    );
+  }, TERMINAL_WRITE_DEBOUNCE_MS);
 }
 
 // Check if an intention file has non-whitespace content (reuses readIntention below)
@@ -2327,6 +2346,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pty-write", async (_e, termId, data) => {
     await ensureDaemon();
     daemonSendSafe({ type: "write", termId, data });
+    triggerPollOnWrite(termId);
   });
 
   ipcMain.handle("pty-resize", async (_e, termId, cols, rows) => {
@@ -2544,6 +2564,7 @@ app.whenReady().then(async () => {
     "pty-write": async (msg) => {
       validateTermId(msg.termId);
       daemonSendSafe({ type: "write", termId: msg.termId, data: msg.data });
+      triggerPollOnWrite(msg.termId);
       return { type: "ok" };
     },
     "pty-spawn": async (msg) => {

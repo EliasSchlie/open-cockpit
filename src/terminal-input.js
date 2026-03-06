@@ -51,4 +51,26 @@ async function parseTerminalHasInput(buffer, cols = 200) {
   return afterPrompt.trim().length > 0;
 }
 
-module.exports = { parseTerminalHasInput };
+/**
+ * Check which fresh terminals have input, given a daemon `list` response.
+ * Pure function — no daemon calls, no side effects.
+ * @param {Array<{termId: number, buffer: string}>} ptys - PTY list from daemon
+ * @param {Set<number>} freshTermIds - termIds of fresh pool slots
+ * @returns {Promise<Map<number, boolean>>} termId → hasInput
+ */
+async function checkTerminalInputs(ptys, freshTermIds) {
+  const freshPtys = ptys.filter((p) => freshTermIds.has(p.termId));
+  const results = await Promise.all(
+    freshPtys.map(async (pty) => ({
+      termId: pty.termId,
+      hasInput: await parseTerminalHasInput(pty.buffer || ""),
+    })),
+  );
+  const map = new Map();
+  for (const { termId, hasInput } of results) {
+    map.set(termId, hasInput);
+  }
+  return map;
+}
+
+module.exports = { parseTerminalHasInput, checkTerminalInputs };
