@@ -1308,7 +1308,15 @@ async function renderBufferToText(buffer, cols = 200) {
 // Write offload metadata (and optional snapshot) to disk for a session.
 async function writeOffloadMeta(
   sessionId,
-  { cwd, gitRoot, claudeSessionId, snapshot, externalClear, origin } = {},
+  {
+    cwd,
+    gitRoot,
+    claudeSessionId,
+    snapshot,
+    externalClear,
+    origin,
+    archived,
+  } = {},
 ) {
   validateSessionId(sessionId);
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
@@ -1334,6 +1342,10 @@ async function writeOffloadMeta(
   };
   if (externalClear) meta.externalClear = true;
   if (origin) meta.origin = origin;
+  if (archived) {
+    meta.archived = true;
+    meta.archivedAt = new Date().toISOString();
+  }
 
   secureWriteFileSync(
     path.join(offloadDir, "meta.json"),
@@ -1423,30 +1435,11 @@ async function archiveSession(sessionId) {
       JSON.stringify(updatedMeta, null, 2),
     );
   } else {
-    // No offload data yet — create archive-only meta
-    const offloadDir = path.join(OFFLOADED_DIR, sessionId);
-    secureMkdirSync(offloadDir, { recursive: true });
-    const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
-    const intentionHeading = fs.existsSync(intentionFile)
-      ? await getIntentionHeading(intentionFile)
-      : null;
-    secureWriteFileSync(
-      path.join(offloadDir, "meta.json"),
-      JSON.stringify(
-        {
-          sessionId,
-          claudeSessionId: sessionId,
-          cwd: null,
-          gitRoot: null,
-          intentionHeading,
-          lastInteractionTs: Math.floor(Date.now() / 1000),
-          archivedAt: new Date().toISOString(),
-          archived: true,
-        },
-        null,
-        2,
-      ),
-    );
+    // No offload data yet — create archive-only meta via writeOffloadMeta
+    await writeOffloadMeta(sessionId, {
+      claudeSessionId: sessionId,
+      archived: true,
+    });
   }
   // Kill any orphaned extra terminals for this session immediately
   killOrphanedTerminals(sessionId);
