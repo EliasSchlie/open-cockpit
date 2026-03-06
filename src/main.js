@@ -37,15 +37,7 @@ const {
 } = require("./pool");
 const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 const { createPoolLock } = require("./pool-lock");
-
-// Secure file helpers — restrict to owner-only access
-function secureMkdirSync(dirPath, opts = {}) {
-  fs.mkdirSync(dirPath, { ...opts, mode: 0o700 });
-}
-function secureWriteFileSync(filePath, data, opts) {
-  fs.writeFileSync(filePath, data, opts);
-  fs.chmodSync(filePath, 0o600);
-}
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 
 const IS_DEV = process.argv.includes("--dev");
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -1251,8 +1243,7 @@ function readSessionGraph() {
 function writeSessionGraph(graph) {
   const data = JSON.stringify(graph, null, 2);
   const tmp = SESSION_GRAPH_FILE + ".tmp";
-  fs.writeFileSync(tmp, data);
-  fs.chmodSync(tmp, 0o600);
+  fs.writeFileSync(tmp, data, { mode: 0o600 });
   fs.renameSync(tmp, SESSION_GRAPH_FILE);
 }
 
@@ -3288,7 +3279,7 @@ app.whenReady().then(async () => {
               trigger: "api-stop",
             });
             try {
-              fs.writeFileSync(sigFile, signal + "\n");
+              secureWriteFileSync(sigFile, signal + "\n");
             } catch {
               /* ignore — session may be dead */
             }

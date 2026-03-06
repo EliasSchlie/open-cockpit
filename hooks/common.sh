@@ -7,6 +7,9 @@
 #
 # This sources log-error.sh automatically — no need to source both.
 
+# Restrict all file/dir creation to owner-only (security: #210)
+umask 077
+
 source "$(dirname "${BASH_SOURCE[0]}")/log-error.sh"
 
 # --- Directory constants (used by sourcing scripts) ---
