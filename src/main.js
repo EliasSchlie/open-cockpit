@@ -71,6 +71,7 @@ const API_SOCKET = path.join(
 const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
 const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
 const DEFAULT_POOL_SIZE = 5;
+const ORPHAN_TERMINAL_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -1444,6 +1445,9 @@ async function archiveSession(sessionId) {
       ),
     );
   }
+  // Kill any orphaned extra terminals for this session immediately
+  killOrphanedTerminals(sessionId);
+
   sessionsCache = null;
 }
 
@@ -1913,6 +1917,87 @@ async function reconcilePool() {
   });
 }
 
+function getPoolTermIds() {
+  const pool = readPool();
+  const ids = new Set();
+  if (pool) {
+    for (const slot of pool.slots) ids.add(slot.termId);
+  }
+  return ids;
+}
+
+// Kill all orphaned extra terminals for a specific session.
+function killOrphanedTerminals(sessionId) {
+  const poolTermIds = getPoolTermIds();
+  daemonRequest({ type: "list" })
+    .then((resp) => {
+      for (const pty of resp.ptys) {
+        if (pty.sessionId === sessionId && !poolTermIds.has(pty.termId)) {
+          daemonRequest({ type: "kill", termId: pty.termId }).catch((err) =>
+            debugLog(
+              "main",
+              `Failed to kill orphaned terminal ${pty.termId}: ${err.message}`,
+            ),
+          );
+        }
+      }
+    })
+    .catch((err) => {
+      debugLog("main", `killOrphanedTerminals failed: ${err.message}`);
+    });
+}
+
+// Kill orphaned extra terminals for sessions offloaded > TTL or archived.
+// Runs after reconcilePool on the same 30s interval.
+async function reapOrphanedTerminals() {
+  let ptys;
+  try {
+    const resp = await daemonRequest({ type: "list" });
+    ptys = resp.ptys;
+  } catch {
+    return; // Daemon not running
+  }
+
+  const poolTermIds = getPoolTermIds();
+
+  // Batch-read offload metadata by unique sessionId (avoid N+1 reads)
+  const candidatePtys = ptys.filter(
+    (p) => p.sessionId && !p.exited && !poolTermIds.has(p.termId),
+  );
+  const sessionIds = [...new Set(candidatePtys.map((p) => p.sessionId))];
+  const metaBySession = new Map();
+  for (const sid of sessionIds) {
+    const meta = readOffloadMeta(sid);
+    if (meta) metaBySession.set(sid, meta);
+  }
+
+  const now = Date.now();
+  for (const pty of candidatePtys) {
+    const meta = metaBySession.get(pty.sessionId);
+    if (!meta) continue; // Session still live — not our concern
+
+    const shouldKill =
+      meta.archived ||
+      (meta.offloadedAt &&
+        now - new Date(meta.offloadedAt).getTime() > ORPHAN_TERMINAL_TTL_MS);
+
+    if (shouldKill) {
+      debugLog(
+        "main",
+        `Reaping orphaned terminal ${pty.termId} for ${meta.archived ? "archived" : "stale offloaded"} session ${pty.sessionId}`,
+      );
+      try {
+        await daemonRequest({ type: "kill", termId: pty.termId });
+      } catch (err) {
+        debugLog(
+          "main",
+          `Failed to reap terminal ${pty.termId}: ${err.message}`,
+        );
+      }
+    }
+  }
+}
+
 function pruneSessionGraph(pool) {
   const graph = readSessionGraph();
   const graphKeys = Object.keys(graph);
@@ -2161,7 +2246,30 @@ async function poolResume(sessionId) {
         skipTrustPrompt: true,
         skipFreshSignal: true,
         onResolved: async (newSessionId) => {
-          if (newSessionId) removeOffloadData(sessionId);
+          // Re-tag orphaned extra terminals from old session to new session
+          if (newSessionId) {
+            try {
+              const resp = await daemonRequest({ type: "list" });
+              const orphaned = resp.ptys.filter(
+                (p) => p.sessionId === sessionId && !p.exited,
+              );
+              await Promise.all(
+                orphaned.map((pty) =>
+                  daemonRequest({
+                    type: "set-session",
+                    termId: pty.termId,
+                    sessionId: newSessionId,
+                  }),
+                ),
+              );
+            } catch (err) {
+              debugLog(
+                "main",
+                `Failed to re-tag orphaned terminals: ${err.message}`,
+              );
+            }
+            removeOffloadData(sessionId);
+          }
           invalidateSessionsCache();
         },
       },
@@ -2527,6 +2635,11 @@ app.whenReady().then(async () => {
       await reconcilePool();
     } catch {
       /* logged inside reconcilePool */
+    }
+    try {
+      await reapOrphanedTerminals();
+    } catch {
+      /* logged inside reapOrphanedTerminals */
     }
   }, 30000);
 
@@ -2903,6 +3016,7 @@ app.whenReady().then(async () => {
         cwd: msg.cwd,
         cmd: msg.cmd,
         args: msg.args,
+        sessionId: msg.sessionId,
       });
       return { type: "spawned", termId: resp.termId, pid: resp.pid };
     },
