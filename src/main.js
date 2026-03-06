@@ -2902,7 +2902,41 @@ app.whenReady().then(async () => {
         }
       }
 
-      // No sessionId: wait for any busy session to become idle
+      // Wait by slot index (used by resume --block where session ID changes)
+      if (msg.slotIndex !== undefined) {
+        // Validate slot exists before entering poll loop
+        findSlotByIndex(msg.slotIndex);
+        try {
+          const result = await poll(
+            async () => {
+              // Re-read pool each iteration: sessionId changes after /resume
+              const pool = readPool();
+              const slot = pool?.slots?.[msg.slotIndex];
+              if (!slot?.sessionId) return null;
+              const sessions = await getSessions();
+              const session = sessions.find(
+                (s) => s.sessionId === slot.sessionId,
+              );
+              if (session && session.status === "idle") return slot;
+              if (session && !session.alive)
+                throw new Error("Session process died");
+              return null;
+            },
+            {
+              interval: 1000,
+              initialDelay: 1000,
+              timeout,
+              label: "waiting for slot to become idle",
+            },
+          );
+          const buffer = await getTerminalBuffer(result.termId);
+          return { type: "result", sessionId: result.sessionId, buffer };
+        } catch (err) {
+          return { type: "error", error: err.message, id: msg.id };
+        }
+      }
+
+      // No sessionId or slotIndex: wait for any busy session to become idle
       const pool = readPool();
       if (!pool) throw new Error("Pool not initialized");
       const busySlots = pool.slots.filter((s) => s.status === "busy");
@@ -3024,6 +3058,18 @@ app.whenReady().then(async () => {
         }, 6000);
       }
       return { type: "ok", sessionId: msg.sessionId };
+    },
+
+    "archive-session": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      await archiveSession(msg.sessionId);
+      return { type: "ok" };
+    },
+
+    "unarchive-session": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      unarchiveSession(msg.sessionId);
+      return { type: "ok" };
     },
 
     "get-session-graph": async () => ({

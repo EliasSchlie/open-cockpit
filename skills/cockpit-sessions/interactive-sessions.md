@@ -26,7 +26,7 @@ cockpit-cli unpin "$id"      # release immediately
 ## Stopping a Session
 
 ```bash
-cockpit-cli stop "$id"       # sends Escape + Ctrl-C
+cockpit-cli stop "$id"       # sends Escape to interrupt
 ```
 
 Interrupts a running session without killing the slot. The session returns to idle after Claude stops.

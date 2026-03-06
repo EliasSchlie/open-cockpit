@@ -692,11 +692,13 @@ case "$CMD" in
 
     if $BLOCK; then
       echo "Resumed in slot $SLOT" >&2
-      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
+      # Wait by slotIndex — session ID changes after /resume, so sessionId-based wait would fail
+      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"slotIndex\":$SLOT,\"timeout\":300000}"
       WAIT_RESULT=$(send_api "$wait_json" 310)
       check_error "$WAIT_RESULT"
       BUFFER=$(json_field "$WAIT_RESULT" "buffer")
-      apply_verbosity "$SESSION_ID" "$BUFFER"
+      NEW_SID=$(json_field "$WAIT_RESULT" "sessionId")
+      apply_verbosity "$NEW_SID" "$BUFFER"
     else
       echo "Resumed in slot $SLOT"
     fi
@@ -835,6 +837,24 @@ case "$CMD" in
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     echo "Stop signal sent to $RESOLVED_VALUE"
+    ;;
+
+  archive)
+    SESSION_ID="${1:?sessionId required}"
+    resolve_target "$SESSION_ID"
+    json="{\"type\":\"archive-session\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    RESULT=$(send_api "$json" 30)
+    check_error "$RESULT"
+    echo "Archived $RESOLVED_VALUE"
+    ;;
+
+  unarchive)
+    SESSION_ID="${1:?sessionId required}"
+    resolve_target "$SESSION_ID"
+    json="{\"type\":\"unarchive-session\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    echo "Unarchived $RESOLVED_VALUE"
     ;;
 
   # ==========================================================================
@@ -1340,7 +1360,9 @@ Targets: Most commands accept a <target> which can be:
   clean                          Free slots occupied by finished sessions
   pin <id> [seconds]             Prevent offloading (default: 120s)
   unpin <id>                     Allow offloading again
-  stop <id>                      Interrupt running session (Escape + Ctrl-C)
+  stop <id>                      Interrupt running session (sends Escape)
+  archive <id>                   Archive a session
+  unarchive <id>                 Move archived session back to recent
 
 ─── POOL MANAGEMENT ─────────────────────────────────────────────────────────
 
