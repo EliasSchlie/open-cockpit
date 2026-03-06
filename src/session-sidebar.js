@@ -171,9 +171,9 @@ async function loadSessions() {
   if (oldStatuses.size > 0) {
     for (const s of sessions) {
       if (
-        s.status === STATUS_CLASSES.idle &&
+        s.status === STATUS.IDLE &&
         oldStatuses.has(s.sessionId) &&
-        oldStatuses.get(s.sessionId) !== STATUS_CLASSES.idle
+        oldStatuses.get(s.sessionId) !== STATUS.IDLE
       ) {
         playBell();
         break;
