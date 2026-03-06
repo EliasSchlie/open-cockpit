@@ -250,7 +250,7 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
   return hasIntentionContent || hasTermInput ? "typing" : "fresh";
 }
 
-// Cache hasRealInteraction results (transcript -> true, once true stays true)
+// Cache transcriptContains results (key -> true, once true stays true)
 const userInputCache = new Map();
 
 const { parseOrigins } = require("./parse-origins");
@@ -438,19 +438,16 @@ async function getIdleSignal(pid) {
   }
 }
 
-// Check if a session's JSONL transcript contains any real user interaction.
-// Uses "type":"assistant" as the marker — only present when Claude actually
-// responds to a real prompt. Local commands (/clear, /model, etc.) write
-// "type":"user" entries but never generate assistant responses, so checking
-// for user entries alone would misclassify post-/clear sessions as "idle".
-async function hasRealInteraction(transcriptPath) {
+// Check if a JSONL transcript contains a given needle string.
+// Reads in 64KB chunks to avoid loading the entire file into memory.
+async function transcriptContains(transcriptPath, needle) {
   if (!transcriptPath) return false;
-  if (userInputCache.get(transcriptPath)) return true;
+  const cacheKey = transcriptPath + "\0" + needle;
+  if (userInputCache.get(cacheKey)) return true;
   try {
     const fh = await fs.promises.open(transcriptPath, "r");
     const buf = Buffer.alloc(64 * 1024); // 64KB chunks
     let offset = 0;
-    const needle = '"type":"assistant"';
     try {
       let result;
       while (
@@ -458,7 +455,7 @@ async function hasRealInteraction(transcriptPath) {
         result.bytesRead > 0
       ) {
         if (buf.toString("utf-8", 0, result.bytesRead).includes(needle)) {
-          userInputCache.set(transcriptPath, true);
+          userInputCache.set(cacheKey, true);
           return true;
         }
         offset += result.bytesRead;
@@ -683,7 +680,11 @@ async function getSessionsUncached() {
       // local commands (e.g. /model, /help) write to the JSONL without triggering
       // hooks, which would cause permanent false "processing" detection.
       idleTs = idleSignal.ts || 0;
-      if (!(await hasRealInteraction(idleSignal.transcript))) {
+      // Use "assistant" needle — post-/clear transcripts have "user" entries
+      // from local-command metadata but never assistant responses.
+      if (
+        !(await transcriptContains(idleSignal.transcript, '"type":"assistant"'))
+      ) {
         status = freshOrTyping(hasIntentionContent, hasTermInput);
       } else {
         status = "idle";
@@ -721,7 +722,9 @@ async function getSessionsUncached() {
           );
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
-        status = (await hasRealInteraction(jsonlPath))
+        // Use "user" needle — this path only runs when idle signal is absent
+        // (prompt just submitted), so "user" entries are real, not /clear artifacts.
+        status = (await transcriptContains(jsonlPath, '"type":"user"'))
           ? "processing"
           : freshOrTyping(hasIntentionContent, hasTermInput);
       }
