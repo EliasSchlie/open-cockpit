@@ -1098,8 +1098,9 @@ case "$CMD" in
 
         resolve_term_target "$TARGET"
 
-        # Open ephemeral shell tab
-        json="{\"type\":\"session-term-open\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
+        # Open ephemeral shell tab at caller's cwd
+        CWD_JSON=$(printf '%s' "$PWD" | jq -Rs .)
+        json="{\"type\":\"session-term-open\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"cwd\":$CWD_JSON}"
         RESULT=$(send_api "$json")
         check_error "$RESULT"
         TAB_INDEX=$(json_field "$RESULT" "tabIndex")
