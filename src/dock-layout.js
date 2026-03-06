@@ -78,6 +78,7 @@ export class DockLayout {
       if (idx !== -1) {
         leaf.activeTab = idx;
         targetLeaf = leaf;
+        return true; // early exit — tab is in exactly one leaf
       }
     });
     if (!targetLeaf) return;
@@ -101,7 +102,10 @@ export class DockLayout {
   getTabLeafId(tabId) {
     let result = null;
     this._forEachLeaf((leaf) => {
-      if (leaf.tabs.includes(tabId)) result = leaf.id;
+      if (leaf.tabs.includes(tabId)) {
+        result = leaf.id;
+        return true; // early exit
+      }
     });
     return result;
   }
@@ -131,13 +135,17 @@ export class DockLayout {
   }
 
   destroy() {
+    this._detachAllContent();
+    this.container.innerHTML = "";
+    this.root = null;
+  }
+
+  _detachAllContent() {
     this.tabs.forEach((tab) => {
       if (tab.contentEl?.parentElement) {
         tab.contentEl.parentElement.removeChild(tab.contentEl);
       }
     });
-    this.container.innerHTML = "";
-    this.root = null;
   }
 
   // --- Tree traversal ---
@@ -189,6 +197,7 @@ export class DockLayout {
         leaf.tabs.splice(idx, 1);
         if (leaf.activeTab >= leaf.tabs.length)
           leaf.activeTab = Math.max(0, leaf.tabs.length - 1);
+        return true; // early exit — tab is in exactly one leaf
       }
     });
   }
@@ -289,13 +298,7 @@ export class DockLayout {
   // --- Rendering ---
 
   _render() {
-    // Detach all content elements so they survive DOM clearing
-    this.tabs.forEach((tab) => {
-      if (tab.contentEl?.parentElement) {
-        tab.contentEl.parentElement.removeChild(tab.contentEl);
-      }
-    });
-
+    this._detachAllContent();
     this.container.innerHTML = "";
     if (!this.root) return;
     this.container.appendChild(this._renderNode(this.root));

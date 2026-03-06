@@ -22,6 +22,7 @@ import {
   registerEditorTab,
   setupTerminalResize,
   teardownTerminalResize,
+  disposeTerminalEntry,
   getFocusedTabId,
   focusLeafContent,
 } from "./dock-helpers.js";
@@ -485,11 +486,6 @@ function dockRegisterTerminal(entry) {
   registerTerminalTab(dock, entry, label);
 }
 
-function dockUnregisterTerminal(entry) {
-  if (!dock || !entry.dockTabId) return;
-  dock.unregisterTab(entry.dockTabId);
-}
-
 // Initialize dock with optional existing terminals and saved layout.
 // If no terminals/layout provided, caller adds tabs and sets layout after.
 function initDockLayout(existingTerminals, savedLayout) {
@@ -607,8 +603,11 @@ async function spawnTerminal(cwd, cmd, args, targetLeafId) {
   dockRegisterTerminal(entry);
   if (dock) {
     // Add to target leaf or next to Claude tab
+    const tuiTab = terminals.find((t) => t.isPoolTui)?.dockTabId;
     const leaf =
-      targetLeafId || dock.getTabLeafId("claude") || dock.getFirstLeafId();
+      targetLeafId ||
+      (tuiTab && dock.getTabLeafId(tuiTab)) ||
+      dock.getFirstLeafId();
     dock.addTab(entry.dockTabId, leaf);
   }
 
@@ -686,10 +685,7 @@ async function closeTerminal(index) {
   if (!entry.isPoolTui) {
     await window.api.ptyKill(entry.termId);
   }
-  teardownTerminalResize(entry);
-  dockUnregisterTerminal(entry);
-  entry.term.dispose();
-  entry.container.remove();
+  disposeTerminalEntry(entry, dock);
   terminals.splice(index, 1);
 
   if (terminals.length === 0) {
@@ -707,6 +703,7 @@ async function closeTerminal(index) {
 function hideCurrentTerminals() {
   removeInlineSnapshot();
   if (currentSessionId && terminals.length > 0) {
+    for (const entry of terminals) teardownTerminalResize(entry);
     sessionTerminals.set(currentSessionId, {
       terminals: [...terminals],
       activeTermIndex,
@@ -729,6 +726,7 @@ function restoreSessionTerminals(sessionId) {
   activeTermIndex = cached.activeTermIndex;
 
   initDockLayout(terminals, cached.dockLayout);
+  for (const entry of terminals) setupTerminalResize(entry);
 
   return true;
 }
@@ -742,10 +740,7 @@ function destroySessionTerminals(sessionId) {
     if (!entry.isPoolTui) {
       window.api.ptyKill(entry.termId).catch(() => {});
     }
-    teardownTerminalResize(entry);
-    dockUnregisterTerminal(entry);
-    entry.term.dispose();
-    entry.container.remove();
+    disposeTerminalEntry(entry, dock);
   }
   sessionTerminals.delete(sessionId);
 }
@@ -760,10 +755,7 @@ function killAllTerminals() {
     if (!entry.isPoolTui) {
       window.api.ptyKill(entry.termId).catch(() => {});
     }
-    teardownTerminalResize(entry);
-    dockUnregisterTerminal(entry);
-    entry.term.dispose();
-    entry.container.remove();
+    disposeTerminalEntry(entry, dock);
   }
   terminals = [];
   activeTermIndex = -1;
@@ -1774,6 +1766,14 @@ function focusEditor() {
   if (editorView) editorView.focus();
 }
 
+function togglePaneFocus() {
+  if (editorMount && editorMount.contains(document.activeElement)) {
+    focusTerminal();
+  } else {
+    focusEditor();
+  }
+}
+
 // --- Command palette ---
 // --- Shortcut display helpers ---
 // Convert Electron accelerator to display string (e.g. "CmdOrCtrl+N" → "⌘N")
@@ -1951,13 +1951,7 @@ const COMMANDS = [
     id: "toggle-pane-focus",
     label: "Toggle Pane Focus",
     shortcutAction: "toggle-pane-focus",
-    action: () => {
-      if (editorMount && editorMount.contains(document.activeElement)) {
-        focusTerminal();
-      } else {
-        focusEditor();
-      }
-    },
+    action: togglePaneFocus,
   },
   {
     id: "focus-editor",
@@ -2168,7 +2162,8 @@ window.api.onApiTermOpened(async (sessionId, termId) => {
 
   dockRegisterTerminal(entry);
   if (dock) {
-    const leaf = dock.getTabLeafId("claude") || dock.getFirstLeafId();
+    const tuiTab = terminals.find((t) => t.isPoolTui)?.dockTabId;
+    const leaf = (tuiTab && dock.getTabLeafId(tuiTab)) || dock.getFirstLeafId();
     dock.addTab(entry.dockTabId, leaf);
   }
   syncSessionCache();
@@ -2182,10 +2177,7 @@ window.api.onApiTermClosed((sessionId, termId) => {
 
   const entry = terminals[idx];
   window.api.ptyDetach(entry.termId).catch(() => {});
-  teardownTerminalResize(entry);
-  dockUnregisterTerminal(entry);
-  entry.term.dispose();
-  entry.container.remove();
+  disposeTerminalEntry(entry, dock);
   terminals.splice(idx, 1);
 
   if (terminals.length === 0) {
@@ -2228,13 +2220,7 @@ window.api.onFocusTerminal(() => {
   if (!commandPalette.classList.contains("visible")) focusTerminal();
 });
 window.api.onToggleCommandPalette(toggleCommandPalette);
-window.api.onTogglePaneFocus(() => {
-  if (editorMount && editorMount.contains(document.activeElement)) {
-    focusTerminal();
-  } else {
-    focusEditor();
-  }
-});
+window.api.onTogglePaneFocus(togglePaneFocus);
 window.api.onCyclePane(cyclePane);
 window.api.onFocusNextPane(() => focusAdjacentPane(1));
 window.api.onFocusPrevPane(() => focusAdjacentPane(-1));

@@ -94,6 +94,14 @@ export function getFocusedTabId(dock, container) {
   return null;
 }
 
+// Dispose a terminal entry: tear down resize, unregister dock tab, dispose xterm, remove DOM
+export function disposeTerminalEntry(entry, dock) {
+  teardownTerminalResize(entry);
+  if (dock && entry.dockTabId) dock.unregisterTab(entry.dockTabId);
+  entry.term.dispose();
+  entry.container.remove();
+}
+
 // Focus the first terminal in a given leaf
 export function focusLeafContent(dock, leafId, terminals) {
   const activeTabId = dock.getActiveTabInLeaf(leafId);
