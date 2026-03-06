@@ -13,6 +13,7 @@ import {
   findSlotBySessionId,
   findSlotByIndex,
   resolveSlot as resolveSlotByAddress,
+  findOffloadTarget,
 } from "../src/pool.js";
 
 /** Inline helper — createPool was removed from pool.js (never called in production). */
@@ -579,5 +580,391 @@ describe("selectShrinkCandidates with pinning", () => {
     ];
     const result = selectShrinkCandidates(slots, 2);
     expect(result).toHaveLength(0);
+  });
+});
+
+describe("syncStatuses — dead slot recovery (#107)", () => {
+  it.each([
+    { sessionStatus: "idle", expectedSlot: "idle" },
+    { sessionStatus: "processing", expectedSlot: "busy" },
+    { sessionStatus: "fresh", expectedSlot: "fresh" },
+  ])(
+    "recovers dead slot to $expectedSlot when session is $sessionStatus and alive",
+    ({ sessionStatus, expectedSlot }) => {
+      const pool = createPool(1);
+      pool.slots.push({
+        ...createSlot(0, "t1", 100),
+        status: "dead",
+        sessionId: "s1",
+      });
+      const sessions = [
+        { sessionId: "s1", status: sessionStatus, alive: true },
+      ];
+      const updated = syncStatuses(pool, sessions);
+      expect(updated).not.toBeNull();
+      expect(updated.slots[0].status).toBe(expectedSlot);
+    },
+  );
+
+  it("keeps dead slot dead when session is not alive", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "dead",
+      sessionId: "s1",
+    });
+    const sessions = [{ sessionId: "s1", status: "idle", alive: false }];
+    expect(syncStatuses(pool, sessions)).toBeNull();
+  });
+
+  it("keeps dead slot dead when session has no alive field", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "dead",
+      sessionId: "s1",
+    });
+    // alive is undefined (falsy)
+    const sessions = [{ sessionId: "s1", status: "idle" }];
+    expect(syncStatuses(pool, sessions)).toBeNull();
+  });
+
+  it("skips dead slots with no matching session", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "dead",
+      sessionId: "s1",
+    });
+    const sessions = [{ sessionId: "other", status: "idle", alive: true }];
+    expect(syncStatuses(pool, sessions)).toBeNull();
+  });
+});
+
+describe("computePoolHealth — edge cases", () => {
+  it.each([
+    { slotStatus: "idle", expected: "unknown" },
+    { slotStatus: "busy", expected: "unknown" },
+  ])(
+    "marks slot as $expected when alive, no session, and status is $slotStatus",
+    ({ slotStatus, expected }) => {
+      const pool = createPool(1);
+      pool.slots.push({
+        ...createSlot(0, "t1", 100),
+        status: slotStatus,
+        sessionId: "s1",
+      });
+      const health = computePoolHealth(pool, [], () => true);
+      expect(health.slots[0].healthStatus).toBe(expected);
+    },
+  );
+
+  it("marks slot as starting when alive, no session, and status is starting", () => {
+    const pool = createPool(1);
+    pool.slots.push(createSlot(0, "t1", 100));
+    const health = computePoolHealth(pool, [], () => true);
+    expect(health.slots[0].healthStatus).toBe("starting");
+  });
+
+  it.each([null, 0])("marks dead when pid is %s (falsy)", (pid) => {
+    const pool = createPool(1);
+    pool.slots.push({ ...createSlot(0, "t1", pid), sessionId: "s1" });
+    const health = computePoolHealth(pool, [], () => true);
+    expect(health.slots[0].healthStatus).toBe("dead");
+  });
+
+  it("returns poolSize in health output", () => {
+    const pool = createPool(5);
+    pool.slots = [];
+    const health = computePoolHealth(pool, [], () => true);
+    expect(health.poolSize).toBe(5);
+    expect(health.initialized).toBe(true);
+    expect(health.slots).toEqual([]);
+  });
+
+  it("handles empty slots array", () => {
+    const pool = createPool(0);
+    const health = computePoolHealth(pool, [], () => true);
+    expect(health.initialized).toBe(true);
+    expect(health.slots).toEqual([]);
+    expect(health.counts).toEqual({});
+  });
+
+  it("propagates cwd from session to health slot", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "idle",
+      sessionId: "s1",
+    });
+    const sessions = [{ sessionId: "s1", status: "idle", cwd: "/home/user" }];
+    const health = computePoolHealth(pool, sessions, () => true);
+    expect(health.slots[0].cwd).toBe("/home/user");
+  });
+});
+
+describe("findOffloadTarget", () => {
+  it("returns null when a fresh slot exists by slot status", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "fresh", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle" }],
+      ["s2", { sessionId: "s2", status: "idle" }],
+    ]);
+    expect(findOffloadTarget(pool, sessionMap)).toBeNull();
+  });
+
+  it("returns null when a fresh slot exists by session status", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "busy", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "fresh" }],
+      ["s2", { sessionId: "s2", status: "idle" }],
+    ]);
+    expect(findOffloadTarget(pool, sessionMap)).toBeNull();
+  });
+
+  it("picks the LRU idle slot when no fresh slot exists", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "idle", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 200 }],
+      ["s2", { sessionId: "s2", status: "idle", idleTs: 100 }],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s2"); // s2 has earlier idleTs (LRU)
+    expect(target.termId).toBe("t2");
+    expect(target.pid).toBe(200);
+  });
+
+  it("includes cwd and gitRoot from session", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "idle",
+      sessionId: "s1",
+    });
+    const sessionMap = new Map([
+      [
+        "s1",
+        {
+          sessionId: "s1",
+          status: "idle",
+          idleTs: 50,
+          cwd: "/proj",
+          gitRoot: "/proj",
+        },
+      ],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.cwd).toBe("/proj");
+    expect(target.gitRoot).toBe("/proj");
+  });
+
+  it("throws when no fresh or idle slots available", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "busy", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "busy", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "processing" }],
+      ["s2", { sessionId: "s2", status: "processing" }],
+    ]);
+    expect(() => findOffloadTarget(pool, sessionMap)).toThrow(
+      "No fresh or idle slots available",
+    );
+  });
+
+  it("skips pinned idle slots", () => {
+    const future = new Date(Date.now() + 60000).toISOString();
+    const pool = createPool(2);
+    pool.slots.push(
+      {
+        ...createSlot(0, "t1", 100),
+        status: "idle",
+        sessionId: "s1",
+        pinnedUntil: future,
+      },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 50 }],
+      ["s2", { sessionId: "s2", status: "idle", idleTs: 100 }],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s2"); // s1 is pinned
+  });
+
+  it("throws when all idle slots are pinned", () => {
+    const future = new Date(Date.now() + 60000).toISOString();
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "idle",
+      sessionId: "s1",
+      pinnedUntil: future,
+    });
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 50 }],
+    ]);
+    expect(() => findOffloadTarget(pool, sessionMap)).toThrow(
+      "No fresh or idle slots available",
+    );
+  });
+
+  it("treats slots with no session data as non-idle", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "idle", sessionId: "s1" },
+      {
+        ...createSlot(1, "t2", 200),
+        status: "idle",
+        sessionId: "s2",
+      },
+    );
+    // s2 not in sessionMap — its session data is missing
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 100 }],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s1"); // only s1 has session data
+  });
+
+  it("uses idleTs 0 as default when session has no idleTs", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "idle", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 500 }],
+      ["s2", { sessionId: "s2", status: "idle" }], // no idleTs
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s2"); // idleTs defaults to 0 (oldest)
+  });
+});
+
+describe("readPool / writePool — edge cases", () => {
+  it("creates parent directory if it does not exist", () => {
+    const nestedFile = path.join(TMP_DIR, "nested", "deep", "pool.json");
+    const pool = createPool(1);
+    writePool(nestedFile, pool);
+    expect(readPool(nestedFile)).toEqual(pool);
+  });
+
+  it("overwrites existing file", () => {
+    const pool1 = createPool(1);
+    writePool(POOL_FILE, pool1);
+    const pool2 = createPool(5);
+    writePool(POOL_FILE, pool2);
+    expect(readPool(POOL_FILE).poolSize).toBe(5);
+  });
+
+  it("returns null for empty file", () => {
+    fs.writeFileSync(POOL_FILE, "");
+    expect(readPool(POOL_FILE)).toBeNull();
+  });
+});
+
+describe("session lifecycle transitions", () => {
+  it("fresh → idle → offload → fresh cycle via syncStatuses", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "fresh",
+      sessionId: "s1",
+    });
+
+    // fresh → idle
+    let updated = syncStatuses(pool, [{ sessionId: "s1", status: "idle" }]);
+    expect(updated.slots[0].status).toBe("idle");
+
+    // Simulate offload: reset slot to starting
+    pool.slots[0].status = "starting";
+    pool.slots[0].sessionId = null;
+
+    // After /clear resolves: new session fresh
+    pool.slots[0].status = "fresh";
+    pool.slots[0].sessionId = "s2";
+
+    updated = syncStatuses(pool, [{ sessionId: "s2", status: "fresh" }]);
+    // fresh → fresh = no change
+    expect(updated).toBeNull();
+    expect(pool.slots[0].status).toBe("fresh");
+  });
+
+  it("fresh → busy → idle → dead lifecycle", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "fresh",
+      sessionId: "s1",
+    });
+
+    // fresh → busy (user starts work)
+    let updated = syncStatuses(pool, [
+      { sessionId: "s1", status: "processing" },
+    ]);
+    expect(updated.slots[0].status).toBe("busy");
+
+    // busy → idle (processing complete)
+    updated = syncStatuses(pool, [{ sessionId: "s1", status: "idle" }]);
+    expect(updated.slots[0].status).toBe("idle");
+
+    // Simulate death: mark slot dead
+    pool.slots[0].status = "dead";
+    // Dead slot with dead session stays dead
+    updated = syncStatuses(pool, [
+      { sessionId: "s1", status: "idle", alive: false },
+    ]);
+    expect(updated).toBeNull();
+    expect(pool.slots[0].status).toBe("dead");
+  });
+
+  it("dead → recovery → idle lifecycle", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "dead",
+      sessionId: "s1",
+    });
+
+    // Process comes back alive
+    const updated = syncStatuses(pool, [
+      { sessionId: "s1", status: "idle", alive: true },
+    ]);
+    expect(updated).not.toBeNull();
+    expect(updated.slots[0].status).toBe("idle");
+  });
+
+  it("multi-slot mixed transitions", () => {
+    const pool = createPool(3);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "fresh", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+      { ...createSlot(2, "t3", 300), status: "dead", sessionId: "s3" },
+    );
+
+    const sessions = [
+      { sessionId: "s1", status: "processing" }, // fresh → busy
+      { sessionId: "s2", status: "idle" }, // idle → idle (no change)
+      { sessionId: "s3", status: "fresh", alive: true }, // dead → fresh (recovery)
+    ];
+    const updated = syncStatuses(pool, sessions);
+    expect(updated).not.toBeNull();
+    expect(updated.slots[0].status).toBe("busy");
+    expect(updated.slots[1].status).toBe("idle");
+    expect(updated.slots[2].status).toBe("fresh");
   });
 });

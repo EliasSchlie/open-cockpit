@@ -34,6 +34,7 @@ const {
   findSlotBySessionId: findSlotBySessionIdInPool,
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
+  findOffloadTarget,
 } = require("./pool");
 const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 
@@ -2156,41 +2157,6 @@ async function poolClean() {
     cleaned++;
   }
   return cleaned;
-}
-
-// Ensure a fresh pool slot exists, offloading the LRU idle session if needed.
-// Find offload target from pool/sessions without acquiring lock.
-// Returns offload info or null if a fresh slot already exists.
-function findOffloadTarget(pool, sessionMap) {
-  // Only truly fresh slots count — typing sessions (user has started composing) are not available
-  const hasFresh = pool.slots.some((s) => {
-    if (s.status === "fresh") return true;
-    const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "fresh";
-  });
-  if (hasFresh) return null;
-
-  const idleSlots = pool.slots.filter((s) => {
-    if (isSlotPinned(s)) return false;
-    const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "idle";
-  });
-  if (idleSlots.length === 0)
-    throw new Error("No fresh or idle slots available");
-  idleSlots.sort((a, b) => {
-    const sa = sessionMap.get(a.sessionId);
-    const sb = sessionMap.get(b.sessionId);
-    return (sa?.idleTs || 0) - (sb?.idleTs || 0);
-  });
-  const victim = idleSlots[0];
-  const vs = sessionMap.get(victim.sessionId);
-  return {
-    sessionId: victim.sessionId,
-    termId: victim.termId,
-    pid: victim.pid,
-    cwd: vs?.cwd,
-    gitRoot: vs?.gitRoot,
-  };
 }
 
 // Ensure a fresh slot exists, then atomically claim and return it.
