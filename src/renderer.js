@@ -925,13 +925,17 @@ function createSessionItem(s) {
   const staleTag = s.staleIdle
     ? `<span class="session-origin-tag session-origin-stale">stale</span>`
     : "";
+  const pinned = s.pinnedUntil && new Date(s.pinnedUntil) > new Date();
+  const pinnedTag = pinned
+    ? '<span class="session-origin-tag session-origin-pinned" title="Pinned — won\'t be offloaded">📌</span>'
+    : "";
   li.innerHTML = `
     <div class="session-dir-indicator" style="${indicatorStyle}"></div>
     <div class="session-item-content">
       <div class="session-project">
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
         <span class="session-title${isPreview ? " session-preview" : ""}">${escapeHtml(heading || "No intention yet")}</span>
-        ${originTag}${staleTag}
+        ${originTag}${staleTag}${pinnedTag}
       </div>
       <div class="session-cwd">${escapeHtml(dp)}</div>
     </div>
@@ -2392,9 +2396,15 @@ function renderPoolSlotsHtml(health) {
         slot.intentionHeading ||
         slot.sessionId?.slice(0, 8) ||
         `slot-${slot.index}`;
+      const pinned =
+        slot.pinnedUntil && new Date(slot.pinnedUntil) > new Date();
+      const pinBadge = pinned
+        ? '<span class="pool-slot-pin" title="Pinned">📌</span>'
+        : "";
       return `<div class="pool-slot-row pool-slot-clickable" data-slot-index="${slot.index}">
         ${poolStatusDot(status)}
         <span class="pool-slot-label">${label}</span>
+        ${pinBadge}
         <span class="pool-slot-status">${status}</span>
       </div>`;
     })

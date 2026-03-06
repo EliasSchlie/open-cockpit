@@ -2463,6 +2463,25 @@ app.whenReady().then(async () => {
   ipcMain.handle("get-sessions", async () => {
     const sessions = await getSessions();
     syncPoolStatuses(sessions);
+    // Enrich with pinned status and session graph
+    const pool = readPool();
+    if (pool) {
+      const slotMap = new Map(
+        pool.slots.filter((s) => s.sessionId).map((s) => [s.sessionId, s]),
+      );
+      for (const s of sessions) {
+        const slot = slotMap.get(s.sessionId);
+        if (slot?.pinnedUntil) s.pinnedUntil = slot.pinnedUntil;
+      }
+    }
+    const graph = readSessionGraph();
+    for (const s of sessions) {
+      const rel = graph[s.sessionId];
+      if (rel) {
+        s.parentSessionId = rel.parentSessionId;
+        s.initiator = rel.initiator;
+      }
+    }
     return sessions;
   });
   ipcMain.handle("read-intention", (_e, sessionId) => {
@@ -2930,9 +2949,10 @@ app.whenReady().then(async () => {
     "pool-stop-session": async (msg) => {
       if (!msg.sessionId) throw new Error("sessionId required");
       const { slot } = findSlotBySessionId(msg.sessionId);
+      // Escape interrupts Claude generation; send twice to dismiss any menu
       daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
-      await new Promise((r) => setTimeout(r, 100));
-      daemonSendSafe({ type: "write", termId: slot.termId, data: "\x03" });
+      await new Promise((r) => setTimeout(r, 200));
+      daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
       return { type: "ok", sessionId: msg.sessionId };
     },
 
