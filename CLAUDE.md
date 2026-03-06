@@ -179,6 +179,10 @@ When pressing Cmd+N with scripts in `~/.open-cockpit/setup-scripts/`, a picker a
 
 Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach on close (don't kill the daemon PTY). Falls back to fresh shell if pool slot not found or attach fails.
 
+### Programmatic terminal access
+
+Sessions can discover and interact with their own terminal tabs via the `session-terminals` API and `cockpit-cli term` commands. This lets Claude sessions read, write to, open, and close sibling terminal tabs. Tabs are addressed by index (0 = first tab, typically TUI for pool sessions). See [docs/api.md](docs/api.md) for full reference.
+
 ## Session lifecycle
 
 ```

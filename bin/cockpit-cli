@@ -137,6 +137,53 @@ find_jsonl() {
   find "$CLAUDE_PROJECTS_DIR" -name "${session_id}.jsonl" -type f 2>/dev/null | head -1
 }
 
+# Resolve target to a sessionId. Sets RESOLVED_SESSION_ID.
+# Handles @N slot targets by looking up sessionId via slot-status.
+resolve_to_session_id() {
+  local target="$1"
+  resolve_target "$target"
+  if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+    local json="{\"type\":\"slot-status\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
+    local result
+    result=$(send_api "$json")
+    check_error "$result"
+    RESOLVED_SESSION_ID=$(echo "$result" | jq -r '.slot.sessionId // empty')
+    if [[ -z "$RESOLVED_SESSION_ID" ]]; then
+      echo "Error: slot $RESOLVED_VALUE has no session" >&2
+      exit 1
+    fi
+  else
+    RESOLVED_SESSION_ID="$RESOLVED_VALUE"
+  fi
+}
+
+# Resolve a named key to its escape sequence. Sets KEY_DATA.
+resolve_key() {
+  local key="$1"
+  case "$key" in
+    enter|return) KEY_DATA=$'\r' ;;
+    escape|esc)   KEY_DATA=$'\x1b' ;;
+    ctrl-c)       KEY_DATA=$'\x03' ;;
+    ctrl-d)       KEY_DATA=$'\x04' ;;
+    ctrl-u)       KEY_DATA=$'\x15' ;;
+    ctrl-l)       KEY_DATA=$'\x0c' ;;
+    ctrl-a)       KEY_DATA=$'\x01' ;;
+    ctrl-e)       KEY_DATA=$'\x05' ;;
+    ctrl-z)       KEY_DATA=$'\x1a' ;;
+    tab)          KEY_DATA=$'\t' ;;
+    backspace)    KEY_DATA=$'\x7f' ;;
+    up)           KEY_DATA=$'\x1b[A' ;;
+    down)         KEY_DATA=$'\x1b[B' ;;
+    right)        KEY_DATA=$'\x1b[C' ;;
+    left)         KEY_DATA=$'\x1b[D' ;;
+    *)
+      echo "Unknown key: $key" >&2
+      echo "Available: enter, escape, ctrl-c, ctrl-d, ctrl-u, ctrl-l, ctrl-a, ctrl-e, ctrl-z, tab, backspace, up, down, left, right" >&2
+      exit 1
+      ;;
+  esac
+}
+
 CMD="${1:-help}"
 shift 2>/dev/null || true
 
@@ -473,31 +520,9 @@ case "$CMD" in
     KEY="${2:?key name required (enter, escape, ctrl-c, ctrl-u, ctrl-d, tab, up, down, left, right)}"
 
     resolve_target "$TARGET"
+    resolve_key "$KEY"
 
-    case "$KEY" in
-      enter|return) DATA=$'\r' ;;
-      escape|esc)   DATA=$'\x1b' ;;
-      ctrl-c)       DATA=$'\x03' ;;
-      ctrl-d)       DATA=$'\x04' ;;
-      ctrl-u)       DATA=$'\x15' ;;
-      ctrl-l)       DATA=$'\x0c' ;;
-      ctrl-a)       DATA=$'\x01' ;;
-      ctrl-e)       DATA=$'\x05' ;;
-      ctrl-z)       DATA=$'\x1a' ;;
-      tab)          DATA=$'\t' ;;
-      backspace)    DATA=$'\x7f' ;;
-      up)           DATA=$'\x1b[A' ;;
-      down)         DATA=$'\x1b[B' ;;
-      right)        DATA=$'\x1b[C' ;;
-      left)         DATA=$'\x1b[D' ;;
-      *)
-        echo "Unknown key: $KEY" >&2
-        echo "Available: enter, escape, ctrl-c, ctrl-d, ctrl-u, ctrl-l, ctrl-a, ctrl-e, ctrl-z, tab, backspace, up, down, left, right" >&2
-        exit 1
-        ;;
-    esac
-
-    DATA_JSON=$(printf '%s' "$DATA" | jq -Rs .)
+    DATA_JSON=$(printf '%s' "$KEY_DATA" | jq -Rs .)
     if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
       json="{\"type\":\"slot-write\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE,\"data\":$DATA_JSON}"
     else
@@ -752,6 +777,224 @@ case "$CMD" in
     ;;
 
   # ==========================================================================
+  # SESSION TERMINALS — access terminal tabs alongside a session
+  # ==========================================================================
+
+  term)
+    SUBCMD="${1:?subcommand required (ls|read|write|key|open|close|watch)}"
+    shift
+    case "$SUBCMD" in
+      ls|list)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        resolve_to_session_id "$TARGET"
+        json="{\"type\":\"session-terminals\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        echo "$RESULT" | jq -r '
+          if (.terminals | length) == 0 then "No terminals found."
+          else
+            (["INDEX", "LABEL", "TUI", "TERM_ID", "PID", "CWD"] | @tsv),
+            "---\t---\t---\t---\t---\t---",
+            (.terminals[] |
+              [
+                .index,
+                .label,
+                (if .isTui then "yes" else "" end),
+                .termId,
+                .pid,
+                (.cwd // "-")
+              ] | @tsv
+            )
+          end
+        ' | column -t -s $'\t'
+        ;;
+
+      read)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        shift
+        TAB_INDEX="${1:-}"
+        resolve_to_session_id "$TARGET"
+
+        if [[ -z "$TAB_INDEX" ]]; then
+          # No tab index: list available tabs
+          json="{\"type\":\"session-terminals\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
+          RESULT=$(send_api "$json")
+          check_error "$RESULT"
+          echo "Available tabs:" >&2
+          echo "$RESULT" | jq -r '.terminals[] | "  [\(.index)] \(.label)\(if .isTui then " (TUI)" else "" end)"'
+          exit 0
+        fi
+
+        validate_int "$TAB_INDEX" "tab index"
+        json="{\"type\":\"session-term-read\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        BUFFER=$(json_field "$RESULT" "buffer")
+        printf '%s' "$BUFFER" | strip_ansi
+        ;;
+
+      write)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        TAB_INDEX="${2:?tab index required}"
+        TEXT="${3:?text required}"
+        validate_int "$TAB_INDEX" "tab index"
+        TEXT=$(printf '%b' "$TEXT")
+
+        resolve_to_session_id "$TARGET"
+        DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+        json="{\"type\":\"session-term-write\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX,\"data\":$DATA_JSON}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        echo "Written to $TARGET tab $TAB_INDEX"
+        ;;
+
+      key)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        TAB_INDEX="${2:?tab index required}"
+        KEY="${3:?key name required (enter, escape, ctrl-c, etc.)}"
+        validate_int "$TAB_INDEX" "tab index"
+
+        resolve_to_session_id "$TARGET"
+        resolve_key "$KEY"
+
+        DATA_JSON=$(printf '%s' "$KEY_DATA" | jq -Rs .)
+        json="{\"type\":\"session-term-write\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX,\"data\":$DATA_JSON}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        echo "Sent $KEY to $TARGET tab $TAB_INDEX"
+        ;;
+
+      watch)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        TAB_INDEX="${2:?tab index required}"
+        INTERVAL="${3:-1}"
+        validate_int "$TAB_INDEX" "tab index"
+
+        resolve_to_session_id "$TARGET"
+
+        json="{\"type\":\"session-term-read\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
+
+        # Verify accessible before entering loop
+        FIRST=$(send_api "$json" 2>/dev/null) || { echo "Error: cannot connect to API" >&2; exit 1; }
+        FIRST_ERR=$(echo "$FIRST" | jq -r '.error // empty' 2>/dev/null) || true
+        [[ -n "$FIRST_ERR" ]] && { echo "Error: $FIRST_ERR" >&2; exit 1; }
+
+        echo "Watching $TARGET tab $TAB_INDEX (Ctrl+C to stop)..." >&2
+        node -e '
+          const net = require("net");
+          const interval = parseInt(process.argv[1]) * 1000;
+          const json = process.argv[2];
+          const sock = process.argv[3];
+
+          function stripAnsi(s) {
+            return s
+              .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+              .replace(/\x1b\][^\x07]*\x07/g, "")
+              .replace(/\x1b[()][AB012]/g, "")
+              .replace(/\x1b\[?\??[0-9;]*[a-zA-Z]/g, "")
+              .replace(/\x1b[>=]/g, "")
+              .replace(/\r\n/g, "\n")
+              .replace(/\r/g, "\n");
+          }
+
+          function query() {
+            return new Promise((resolve, reject) => {
+              let buf = "";
+              const c = net.createConnection(sock);
+              c.on("connect", () => c.write(json + "\n"));
+              c.on("data", d => {
+                buf += d;
+                const i = buf.indexOf("\n");
+                if (i !== -1) { c.destroy(); resolve(buf.slice(0, i)); }
+              });
+              c.on("error", reject);
+              setTimeout(() => { c.destroy(); reject(new Error("timeout")); }, 5000);
+            });
+          }
+
+          let prevLines = [];
+          async function poll() {
+            try {
+              const resp = JSON.parse(await query());
+              if (resp.error) { process.stderr.write("Error: " + resp.error + "\n"); process.exit(1); }
+              const raw = resp.buffer || "";
+              const clean = stripAnsi(raw).split("\n").map(l => l.trimEnd());
+
+              if (prevLines.length === 0) {
+                process.stdout.write(clean.join("\n") + "\n");
+              } else {
+                let matchLen = 0;
+                for (let tryLen = Math.min(prevLines.length, clean.length); tryLen > 0; tryLen--) {
+                  const prevSuffix = prevLines.slice(-tryLen).join("\n");
+                  for (let start = 0; start <= clean.length - tryLen; start++) {
+                    if (clean.slice(start, start + tryLen).join("\n") === prevSuffix) {
+                      const newStart = start + tryLen;
+                      if (newStart < clean.length) {
+                        matchLen = tryLen;
+                        const newLines = clean.slice(newStart);
+                        process.stdout.write(newLines.join("\n") + "\n");
+                      }
+                      prevLines = clean;
+                      return;
+                    }
+                  }
+                }
+                if (matchLen === 0 && clean.join("\n") !== prevLines.join("\n")) {
+                  process.stdout.write("\n--- buffer changed ---\n" + clean.join("\n") + "\n");
+                }
+              }
+              prevLines = clean;
+            } catch (e) {
+              process.stderr.write("Connection lost: " + e.message + "\n");
+              process.exit(1);
+            }
+          }
+
+          poll();
+          setInterval(poll, interval);
+        ' "$INTERVAL" "$json" "$SOCKET"
+        ;;
+
+      open)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        CWD="${2:-}"
+
+        resolve_to_session_id "$TARGET"
+
+        if [[ -n "$CWD" ]]; then
+          CWD_JSON=$(printf '%s' "$CWD" | jq -Rs .)
+          json="{\"type\":\"session-term-open\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"cwd\":$CWD_JSON}"
+        else
+          json="{\"type\":\"session-term-open\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
+        fi
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        TAB=$(json_field "$RESULT" "tabIndex")
+        TERMID=$(json_field "$RESULT" "termId")
+        echo "Opened tab $TAB (termId=$TERMID)"
+        ;;
+
+      close)
+        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+        TAB_INDEX="${2:?tab index required}"
+        validate_int "$TAB_INDEX" "tab index"
+
+        resolve_to_session_id "$TARGET"
+        json="{\"type\":\"session-term-close\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        echo "Closed tab $TAB_INDEX"
+        ;;
+
+      *)
+        echo "Unknown term subcommand: $SUBCMD" >&2
+        echo "Available: ls, read, write, key, watch, open, close" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ==========================================================================
   # LEGACY FLAT COMMANDS (backward compatible)
   # ==========================================================================
 
@@ -832,6 +1075,17 @@ Targets: Most commands accept a <target> which can be:
   pool resize <size>             Resize pool
   pool destroy                   Destroy pool and kill all slots
 
+─── SESSION TERMINALS ───────────────────────────────────────────────────────
+
+  term ls <target>                   List terminal tabs for a session
+  term read <target> [tab]           Read tab content (ANSI-stripped)
+                                     Omit tab to list available tabs
+  term write <target> <tab> <text>   Type text into a tab (interprets escapes)
+  term key <target> <tab> <keyname>  Send named key to a tab
+  term watch <target> <tab> [interval]  Follow tab output in real-time
+  term open <target> [cwd]           Open a new shell tab
+  term close <target> <tab>          Close a tab (cannot close TUI)
+
 ─── SLOT ACCESS ─────────────────────────────────────────────────────────────
 
   slot read <index>              Read terminal buffer
@@ -860,6 +1114,13 @@ Targets: Most commands accept a <target> which can be:
   cockpit-cli prompt 2947b "add error handling" --block  # Send prompt, wait
   cockpit-cli key @0 ctrl-c                   # Send Ctrl+C to slot 0
   cockpit-cli type @1 'hello\r'               # Type "hello" + Enter
+
+  cockpit-cli term ls @0                       # List terminal tabs
+  cockpit-cli term read @0 1                   # Read shell tab content
+  cockpit-cli term write @0 1 'npm test\r'     # Type into shell tab
+  cockpit-cli term key @0 1 ctrl-c             # Send Ctrl+C to shell tab
+  cockpit-cli term open @0                     # Open new shell tab
+  cockpit-cli term close @0 1                  # Close shell tab
 USAGE
     [[ "$CMD" != "help" ]] && exit 1
     exit 0

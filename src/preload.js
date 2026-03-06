@@ -9,6 +9,8 @@ const channels = [
   "pty-exit",
   "new-terminal-tab",
   "close-terminal-tab",
+  "api-term-opened",
+  "api-term-closed",
   "next-terminal-tab",
   "prev-terminal-tab",
   "switch-terminal-tab",
@@ -117,6 +119,14 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("prev-terminal-tab", () => callback()),
   onSwitchTerminalTab: (callback) =>
     ipcRenderer.on("switch-terminal-tab", (_e, index) => callback(index)),
+  onApiTermOpened: (callback) =>
+    ipcRenderer.on("api-term-opened", (_e, sessionId, termId) =>
+      callback(sessionId, termId),
+    ),
+  onApiTermClosed: (callback) =>
+    ipcRenderer.on("api-term-closed", (_e, sessionId, termId) =>
+      callback(sessionId, termId),
+    ),
 
   // Navigation actions
   onNewSession: (callback) => ipcRenderer.on("new-session", () => callback()),

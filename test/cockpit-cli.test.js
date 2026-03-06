@@ -156,6 +156,64 @@ const mockHandlers = {
   }),
   "write-intention": () => ({ type: "ok" }),
   "pool-clean": () => ({ type: "cleaned", count: 1 }),
+  "session-terminals": (msg) => {
+    if (msg.sessionId === "ext00000-ext0-ext0-ext0-ext000000000") {
+      return {
+        type: "terminals",
+        terminals: [
+          {
+            termId: 30,
+            index: 0,
+            label: "Shell 1",
+            isTui: false,
+            pid: 5678,
+            cwd: "/tmp/ext-project",
+          },
+        ],
+      };
+    }
+    return {
+      type: "terminals",
+      terminals: [
+        {
+          termId: 10,
+          index: 0,
+          label: "Claude",
+          isTui: true,
+          pid: 1234,
+          cwd: "/tmp/test-project",
+        },
+        {
+          termId: 15,
+          index: 1,
+          label: "Shell 1",
+          isTui: false,
+          pid: 2345,
+          cwd: "/tmp/test-project",
+        },
+      ],
+    };
+  },
+  "session-term-read": (msg) => ({
+    type: "buffer",
+    termId: msg.tabIndex === 0 ? 10 : 15,
+    buffer:
+      msg.tabIndex === 0
+        ? "Claude TUI content\r\n"
+        : "$ ls\nfile1.txt\nfile2.txt\n",
+  }),
+  "session-term-write": () => ({ type: "ok" }),
+  "session-term-open": () => ({
+    type: "spawned",
+    termId: 20,
+    tabIndex: 2,
+  }),
+  "session-term-close": (msg) => {
+    if (msg.tabIndex === 0) {
+      return { type: "error", error: "Cannot close the Claude TUI tab" };
+    }
+    return { type: "ok" };
+  },
 };
 
 function runCli(args, env = {}) {
@@ -473,6 +531,86 @@ describe("cockpit-cli", () => {
       const r = await runCli(["ping"]);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("pong");
+    });
+  });
+
+  describe("term ls", () => {
+    it("lists terminals for a session by slot", async () => {
+      const r = await runCli(["term", "ls", "@0"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Claude");
+      expect(r.stdout).toContain("Shell 1");
+      expect(r.stdout).toContain("TUI");
+    });
+
+    it("lists terminals by session prefix", async () => {
+      const r = await runCli(["term", "ls", "abcd1"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Claude");
+    });
+  });
+
+  describe("term read", () => {
+    it("reads terminal content by tab index", async () => {
+      const r = await runCli(["term", "read", "@0", "1"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("file1.txt");
+    });
+
+    it("reads TUI tab content", async () => {
+      const r = await runCli(["term", "read", "@0", "0"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Claude TUI content");
+    });
+
+    it("lists tabs when no tab index given", async () => {
+      const r = await runCli(["term", "read", "@0"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Claude");
+      expect(r.stdout).toContain("Shell 1");
+    });
+  });
+
+  describe("term write", () => {
+    it("writes to a terminal tab", async () => {
+      const r = await runCli(["term", "write", "@0", "1", "ls -la"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Written to");
+    });
+  });
+
+  describe("term key", () => {
+    it("sends a named key to a terminal tab", async () => {
+      const r = await runCli(["term", "key", "@0", "1", "enter"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Sent enter");
+    });
+
+    it("errors on unknown key", async () => {
+      const r = await runCli(["term", "key", "@0", "1", "f5"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("Unknown key");
+    });
+  });
+
+  describe("term open", () => {
+    it("opens a new terminal tab", async () => {
+      const r = await runCli(["term", "open", "@0"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("tab 2");
+    });
+  });
+
+  describe("term close", () => {
+    it("closes a terminal tab", async () => {
+      const r = await runCli(["term", "close", "@0", "1"]);
+      expect(r.code).toBe(0);
+    });
+
+    it("refuses to close TUI tab", async () => {
+      const r = await runCli(["term", "close", "@0", "0"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("TUI");
     });
   });
 

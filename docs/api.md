@@ -68,6 +68,19 @@ cockpit-cli input <id> "y"                           # Send raw input
 cockpit-cli clean                                    # Offload finished sessions
 ```
 
+### Session terminals (per-session tab access)
+
+```bash
+cockpit-cli term ls @2                               # List terminal tabs
+cockpit-cli term read @2 1                           # Read shell tab content
+cockpit-cli term write @2 1 'npm test\r'             # Type into shell tab
+cockpit-cli term key @2 1 ctrl-c                     # Send Ctrl+C to shell tab
+cockpit-cli term watch @2 1                          # Follow shell tab output
+cockpit-cli term open @2                             # Open new shell tab
+cockpit-cli term open @2 /path/to/dir               # Open shell tab at specific dir
+cockpit-cli term close @2 1                          # Close shell tab
+```
+
 ### Pool management
 
 ```bash
@@ -156,7 +169,20 @@ Direct slot access by pool index. Works even on error-status slots that have no 
 | `read-intention` | `sessionId` | `{ type: "intention", content }` |
 | `write-intention` | `sessionId`, `content` | `{ type: "ok" }` |
 
-### Terminals
+### Session Terminal Access
+| Command | Fields | Response |
+|---------|--------|----------|
+| `session-terminals` | `sessionId` | `{ type: "terminals", terminals: [{ termId, index, label, isTui, pid, cwd }] }` |
+| `session-term-read` | `sessionId`, `tabIndex` | `{ type: "buffer", termId, buffer }` |
+| `session-term-write` | `sessionId`, `tabIndex`, `data` | `{ type: "ok" }` |
+| `session-term-open` | `sessionId`, `cwd` (optional) | `{ type: "spawned", termId, tabIndex }` |
+| `session-term-close` | `sessionId`, `tabIndex` | `{ type: "ok" }` |
+
+`session-terminals` lists all terminal tabs for a session, sorted by creation order. The `isTui` flag marks the Claude TUI tab (pool sessions only). Tab indices are stable within a call but may shift after open/close.
+
+`session-term-open` spawns a new shell at the session's cwd (or an explicit `cwd`). `session-term-close` refuses to close the TUI tab on pool sessions.
+
+### Terminals (low-level)
 | Command | Fields | Response |
 |---------|--------|----------|
 | `pty-list` | -- | `{ type: "ptys", ptys }` |
