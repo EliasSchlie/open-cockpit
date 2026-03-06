@@ -11,7 +11,9 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/shortcuts.js` — Configurable keyboard shortcuts (defaults, overrides, accelerator matching)
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
-- `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
+- `src/dock-layout.js` — **Dock system**: recursive split tree, drag-and-drop tabs, resize handles
+- `src/dock-helpers.js` — Dock integration utilities (editor container factory, terminal resize, tab registration)
+- `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar + dock integration
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
 - `bin/cockpit-cli` — CLI for observing and interacting with agents. High-level commands (`ls`, `screen`, `watch`, `log`, `prompt`, `key`, `type`) + session commands (`start`, `followup`, `wait`, `pin`, `stop`) + pool management ([docs/api.md](docs/api.md))
 - `skills/cockpit-sessions/` — Skill docs for Claude Code (SKILL.md + sub-skills)

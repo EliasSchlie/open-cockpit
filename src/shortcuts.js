@@ -31,6 +31,11 @@ const DEFAULT_SHORTCUTS = {
   "jump-recent-idle": "CmdOrCtrl+J",
   "archive-current-session": "CmdOrCtrl+D",
   "toggle-command-palette": "CmdOrCtrl+/",
+  // Dock panel management
+  "focus-next-pane": "CmdOrCtrl+Alt+]",
+  "focus-prev-pane": "CmdOrCtrl+Alt+[",
+  "split-right": "",
+  "split-down": "",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",

@@ -11,6 +11,21 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import {
+  DockLayout,
+  createDefaultLayout,
+  newLeafId,
+  TAB_EDITOR,
+  TAB_SNAPSHOT,
+  createEditorContainer,
+  registerTerminalTab,
+  registerEditorTab,
+  setupTerminalResize,
+  teardownTerminalResize,
+  disposeTerminalEntry,
+  getFocusedTabId,
+  focusLeafContent,
+} from "./dock-helpers.js";
 
 // --- Debug logging (writes to ~/.open-cockpit/debug.log via main process) ---
 function debugLog(tag, ...args) {
@@ -391,17 +406,19 @@ const refreshBtn = document.getElementById("refresh-btn");
 const newSessionBtn = document.getElementById("new-session-btn");
 const emptyState = document.getElementById("empty-state");
 const sessionView = document.getElementById("session-view");
-const editorPane = document.getElementById("editor-pane");
-const editorProject = document.getElementById("editor-project");
-const saveStatus = document.getElementById("save-status");
-const editorMount = document.getElementById("editor-mount");
-const terminalTabList = document.getElementById("terminal-tab-list");
-const newTermBtn = document.getElementById("new-term-btn");
-const terminalMount = document.getElementById("terminal-mount");
+const dockContainer = document.getElementById("dock-container");
 const sidebar = document.getElementById("sidebar");
 const commandPalette = document.getElementById("command-palette");
 const commandPaletteInput = document.getElementById("command-palette-input");
 const commandPaletteList = document.getElementById("command-palette-list");
+
+// Dock layout system
+let dock = null;
+let editorContainer = null; // persistent editor content element
+let editorMount = null; // reference into editorContainer
+let editorProject = null;
+let saveStatus = null;
+let shellCounter = 0; // monotonic counter for terminal labels
 
 // Keep a cached copy of sessions for keyboard navigation
 let cachedSessions = [];
@@ -422,6 +439,71 @@ let activeTermIndex = -1;
 // Generation counter to detect stale async operations after session switches
 let sessionGeneration = 0;
 
+// --- Dock helpers ---
+
+function ensureEditorContainer() {
+  if (editorContainer) return;
+  const result = createEditorContainer();
+  editorContainer = result.editorContainer;
+  editorMount = result.editorMount;
+  editorProject = result.editorProject;
+  saveStatus = result.saveStatus;
+}
+
+function ensureDock() {
+  if (dock) dock.destroy();
+  dock = new DockLayout(dockContainer, {
+    onTabClose: (tabId) => {
+      const entry = terminals.find((t) => t.dockTabId === tabId);
+      if (entry) {
+        const idx = terminals.indexOf(entry);
+        if (idx !== -1) closeTerminal(idx);
+      }
+    },
+    onTabActivate: (tabId) => {
+      // Focus the activated tab's content — resize is handled by dock-resize event
+      const entry = terminals.find((t) => t.dockTabId === tabId);
+      if (entry) {
+        requestAnimationFrame(() => entry.term.focus());
+      }
+      if (tabId === TAB_EDITOR && editorView) {
+        editorView.focus();
+      }
+    },
+    onNewTerminal: (leafId) => {
+      if (currentSessionId)
+        spawnTerminal(currentSessionCwd, null, null, leafId);
+    },
+    onLayoutChange: () => {
+      syncSessionCache();
+    },
+  });
+}
+
+function dockRegisterTerminal(entry) {
+  if (!dock) return;
+  const label = entry.isPoolTui ? "Claude" : `Terminal ${++shellCounter}`;
+  registerTerminalTab(dock, entry, label);
+}
+
+// Initialize dock with optional existing terminals and saved layout.
+// If no terminals/layout provided, caller adds tabs and sets layout after.
+function initDockLayout(existingTerminals, savedLayout) {
+  ensureEditorContainer();
+  ensureDock();
+  shellCounter = 0;
+  if (existingTerminals) {
+    for (const t of existingTerminals) dockRegisterTerminal(t);
+  }
+  registerEditorTab(dock, editorContainer);
+  if (savedLayout) {
+    dock.setLayout(savedLayout);
+  } else if (existingTerminals && existingTerminals.length > 0) {
+    const termTabIds = existingTerminals.map((t) => t.dockTabId);
+    dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  }
+}
+
 // Sync current terminals into the session cache (renderer + main process)
 function syncSessionCache() {
   if (!currentSessionId) return;
@@ -431,6 +513,7 @@ function syncSessionCache() {
     sessionTerminals.set(currentSessionId, {
       terminals: [...terminals],
       activeTermIndex,
+      dockLayout: dock ? dock.getLayout() : null,
       lastAccessed: Date.now(),
     });
     // Keep main process metadata in sync
@@ -462,10 +545,9 @@ function createEditor(content) {
   editorView = new EditorView({ state, parent: editorMount });
 }
 
-async function spawnTerminal(cwd, cmd, args) {
+async function spawnTerminal(cwd, cmd, args, targetLeafId) {
   const container = document.createElement("div");
-  container.style.cssText = "width:100%;height:100%;display:none;";
-  terminalMount.appendChild(container);
+  container.style.cssText = "width:100%;height:100%;";
 
   const term = createTerminal();
 
@@ -492,9 +574,10 @@ async function spawnTerminal(cwd, cmd, args) {
     pid,
     term,
     fitAddon,
-    resizeObserver: null,
     container,
     isPoolTui: false,
+    dockTabId: null,
+    _resizeHandler: null,
   };
   terminals.push(entry);
 
@@ -514,28 +597,28 @@ async function spawnTerminal(cwd, cmd, args) {
   pendingTerminals.delete(termId);
 
   wireTerminalInput(term, termId);
+  setupTerminalResize(entry);
 
-  const resizeObserver = new ResizeObserver(() => {
-    if (container.style.display !== "none") {
-      fitAddon.fit();
-      window.api.ptyResize(termId, term.cols, term.rows);
-    }
-  });
-  resizeObserver.observe(terminalMount);
-  entry.resizeObserver = resizeObserver;
+  // Register with dock
+  dockRegisterTerminal(entry);
+  if (dock) {
+    // Add to target leaf or next to Claude tab
+    const tuiTab = terminals.find((t) => t.isPoolTui)?.dockTabId;
+    const leaf =
+      targetLeafId ||
+      (tuiTab && dock.getTabLeafId(tuiTab)) ||
+      dock.getFirstLeafId();
+    dock.addTab(entry.dockTabId, leaf);
+  }
 
-  renderTerminalTabs();
-  switchToTerminal(terminals.length - 1);
   syncSessionCache();
-
   return entry;
 }
 
 // Attach to an existing pool slot's PTY (no spawn — the Claude TUI is already running)
 async function attachPoolTerminal(poolTermId) {
   const container = document.createElement("div");
-  container.style.cssText = "width:100%;height:100%;display:none;";
-  terminalMount.appendChild(container);
+  container.style.cssText = "width:100%;height:100%;";
 
   const term = createTerminal();
 
@@ -548,9 +631,10 @@ async function attachPoolTerminal(poolTermId) {
     pid: null,
     term,
     fitAddon,
-    resizeObserver: null,
     container,
     isPoolTui: true,
+    dockTabId: null,
+    _resizeHandler: null,
   };
   terminals.push(entry);
 
@@ -570,47 +654,26 @@ async function attachPoolTerminal(poolTermId) {
   pendingTerminals.delete(poolTermId);
 
   wireTerminalInput(term, poolTermId);
+  setupTerminalResize(entry);
 
-  const resizeObserver = new ResizeObserver(() => {
-    if (container.style.display !== "none") {
-      fitAddon.fit();
-      window.api.ptyResize(poolTermId, term.cols, term.rows);
-    }
-  });
-  resizeObserver.observe(terminalMount);
-  entry.resizeObserver = resizeObserver;
+  // Register with dock
+  dockRegisterTerminal(entry);
+  if (dock) {
+    const leaf = dock.getFirstLeafId();
+    dock.addTab(entry.dockTabId, leaf);
+  }
 
-  renderTerminalTabs();
-  switchToTerminal(terminals.length - 1);
   syncSessionCache();
-
   return entry;
 }
 
 function switchToTerminal(index) {
   if (index < 0 || index >= terminals.length) return;
-
-  for (const t of terminals) {
-    t.container.style.display = "none";
-  }
-
   activeTermIndex = index;
-  terminals[index].container.style.display = "block";
-
-  // Double-rAF: first ensures style change is processed, second ensures layout
-  // is computed. Then fit + resize the PTY so the daemon matches the display.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      const entry = terminals[index];
-      if (!entry) return;
-      entry.fitAddon.fit();
-      entry.term.refresh(0, entry.term.rows - 1);
-      entry.term.focus();
-      window.api.ptyResize(entry.termId, entry.term.cols, entry.term.rows);
-    });
-  });
-
-  renderTerminalTabs();
+  const entry = terminals[index];
+  if (entry.dockTabId && dock) {
+    dock.activateTab(entry.dockTabId);
+  }
 }
 
 async function closeTerminal(index) {
@@ -619,13 +682,10 @@ async function closeTerminal(index) {
   const entry = terminals[index];
   if (entry.isPoolTui) return; // Can't close the main Claude terminal
   await window.api.ptyDetach(entry.termId).catch(() => {});
-  // Don't kill pool TUI terminals — the Claude process must stay alive in the pool
   if (!entry.isPoolTui) {
     await window.api.ptyKill(entry.termId);
   }
-  entry.resizeObserver.disconnect();
-  entry.term.dispose();
-  entry.container.remove();
+  disposeTerminalEntry(entry, dock);
   terminals.splice(index, 1);
 
   if (terminals.length === 0) {
@@ -633,55 +693,27 @@ async function closeTerminal(index) {
     sessionView.classList.add("hidden");
     emptyState.classList.remove("hidden");
   } else {
-    switchToTerminal(Math.min(index, terminals.length - 1));
+    activeTermIndex = Math.min(index, terminals.length - 1);
   }
 
-  // Update session cache after activeTermIndex is corrected
   syncSessionCache();
-  renderTerminalTabs();
-}
-
-function renderTerminalTabs() {
-  terminalTabList.innerHTML = "";
-  let shellCount = 0;
-  terminals.forEach((t, i) => {
-    const tab = document.createElement("button");
-    tab.className = `terminal-tab${i === activeTermIndex ? " active" : ""}`;
-    const label = t.isPoolTui ? "Claude" : `Terminal ${++shellCount}`;
-    tab.textContent = `${label} `;
-    if (!t.isPoolTui) {
-      const closeBtn = document.createElement("span");
-      closeBtn.className = "terminal-tab-close";
-      closeBtn.textContent = "\u2715";
-      tab.appendChild(closeBtn);
-    }
-    tab.addEventListener("click", (e) => {
-      if (e.target.classList.contains("terminal-tab-close")) {
-        closeTerminal(i);
-      } else {
-        switchToTerminal(i);
-      }
-    });
-    terminalTabList.appendChild(tab);
-  });
 }
 
 // Hide current session's terminals (preserve them in cache)
 function hideCurrentTerminals() {
   removeInlineSnapshot();
   if (currentSessionId && terminals.length > 0) {
+    for (const entry of terminals) teardownTerminalResize(entry);
     sessionTerminals.set(currentSessionId, {
       terminals: [...terminals],
       activeTermIndex,
+      dockLayout: dock ? dock.getLayout() : null,
       lastAccessed: Date.now(),
     });
   }
-  for (const t of terminals) {
-    t.container.style.display = "none";
-  }
   terminals = [];
   activeTermIndex = -1;
-  terminalTabList.innerHTML = "";
+  shellCounter = 0;
 }
 
 // Restore cached terminals for a session, returns true if restored
@@ -693,19 +725,8 @@ function restoreSessionTerminals(sessionId) {
   terminals = cached.terminals;
   activeTermIndex = cached.activeTermIndex;
 
-  renderTerminalTabs();
-  const idx = activeTermIndex >= 0 ? activeTermIndex : 0;
-  switchToTerminal(idx);
-
-  // Re-fit all terminals after restore — dimensions may have changed while hidden
-  requestAnimationFrame(() => {
-    for (const t of terminals) {
-      if (t.container.style.display !== "none") {
-        t.fitAddon.fit();
-        window.api.ptyResize(t.termId, t.term.cols, t.term.rows);
-      }
-    }
-  });
+  initDockLayout(terminals, cached.dockLayout);
+  for (const entry of terminals) setupTerminalResize(entry);
 
   return true;
 }
@@ -716,13 +737,10 @@ function destroySessionTerminals(sessionId) {
   if (!cached) return;
   for (const entry of cached.terminals) {
     window.api.ptyDetach(entry.termId).catch(() => {});
-    // Don't kill pool TUI terminals — the Claude process must stay alive
     if (!entry.isPoolTui) {
       window.api.ptyKill(entry.termId).catch(() => {});
     }
-    entry.resizeObserver.disconnect();
-    entry.term.dispose();
-    entry.container.remove();
+    disposeTerminalEntry(entry, dock);
   }
   sessionTerminals.delete(sessionId);
 }
@@ -737,13 +755,11 @@ function killAllTerminals() {
     if (!entry.isPoolTui) {
       window.api.ptyKill(entry.termId).catch(() => {});
     }
-    entry.resizeObserver.disconnect();
-    entry.term.dispose();
-    entry.container.remove();
+    disposeTerminalEntry(entry, dock);
   }
   terminals = [];
   activeTermIndex = -1;
-  terminalTabList.innerHTML = "";
+  shellCounter = 0;
 }
 
 // Clean up terminals for dead sessions that haven't been accessed recently
@@ -1091,9 +1107,8 @@ function showSnapshotViewer(session, snapshotText) {
     .addEventListener("click", closeViewer);
 }
 
-// Show snapshot content inline in the terminal pane for offloaded/archived sessions
+// Show snapshot content inline as a dock tab for offloaded/archived sessions
 async function showInlineSnapshot(session, gen) {
-  const terminalPane = document.getElementById("terminal-pane");
   const isArchived = session.status === "archived";
   const btnLabel = isArchived ? "Restart" : "Resume";
 
@@ -1107,17 +1122,9 @@ async function showInlineSnapshot(session, gen) {
     if (gen !== sessionGeneration) return;
   }
 
-  // Hide terminal tabs and mount, replace with snapshot view
-  terminalTabList.style.display = "none";
-  newTermBtn.style.display = "none";
-  terminalMount.style.display = "none";
-
-  // Remove any previous inline snapshot
-  const prev = document.getElementById("inline-snapshot");
-  if (prev) prev.remove();
-
+  // Create snapshot content element
   const container = document.createElement("div");
-  container.id = "inline-snapshot";
+  container.className = "dock-snapshot-content";
   container.innerHTML = `
     <div class="inline-snapshot-header">
       <span class="inline-snapshot-label">${isArchived ? "Archived" : "Offloaded"} Session</span>
@@ -1125,7 +1132,6 @@ async function showInlineSnapshot(session, gen) {
     </div>
     <pre class="snapshot-content inline-snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
   `;
-  terminalPane.appendChild(container);
 
   container
     .querySelector(".inline-snapshot-restart")
@@ -1139,16 +1145,25 @@ async function showInlineSnapshot(session, gen) {
       }
       await resumeOffloadedSession(session);
     });
+
+  // Register snapshot as a dock tab
+  ensureEditorContainer();
+  ensureDock();
+  dock.registerTab(TAB_SNAPSHOT, {
+    type: TAB_SNAPSHOT,
+    label: isArchived ? "Archived" : "Snapshot",
+    closable: false,
+    contentEl: container,
+  });
+  registerEditorTab(dock, editorContainer);
+  dock.setLayout(createDefaultLayout([TAB_SNAPSHOT], [TAB_EDITOR]));
 }
 
 // Clean up inline snapshot when switching away from an offloaded/archived session
 function removeInlineSnapshot() {
-  const snap = document.getElementById("inline-snapshot");
-  if (!snap) return;
-  snap.remove();
-  terminalTabList.style.display = "";
-  newTermBtn.style.display = "";
-  terminalMount.style.display = "";
+  if (dock) {
+    dock.unregisterTab(TAB_SNAPSHOT);
+  }
 }
 
 function displayPath(session) {
@@ -1248,13 +1263,19 @@ async function resumeOffloadedSession(session) {
     return;
   }
 
-  // Transition: remove inline snapshot, attach to the live slot terminal
+  // Transition: remove inline snapshot, set up fresh dock, attach terminal
   removeInlineSnapshot();
+  initDockLayout();
+
   try {
     await attachPoolTerminal(result.termId);
   } catch (err) {
     debugLog("pool", `attach after resume failed: ${err.message}`);
   }
+
+  // Set dock layout after terminal is attached
+  const termTabIds = terminals.map((t) => t.dockTabId);
+  dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
 
   // Poll until the slot gets its new session ID, then update our state
   const oldSessionId = session.sessionId;
@@ -1262,12 +1283,12 @@ async function resumeOffloadedSession(session) {
   if (newSession) {
     currentSessionId = newSession.sessionId;
     currentSessionCwd = newSession.cwd;
-    // Move terminal cache from old to new session ID
     sessionTerminals.delete(oldSessionId);
     if (terminals.length > 0) {
       sessionTerminals.set(newSession.sessionId, {
         terminals: [...terminals],
         activeTermIndex,
+        dockLayout: dock ? dock.getLayout() : null,
         lastAccessed: Date.now(),
       });
     }
@@ -1296,9 +1317,11 @@ async function pollForResumedSession(termId, timeoutMs) {
 }
 
 function showNotification(msg) {
+  if (!saveStatus) return;
   saveStatus.textContent = msg;
   setTimeout(() => {
-    if (saveStatus.textContent === msg) saveStatus.textContent = "";
+    if (saveStatus && saveStatus.textContent === msg)
+      saveStatus.textContent = "";
   }, 3000);
 }
 
@@ -1349,19 +1372,21 @@ async function selectSession(session) {
 
   emptyState.classList.add("hidden");
   sessionView.classList.remove("hidden");
-  editorPane.classList.remove("hidden");
+
+  // Ensure editor container exists
+  ensureEditorContainer();
   editorProject.textContent = session.project
     ? `${session.project} — ${displayPath(session)}`
     : session.sessionId;
 
   // Apply directory color to editor header
   const dirColor = getDirColor(session);
-  const header = document.getElementById("editor-header");
-  const existingBar = header.querySelector("#editor-header-color-bar");
+  const header = editorContainer.querySelector(".dock-editor-header");
+  const existingBar = header.querySelector(".dock-editor-header-color-bar");
   if (existingBar) existingBar.remove();
   if (dirColor) {
     const colorBar = document.createElement("div");
-    colorBar.id = "editor-header-color-bar";
+    colorBar.className = "dock-editor-header-color-bar";
     colorBar.style.background = dirColor;
     colorBar.style.boxShadow = `0 0 8px ${dirColor}`;
     header.appendChild(colorBar);
@@ -1371,7 +1396,9 @@ async function selectSession(session) {
   if (session.status === "offloaded" || session.status === "archived") {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
-    // Restore cached terminals immediately (sync, no race risk)
+    // No cached terminals — set up fresh dock + terminals
+    initDockLayout();
+
     if (session.origin === "pool") {
       // Pool session: attach to the pool slot's existing Claude TUI
       const pool = await window.api.poolRead();
@@ -1382,7 +1409,7 @@ async function selectSession(session) {
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
       if (slot) {
         try {
-          const entry = await attachPoolTerminal(slot.termId);
+          await attachPoolTerminal(slot.termId);
           if (gen !== sessionGeneration) {
             debugLog("session", `race abort gen=${gen} at poolAttach`);
             destroySessionTerminals(session.sessionId);
@@ -1393,7 +1420,7 @@ async function selectSession(session) {
             "session",
             `pool attach failed for slot ${slot.termId}, falling back to shell`,
           );
-          const entry = await spawnTerminal(session.cwd);
+          await spawnTerminal(session.cwd);
           if (gen !== sessionGeneration) {
             debugLog("session", `race abort gen=${gen} at spawnFallback`);
             destroySessionTerminals(session.sessionId);
@@ -1401,8 +1428,7 @@ async function selectSession(session) {
           }
         }
       } else {
-        // No pool slot found — fall back to fresh shell
-        const entry = await spawnTerminal(session.cwd);
+        await spawnTerminal(session.cwd);
         if (gen !== sessionGeneration) {
           debugLog("session", `race abort gen=${gen} at noSlotSpawn`);
           destroySessionTerminals(session.sessionId);
@@ -1411,19 +1437,23 @@ async function selectSession(session) {
       }
     } else {
       // External session: spawn a fresh shell
-      const entry = await spawnTerminal(session.cwd);
+      await spawnTerminal(session.cwd);
       if (gen !== sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at extSpawn`);
         destroySessionTerminals(session.sessionId);
         return;
       }
     }
+
+    // Set the default dock layout
+    const termTabIds = terminals.map((t) => t.dockTabId);
+    dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
   }
 
   const content = await window.api.readIntention(session.sessionId);
   if (gen !== sessionGeneration) return;
   createEditor(content);
-  saveStatus.textContent = "";
+  if (saveStatus) saveStatus.textContent = "";
 
   await window.api.watchIntention(session.sessionId);
 }
@@ -1567,22 +1597,21 @@ newSessionBtn.addEventListener("click", async () => {
 });
 
 // "+" in terminal tab bar: new terminal at current session's CWD
-newTermBtn.addEventListener("click", async () => {
-  await spawnTerminal(currentSessionCwd);
-});
+// New terminal button removed — dock "+" buttons handle this now
 
 function scheduleSave() {
   if (!currentSessionId || !editorView) return;
-  saveStatus.textContent = "Editing...";
+  if (saveStatus) saveStatus.textContent = "Editing...";
   updateTypingState();
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
     const content = editorView.state.doc.toString();
     try {
       await window.api.writeIntention(currentSessionId, content);
-      saveStatus.textContent = "Saved";
+      if (saveStatus) saveStatus.textContent = "Saved";
       setTimeout(() => {
-        if (saveStatus.textContent === "Saved") saveStatus.textContent = "";
+        if (saveStatus && saveStatus.textContent === "Saved")
+          saveStatus.textContent = "";
       }, 2000);
     } catch (err) {
       debugLog(
@@ -1590,7 +1619,7 @@ function scheduleSave() {
         `intention save failed session=${currentSessionId}`,
         err.message,
       );
-      saveStatus.textContent = "";
+      if (saveStatus) saveStatus.textContent = "";
     }
   }, 500);
 }
@@ -1644,9 +1673,9 @@ window.api.onIntentionChanged((content) => {
     editorView.dispatch({
       changes: { from: 0, to: current.length, insert: content },
     });
-    saveStatus.textContent = "Updated from disk";
+    if (saveStatus) saveStatus.textContent = "Updated from disk";
     setTimeout(() => {
-      if (saveStatus.textContent === "Updated from disk")
+      if (saveStatus && saveStatus.textContent === "Updated from disk")
         saveStatus.textContent = "";
     }, 2000);
   }
@@ -1737,6 +1766,14 @@ function focusEditor() {
   if (editorView) editorView.focus();
 }
 
+function togglePaneFocus() {
+  if (editorMount && editorMount.contains(document.activeElement)) {
+    focusTerminal();
+  } else {
+    focusEditor();
+  }
+}
+
 // --- Command palette ---
 // --- Shortcut display helpers ---
 // Convert Electron accelerator to display string (e.g. "CmdOrCtrl+N" → "⌘N")
@@ -1761,11 +1798,9 @@ let shortcutConfig = {};
 
 // Cycle pane focus: editor → terminal tabs (round-robin) → back to editor
 function cyclePane() {
-  if (editorMount.contains(document.activeElement)) {
-    // Editor focused → go to first terminal
+  if (editorMount && editorMount.contains(document.activeElement)) {
     focusTerminal();
   } else if (activeTermIndex >= 0 && terminals.length > 1) {
-    // On a terminal tab — cycle to next, or wrap to editor
     const nextIdx = activeTermIndex + 1;
     if (nextIdx < terminals.length) {
       switchToTerminal(nextIdx);
@@ -1773,9 +1808,40 @@ function cyclePane() {
       focusEditor();
     }
   } else {
-    // On terminal (single) or somewhere else → go to editor
     focusEditor();
   }
+}
+
+// Navigate between dock leaves (panels)
+function focusAdjacentPane(delta) {
+  if (!dock) return;
+  const leafIds = dock.getLeafIds();
+  if (leafIds.length < 2) return;
+
+  // Find which leaf currently has focus
+  const focusedTabId = getFocusedTabId(dock, dockContainer);
+  let currentLeafId = focusedTabId ? dock.getTabLeafId(focusedTabId) : null;
+  if (!currentLeafId) currentLeafId = leafIds[0];
+
+  const idx = leafIds.indexOf(currentLeafId);
+  const nextIdx = (idx + delta + leafIds.length) % leafIds.length;
+  const nextLeafId = leafIds[nextIdx];
+
+  const activeTabId = dock.getActiveTabInLeaf(nextLeafId);
+  if (activeTabId === TAB_EDITOR || activeTabId === TAB_SNAPSHOT) {
+    dock.activateTab(activeTabId);
+    if (activeTabId === TAB_EDITOR && editorView) editorView.focus();
+  } else {
+    focusLeafContent(dock, nextLeafId, terminals);
+  }
+}
+
+// Move the focused tab to a new split in the given direction
+function splitFocusedTab(direction) {
+  if (!dock) return;
+  const focusedTabId = getFocusedTabId(dock, dockContainer);
+  if (!focusedTabId) return;
+  dock.moveTabToSplit(focusedTabId, direction);
 }
 
 const COMMANDS = [
@@ -1858,16 +1924,34 @@ const COMMANDS = [
     action: cyclePane,
   },
   {
+    id: "focus-next-pane",
+    label: "Focus Next Pane",
+    shortcutAction: "focus-next-pane",
+    action: () => focusAdjacentPane(1),
+  },
+  {
+    id: "focus-prev-pane",
+    label: "Focus Previous Pane",
+    shortcutAction: "focus-prev-pane",
+    action: () => focusAdjacentPane(-1),
+  },
+  {
+    id: "split-right",
+    label: "Split Right",
+    shortcutAction: "split-right",
+    action: () => splitFocusedTab("right"),
+  },
+  {
+    id: "split-down",
+    label: "Split Down",
+    shortcutAction: "split-down",
+    action: () => splitFocusedTab("down"),
+  },
+  {
     id: "toggle-pane-focus",
     label: "Toggle Pane Focus",
     shortcutAction: "toggle-pane-focus",
-    action: () => {
-      if (editorMount.contains(document.activeElement)) {
-        focusTerminal();
-      } else {
-        focusEditor();
-      }
-    },
+    action: togglePaneFocus,
   },
   {
     id: "focus-editor",
@@ -2037,12 +2121,10 @@ window.api.onCloseTerminalTab(() => {
 // API-spawned terminal: attach to it and show a tab (if it belongs to current session)
 window.api.onApiTermOpened(async (sessionId, termId) => {
   if (sessionId !== currentSessionId) return;
-  // Check not already attached
   if (terminals.some((t) => t.termId === termId)) return;
 
   const container = document.createElement("div");
-  container.style.cssText = "width:100%;height:100%;display:none;";
-  terminalMount.appendChild(container);
+  container.style.cssText = "width:100%;height:100%;";
 
   const term = createTerminal();
   const fitAddon = new FitAddon();
@@ -2054,9 +2136,10 @@ window.api.onApiTermOpened(async (sessionId, termId) => {
     pid: null,
     term,
     fitAddon,
-    resizeObserver: null,
     container,
     isPoolTui: false,
+    dockTabId: null,
+    _resizeHandler: null,
   };
   terminals.push(entry);
 
@@ -2075,18 +2158,14 @@ window.api.onApiTermOpened(async (sessionId, termId) => {
   pendingTerminals.delete(termId);
 
   term.onData((data) => window.api.ptyWrite(termId, data));
+  setupTerminalResize(entry);
 
-  const resizeObserver = new ResizeObserver(() => {
-    if (container.style.display !== "none") {
-      fitAddon.fit();
-      window.api.ptyResize(termId, term.cols, term.rows);
-    }
-  });
-  resizeObserver.observe(terminalMount);
-  entry.resizeObserver = resizeObserver;
-
-  renderTerminalTabs();
-  switchToTerminal(terminals.length - 1);
+  dockRegisterTerminal(entry);
+  if (dock) {
+    const tuiTab = terminals.find((t) => t.isPoolTui)?.dockTabId;
+    const leaf = (tuiTab && dock.getTabLeafId(tuiTab)) || dock.getFirstLeafId();
+    dock.addTab(entry.dockTabId, leaf);
+  }
   syncSessionCache();
 });
 
@@ -2098,9 +2177,7 @@ window.api.onApiTermClosed((sessionId, termId) => {
 
   const entry = terminals[idx];
   window.api.ptyDetach(entry.termId).catch(() => {});
-  entry.resizeObserver.disconnect();
-  entry.term.dispose();
-  entry.container.remove();
+  disposeTerminalEntry(entry, dock);
   terminals.splice(idx, 1);
 
   if (terminals.length === 0) {
@@ -2108,11 +2185,10 @@ window.api.onApiTermClosed((sessionId, termId) => {
     sessionView.classList.add("hidden");
     emptyState.classList.remove("hidden");
   } else {
-    switchToTerminal(Math.min(idx, terminals.length - 1));
+    activeTermIndex = Math.min(idx, terminals.length - 1);
   }
 
   syncSessionCache();
-  renderTerminalTabs();
 });
 
 window.api.onNextTerminalTab(() => {
@@ -2144,15 +2220,12 @@ window.api.onFocusTerminal(() => {
   if (!commandPalette.classList.contains("visible")) focusTerminal();
 });
 window.api.onToggleCommandPalette(toggleCommandPalette);
-window.api.onTogglePaneFocus(() => {
-  // If editor is focused, go to terminal; otherwise go to editor
-  if (editorMount.contains(document.activeElement)) {
-    focusTerminal();
-  } else {
-    focusEditor();
-  }
-});
+window.api.onTogglePaneFocus(togglePaneFocus);
 window.api.onCyclePane(cyclePane);
+window.api.onFocusNextPane(() => focusAdjacentPane(1));
+window.api.onFocusPrevPane(() => focusAdjacentPane(-1));
+window.api.onSplitRight(() => splitFocusedTab("right"));
+window.api.onSplitDown(() => splitFocusedTab("down"));
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
@@ -2168,8 +2241,7 @@ window.api.onPoolSlotsRecovered((slots) => {
 // Reconnect a single PTY from daemon (after app restart or reload)
 async function reconnectTerminal(ptyInfo) {
   const container = document.createElement("div");
-  container.style.cssText = "width:100%;height:100%;display:none;";
-  terminalMount.appendChild(container);
+  container.style.cssText = "width:100%;height:100%;";
 
   // Match the PTY's current dimensions so replay buffer renders correctly
   const term = createTerminal({
@@ -2186,21 +2258,19 @@ async function reconnectTerminal(ptyInfo) {
     pid: ptyInfo.pid,
     term,
     fitAddon,
-    resizeObserver: null,
     container,
     isPoolTui: !!ptyInfo.isPoolTui,
+    dockTabId: null,
+    _resizeHandler: null,
   };
 
-  // Write buffered output directly (already available from ptyList response)
   if (ptyInfo.buffer) {
     term.write(ptyInfo.buffer);
-    entry.skipReplay = true; // Suppress duplicate daemon replay
+    entry.skipReplay = true;
   }
 
-  // Register before attach so any new data arriving can find this terminal
   pendingTerminals.set(ptyInfo.termId, entry);
 
-  // Attach to daemon for future data
   try {
     await window.api.ptyAttach(ptyInfo.termId);
   } catch (err) {
@@ -2215,15 +2285,7 @@ async function reconnectTerminal(ptyInfo) {
   if (ptyInfo.exited) term.write("\r\n[Process exited]\r\n");
 
   wireTerminalInput(term, ptyInfo.termId);
-
-  const resizeObserver = new ResizeObserver(() => {
-    if (container.style.display !== "none") {
-      fitAddon.fit();
-      window.api.ptyResize(ptyInfo.termId, term.cols, term.rows);
-    }
-  });
-  resizeObserver.observe(terminalMount);
-  entry.resizeObserver = resizeObserver;
+  setupTerminalResize(entry);
 
   return entry;
 }
@@ -2281,12 +2343,14 @@ async function reconnectAllPtys() {
     currentSessionId = lastActive.sessionId;
     currentSessionCwd = lastActive.cwd;
 
-    terminals = sessionTerminals.get(lastActive.sessionId).terminals;
+    const cached = sessionTerminals.get(lastActive.sessionId);
+    terminals = cached.terminals;
     activeTermIndex = 0;
 
     emptyState.classList.add("hidden");
     sessionView.classList.remove("hidden");
-    editorPane.classList.remove("hidden");
+
+    ensureEditorContainer();
     editorProject.textContent = lastActive.project
       ? `${lastActive.project} — ${displayPath(lastActive)}`
       : lastActive.sessionId;
@@ -2295,8 +2359,8 @@ async function reconnectAllPtys() {
     createEditor(content);
     await window.api.watchIntention(lastActive.sessionId);
 
-    renderTerminalTabs();
-    switchToTerminal(0);
+    // Set up dock with restored terminals
+    initDockLayout(terminals);
   }
 }
 
