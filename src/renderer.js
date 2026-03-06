@@ -755,7 +755,8 @@ function destroySessionTerminals(sessionId, { keepAlive = false } = {}) {
     if (!entry.isPoolTui && !keepAlive) {
       window.api.ptyKill(entry.termId).catch(() => {});
     }
-    disposeTerminalEntry(entry, dock);
+    const activeDock = sessionId === currentSessionId ? dock : null;
+    disposeTerminalEntry(entry, activeDock);
   }
   sessionTerminals.delete(sessionId);
 }
