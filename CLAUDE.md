@@ -24,7 +24,7 @@ Electron app + Claude Code plugin for session intention tracking.
 The app can manage a pool of pre-started Claude sessions. Pool state lives in `~/.open-cockpit/pool.json`.
 
 - **Init**: via UI or API (`pool-init` with size). Spawns Claude sessions via the PTY daemon using `resolveClaudePath()` (finds `claude` binary via `which` + fallback paths). Trust prompt is accepted via buffer polling (not hardcoded delay).
-- **Dead slots**: `reconcilePool()` auto-restarts dead slots on app startup. Orphaned processes are killed by PID as fallback when daemon termIds are stale.
+- **Dead/error slots**: `reconcilePool()` auto-restarts dead and error slots. Runs on startup and every 30s. Orphaned processes are killed via `killSlotProcess()` (daemon + PID fallback) before respawn.
 - **Offloading**: Idle sessions get offloaded (snapshot + `/clear`). External `/clear` is also detected and saved as offloaded.
 - **Archiving**: All dead sessions are auto-archived (`archived: true` in meta.json). Any session can be manually archived via right-click. Pool sessions auto-offload before archiving.
 - **Destroy**: `pool-destroy` kills all slots and removes `pool.json`. Uses `killSlotProcess()` (daemon + PID fallback) to prevent orphans.
