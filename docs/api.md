@@ -66,6 +66,8 @@ cockpit-cli capture <id>                             # Live terminal content (ra
 cockpit-cli result <id>                              # Output (errors if running)
 cockpit-cli input <id> "y"                           # Send raw input
 cockpit-cli clean                                    # Offload finished sessions
+cockpit-cli archive <id>                             # Archive a session
+cockpit-cli unarchive <id>                           # Move archived → recent
 ```
 
 ### Session terminals (per-session tab access)
@@ -154,7 +156,7 @@ Send JSON with `type` and optional `id`. Response echoes `id` back.
 | `pool-start` | `prompt` | `{ type: "started", sessionId, termId, slotIndex }` |
 | `pool-resume` | `sessionId` | `{ type: "resumed", sessionId, termId, slotIndex }` |
 | `pool-followup` | `sessionId`, `prompt` | `{ type: "started", sessionId, termId, slotIndex }` |
-| `pool-wait` | `sessionId` (optional), `timeout` (optional, ms, default 300000) | `{ type: "result", sessionId, buffer }` |
+| `pool-wait` | `sessionId` or `slotIndex` (optional), `timeout` (optional, ms, default 300000) | `{ type: "result", sessionId, buffer }` |
 | `pool-capture` | `sessionId` or `slotIndex` | `{ type: "buffer", sessionId, slotIndex, buffer }` |
 | `pool-result` | `sessionId` or `slotIndex` | `{ type: "result", sessionId, slotIndex, buffer }` -- errors if still running |
 | `pool-input` | (`sessionId` or `slotIndex`), `data` | `{ type: "ok" }` |
@@ -163,7 +165,7 @@ Send JSON with `type` and optional `id`. Response echoes `id` back.
 `pool-start` acquires a fresh slot (offloads LRU idle if none available), sends the prompt, and marks the slot busy.
 `pool-resume` resumes an offloaded/archived session into a fresh slot (offloads LRU idle if needed). Unarchives if needed.
 `pool-followup` sends a follow-up to an idle session (errors if not idle).
-`pool-wait` long-polls until the session (or any busy session if no ID) becomes idle.
+`pool-wait` long-polls until the session (or any busy session if no ID) becomes idle. Accepts `slotIndex` as alternative to `sessionId` — useful for `resume` where the session ID changes.
 `pool-result` returns the buffer only if the session is not running.
 `pool-clean` offloads all idle sessions to free their slots.
 
@@ -183,6 +185,8 @@ Direct slot access by pool index. Works even on error-status slots that have no 
 | `get-sessions` | -- | `{ type: "sessions", sessions }` |
 | `read-intention` | `sessionId` | `{ type: "intention", content }` |
 | `write-intention` | `sessionId`, `content` | `{ type: "ok" }` |
+| `archive-session` | `sessionId` | `{ type: "ok" }` |
+| `unarchive-session` | `sessionId` | `{ type: "ok" }` |
 
 ### Session Terminal Access
 | Command | Fields | Response |
