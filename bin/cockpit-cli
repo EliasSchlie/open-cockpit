@@ -11,7 +11,9 @@ elif [ -S "$PROD_SOCKET" ]; then
 elif [ -S "$DEV_SOCKET" ]; then
   SOCKET="$DEV_SOCKET"
 else
-  SOCKET="$PROD_SOCKET"
+  echo "Error: Open Cockpit API socket not found (neither api.sock nor api-dev.sock exist)." >&2
+  echo "The app may not be running, or lost its socket after a double-launch. Restart Open Cockpit to fix." >&2
+  exit 1
 fi
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$HOME/.open-cockpit/session-pids}"
