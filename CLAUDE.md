@@ -182,14 +182,15 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 ## Session lifecycle
 
 ```
-fresh → processing → idle → offloaded (graceful /clear, snapshot saved)
-                       ↓         ↓
-                     dead    archived (manual or auto)
-                       ↓
-                   archived (auto on death)
+fresh → typing → processing → idle → offloaded (graceful /clear, snapshot saved)
+  ↑       ↓                     ↓         ↓
+  └───────┘                   dead    archived (manual or auto)
+                                ↓
+                            archived (auto on death)
 ```
 
 - **fresh** — pool slot with Claude ready, no user interaction yet
+- **typing** — fresh session where user has typed text in the editor (shown in sidebar, excluded from offload/resume targets)
 - **processing** — Claude is actively working
 - **idle** — Claude finished, waiting for user input
 - **offloaded** — session `/clear`'d, conversation saved (meta.json + snapshot.log), slot reused

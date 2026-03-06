@@ -48,6 +48,24 @@ const mockHandlers = {
         staleIdle: false,
         origin: "ext",
       },
+      {
+        pid: "9999",
+        sessionId: "type0000-0000-0000-0000-000000000000",
+        alive: true,
+        cwd: "/tmp/typing-project",
+        home: os.homedir(),
+        gitRoot: null,
+        project: "typing-project",
+        hasIntention: true,
+        intentionHeading: "Typing something",
+        status: "typing",
+        intentionHasContent: true,
+        terminalHasInput: false,
+        idleTs: 0,
+        staleIdle: false,
+        origin: "pool",
+        poolStatus: "fresh",
+      },
     ],
   }),
   "pool-health": () => ({
@@ -284,6 +302,15 @@ describe("cockpit-cli", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("idle");
       expect(r.stdout).not.toContain("processing");
+      expect(r.stdout).not.toContain("typing");
+    });
+
+    it("filters by --typing", async () => {
+      const r = await runCli(["ls", "--typing"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("typing");
+      expect(r.stdout).not.toContain("idle");
+      expect(r.stdout).not.toContain("processing");
     });
 
     it("outputs JSON with --json", async () => {
@@ -291,7 +318,7 @@ describe("cockpit-cli", () => {
       expect(r.code).toBe(0);
       const parsed = JSON.parse(r.stdout);
       expect(Array.isArray(parsed)).toBe(true);
-      expect(parsed.length).toBe(2);
+      expect(parsed.length).toBe(3);
     });
   });
 

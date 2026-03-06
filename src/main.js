@@ -148,6 +148,108 @@ const staleLoggedSessions = new Set();
 
 // Track last-seen JSONL file sizes and when they last changed (sessionId -> { size, changedAt })
 const jsonlSizeTracker = new Map();
+// Terminal input detection via buffer parsing (true ground truth).
+// Cached results refreshed by pollTerminalInput() every TERMINAL_POLL_MS.
+const terminalHasInputCache = new Map(); // termId → boolean
+const {
+  parseTerminalHasInput,
+  checkTerminalInputs,
+} = require("./terminal-input");
+const TERMINAL_POLL_MS = 10_000;
+const TERMINAL_WRITE_DEBOUNCE_MS = 500;
+
+// Poll fresh pool slots for terminal input by parsing their PTY buffers.
+// Runs periodically to keep terminalHasInputCache in sync with ground truth.
+// Uses `list` (returns all PTY buffers in one call) instead of per-slot
+// `read-buffer` to work with any daemon version.
+let pollInFlight = false;
+async function pollTerminalInput() {
+  if (pollInFlight) return;
+  pollInFlight = true;
+  try {
+    const pool = readPool();
+    if (!pool) return;
+
+    const freshSlots = pool.slots.filter((s) => s.status === "fresh");
+    if (freshSlots.length === 0) return;
+
+    // Single daemon call to get all terminal buffers
+    let ptys;
+    try {
+      const resp = await daemonRequest({ type: "list" });
+      ptys = resp.ptys || [];
+    } catch (err) {
+      debugLog("main", "pollTerminalInput: daemon unavailable", err.message);
+      return;
+    }
+
+    const freshTermIds = new Set(freshSlots.map((s) => s.termId));
+    const ptyTermIds = new Set(ptys.map((p) => p.termId));
+    const results = await checkTerminalInputs(ptys, freshTermIds);
+
+    let changed = false;
+    for (const [termId, hasInput] of results) {
+      const prev = terminalHasInputCache.get(termId) || false;
+      if (hasInput !== prev) {
+        if (hasInput) {
+          terminalHasInputCache.set(termId, true);
+        } else {
+          terminalHasInputCache.delete(termId);
+        }
+        changed = true;
+      }
+    }
+
+    // Clear stale cache entries for fresh slots whose PTY disappeared
+    for (const termId of freshTermIds) {
+      if (!ptyTermIds.has(termId) && terminalHasInputCache.has(termId)) {
+        terminalHasInputCache.delete(termId);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      invalidateSessionsCache();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("sessions-changed");
+      }
+    }
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+// Trigger a poll shortly after a keystroke is written to a fresh pool terminal.
+// Debounced so rapid typing doesn't flood — only the trailing edge fires.
+// Pool check is inside the callback to avoid disk I/O on every keystroke.
+let writeDebounceTimer = null;
+function triggerPollOnWrite(termId) {
+  clearTimeout(writeDebounceTimer);
+  writeDebounceTimer = setTimeout(() => {
+    const pool = readPool();
+    if (!pool) return;
+    const slot = pool.slots.find(
+      (s) => s.termId === termId && s.status === "fresh",
+    );
+    if (!slot) return;
+    pollTerminalInput().catch((err) =>
+      debugLog(
+        "main",
+        "pollTerminalInput (write-triggered) failed",
+        err.message,
+      ),
+    );
+  }, TERMINAL_WRITE_DEBOUNCE_MS);
+}
+
+// Check if an intention file has non-whitespace content (reuses readIntention below)
+function intentionHasContent(sessionId) {
+  return !!readIntention(sessionId).trim();
+}
+
+function freshOrTyping(hasIntentionContent, hasTermInput) {
+  return hasIntentionContent || hasTermInput ? "typing" : "fresh";
+}
 
 // Cache hasUserInput results (transcript -> true, once true stays true)
 const userInputCache = new Map();
@@ -481,6 +583,14 @@ async function batchGetCwds(pids) {
 
 async function getSessionsUncached() {
   const sessions = [];
+  const pool = readPool();
+  // Pre-build session→slot map for O(1) lookups
+  const poolSlotMap = new Map();
+  if (pool) {
+    for (const slot of pool.slots) {
+      if (slot.sessionId) poolSlotMap.set(slot.sessionId, slot);
+    }
+  }
 
   // Live sessions from session-pids
   const pidEntries = []; // {pid, sessionId}
@@ -532,6 +642,14 @@ async function getSessionsUncached() {
     let status;
     let idleTs = 0;
     let staleIdle = false;
+    const poolSlot = poolSlotMap.get(sessionId);
+    // Only check intention content for pool sessions (avoids unnecessary file reads for external/idle)
+    const hasIntentionContent = poolSlot
+      ? intentionHasContent(sessionId)
+      : false;
+    const hasTermInput = !!(
+      poolSlot && terminalHasInputCache.get(poolSlot.termId)
+    );
 
     if (!alive) {
       status = "dead";
@@ -547,7 +665,7 @@ async function getSessionsUncached() {
         // Claude and it's still processing (no new idle signal yet)
         status = "processing";
       } else if (!(await hasUserInput(idleSignal.transcript))) {
-        status = "fresh";
+        status = freshOrTyping(hasIntentionContent, hasTermInput);
       } else {
         status = "idle";
       }
@@ -584,7 +702,9 @@ async function getSessionsUncached() {
           );
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
-        status = (await hasUserInput(jsonlPath)) ? "processing" : "fresh";
+        status = (await hasUserInput(jsonlPath))
+          ? "processing"
+          : freshOrTyping(hasIntentionContent, hasTermInput);
       }
     }
 
@@ -599,6 +719,8 @@ async function getSessionsUncached() {
       hasIntention,
       intentionHeading,
       status,
+      intentionHasContent: hasIntentionContent,
+      terminalHasInput: hasTermInput,
       idleTs,
       staleIdle,
     });
@@ -698,7 +820,6 @@ async function getSessionsUncached() {
   }
 
   // Tag sessions with origin: pool, sub-claude, or ext
-  const pool = readPool();
   const poolSessionIds = new Set();
   if (pool) {
     for (const slot of pool.slots) {
@@ -932,6 +1053,8 @@ async function offloadSession(
     snapshot,
     origin: "pool",
   });
+  // Clean up terminal input cache for the offloaded slot
+  if (termId) terminalHasInputCache.delete(termId);
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
   try {
@@ -1497,6 +1620,8 @@ async function reconcilePool() {
           slot.status = "dead";
           changed = true;
         }
+        // Clean up terminal input cache for old termId
+        terminalHasInputCache.delete(slot.termId);
         // Kill orphaned process by PID before restarting
         if (slot.pid) {
           try {
@@ -1598,6 +1723,7 @@ async function poolDestroy() {
         } catch {}
       }
     }
+    terminalHasInputCache.clear();
     try {
       fs.unlinkSync(POOL_FILE);
     } catch (err) {
@@ -1662,6 +1788,7 @@ async function poolClean() {
 // Find offload target from pool/sessions without acquiring lock.
 // Returns offload info or null if a fresh slot already exists.
 function findOffloadTarget(pool, sessionMap) {
+  // Only truly fresh slots count — typing sessions (user has started composing) are not available
   const hasFresh = pool.slots.some((s) => {
     if (s.status === "fresh") return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
@@ -2186,6 +2313,9 @@ app.whenReady().then(async () => {
     if (anyDied) onDirChange();
   }, LIVENESS_CHECK_INTERVAL);
 
+  // Poll fresh terminal buffers for input detection (ground truth)
+  setInterval(() => pollTerminalInput().catch(() => {}), TERMINAL_POLL_MS);
+
   ipcMain.on("debug-log", (_e, tag, args) => {
     debugLog(tag, ...args);
   });
@@ -2231,6 +2361,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pty-write", async (_e, termId, data) => {
     await ensureDaemon();
     daemonSendSafe({ type: "write", termId, data });
+    triggerPollOnWrite(termId);
   });
 
   ipcMain.handle("pty-resize", async (_e, termId, cols, rows) => {
@@ -2383,6 +2514,7 @@ app.whenReady().then(async () => {
     if (session.status === "idle") return "idle";
     if (session.status === "processing") return "busy";
     if (session.status === "fresh") return "fresh";
+    if (session.status === "typing") return "typing";
     return slot.status;
   }
 
@@ -2447,6 +2579,7 @@ app.whenReady().then(async () => {
     "pty-write": async (msg) => {
       validateTermId(msg.termId);
       daemonSendSafe({ type: "write", termId: msg.termId, data: msg.data });
+      triggerPollOnWrite(msg.termId);
       return { type: "ok" };
     },
     "pty-spawn": async (msg) => {

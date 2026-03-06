@@ -158,6 +158,7 @@ case "$CMD" in
         --processing) FILTER_STATUS="processing"; shift ;;
         --idle) FILTER_STATUS="idle"; shift ;;
         --fresh) FILTER_STATUS="fresh"; shift ;;
+        --typing) FILTER_STATUS="typing"; shift ;;
         *) echo "Unknown flag: $1" >&2; exit 1 ;;
       esac
     done

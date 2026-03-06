@@ -77,4 +77,32 @@ describe("sortSessions", () => {
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe("idle");
   });
+
+  it("places typing sessions before all other sections", () => {
+    const sessions = [
+      { pid: "1", status: "idle", idleTs: 1000, isPool: true },
+      { pid: "2", status: "typing", idleTs: 0, isPool: true },
+      { pid: "3", status: "processing", idleTs: 0, isPool: true },
+      { pid: "4", status: "fresh", idleTs: 0, isPool: true },
+      { pid: "5", status: "typing", idleTs: 0, isPool: true },
+    ];
+    const result = sortSessions(sessions);
+    expect(result.map((s) => s.pid)).toEqual(["2", "5", "1", "3", "4"]);
+  });
+
+  it("does not include typing sessions in recent cap", () => {
+    const sessions = [
+      { pid: "t1", status: "typing", idleTs: 0, isPool: true },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        pid: String(i),
+        status: "idle",
+        idleTs: i * 100,
+        isPool: true,
+      })),
+    ];
+    const result = sortSessions(sessions);
+    // typing (1) + recent capped at 10 = 11 total
+    expect(result).toHaveLength(11);
+    expect(result[0].pid).toBe("t1");
+  });
 });
