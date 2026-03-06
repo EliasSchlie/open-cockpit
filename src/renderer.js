@@ -1226,6 +1226,30 @@ function showNotification(msg) {
   }, 3000);
 }
 
+// Corner toast for important system events (auto-recovery, errors)
+function showToast(msg, level = "info") {
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${level}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  // Auto-dismiss after 8s
+  setTimeout(() => {
+    toast.classList.add("toast-exit");
+    toast.addEventListener("animationend", () => toast.remove());
+  }, 8000);
+  // Click to dismiss
+  toast.addEventListener("click", () => {
+    toast.classList.add("toast-exit");
+    toast.addEventListener("animationend", () => toast.remove());
+  });
+}
+
 async function selectSession(session) {
   // If already viewing this session, nothing to do
   if (session.sessionId === currentSessionId) return;
@@ -1951,6 +1975,14 @@ window.api.onCyclePane(cyclePane);
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
+
+// Pool slot recovery toast
+window.api.onPoolSlotsRecovered((slots) => {
+  const reasons = slots.map((s) => `slot ${s.index} (${s.reason})`).join(", ");
+  const msg = `Auto-recovered ${slots.length} pool slot${slots.length > 1 ? "s" : ""}: ${reasons}`;
+  debugLog("pool", msg);
+  showToast(msg, "warning");
+});
 
 // Reconnect a single PTY from daemon (after app restart or reload)
 async function reconnectTerminal(ptyInfo) {
