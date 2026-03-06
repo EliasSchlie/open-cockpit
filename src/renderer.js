@@ -1238,15 +1238,18 @@ function showToast(msg, level = "info") {
   toast.className = `toast toast-${level}`;
   toast.textContent = msg;
   container.appendChild(toast);
-  // Auto-dismiss after 8s
-  setTimeout(() => {
+  function dismiss() {
     toast.classList.add("toast-exit");
-    toast.addEventListener("animationend", () => toast.remove());
-  }, 8000);
-  // Click to dismiss
+    toast.addEventListener("animationend", () => toast.remove(), {
+      once: true,
+    });
+    // Fallback if animation is disabled (prefers-reduced-motion)
+    setTimeout(() => toast.remove(), 300);
+  }
+  const autoId = setTimeout(dismiss, 8000);
   toast.addEventListener("click", () => {
-    toast.classList.add("toast-exit");
-    toast.addEventListener("animationend", () => toast.remove());
+    clearTimeout(autoId);
+    dismiss();
   });
 }
 
