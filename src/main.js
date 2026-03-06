@@ -584,6 +584,13 @@ async function batchGetCwds(pids) {
 async function getSessionsUncached() {
   const sessions = [];
   const pool = readPool();
+  // Pre-build session→slot map for O(1) lookups
+  const poolSlotMap = new Map();
+  if (pool) {
+    for (const slot of pool.slots) {
+      if (slot.sessionId) poolSlotMap.set(slot.sessionId, slot);
+    }
+  }
 
   // Live sessions from session-pids
   const pidEntries = []; // {pid, sessionId}
@@ -635,8 +642,11 @@ async function getSessionsUncached() {
     let status;
     let idleTs = 0;
     let staleIdle = false;
-    const hasIntentionContent = intentionHasContent(sessionId);
-    const poolSlot = pool?.slots.find((s) => s.sessionId === sessionId);
+    const poolSlot = poolSlotMap.get(sessionId);
+    // Only check intention content for pool sessions (avoids unnecessary file reads for external/idle)
+    const hasIntentionContent = poolSlot
+      ? intentionHasContent(sessionId)
+      : false;
     const hasTermInput = !!(
       poolSlot && terminalHasInputCache.get(poolSlot.termId)
     );
@@ -1778,7 +1788,7 @@ async function poolClean() {
 // Find offload target from pool/sessions without acquiring lock.
 // Returns offload info or null if a fresh slot already exists.
 function findOffloadTarget(pool, sessionMap) {
-  // Only truly fresh slots (no editor text) count — typing sessions are not available
+  // Only truly fresh slots count — typing sessions (user has started composing) are not available
   const hasFresh = pool.slots.some((s) => {
     if (s.status === "fresh") return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
