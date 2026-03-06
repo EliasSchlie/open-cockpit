@@ -72,6 +72,10 @@ function createApiServer(socketPath, handlers) {
     if (!socket.destroyed) socket.write(JSON.stringify(msg) + "\n");
   }
 
+  server.on("error", (err) => {
+    console.error(`[api-server] Server error on ${socketPath}:`, err.message);
+  });
+
   // Clean up stale socket
   try {
     fs.unlinkSync(socketPath);
