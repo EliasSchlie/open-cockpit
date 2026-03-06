@@ -1340,16 +1340,25 @@ function writePool(pool) {
   invalidateSessionsCache();
 }
 
-// Accept Claude's trust prompt by sending Enter after a short delay.
-// The trust prompt ("Yes, I trust this folder") typically appears within ~0.5s
-// of spawn. The 1s delay provides margin for slower startups. Sending Enter
-// when there's no trust prompt is harmless (empty input in the Claude REPL is
-// a no-op). This replaces fragile buffer polling that required pattern matching
-// through ANSI escape codes and specific daemon protocol support.
-function acceptTrustPrompt(termId) {
-  setTimeout(() => {
+// Accept Claude's trust prompt by polling the terminal buffer until the prompt
+// appears, then sending Enter. Reliable even when spawning many sessions at once.
+async function acceptTrustPrompt(termId) {
+  try {
+    await poll(
+      async () => {
+        const buf = await readTerminalBuffer(termId);
+        // Buffer contains ANSI cursor-movement codes between words, so match
+        // a keyword that uniquely identifies the trust prompt.
+        return buf.includes("trust?");
+      },
+      { interval: 500, timeout: 15000, label: "trust-prompt" },
+    );
+    // Small delay after prompt appears to ensure the TUI is ready for input
+    await new Promise((r) => setTimeout(r, 200));
     daemonSendSafe({ type: "write", termId, data: "\r" });
-  }, 1000);
+  } catch {
+    debugLog("main", `Trust prompt not detected for termId=${termId}`);
+  }
 }
 
 // Async mutex for pool.json read-modify-write cycles.
@@ -1480,10 +1489,23 @@ function trackNewSlot(
           s.sessionId = sessionId;
           if (skipFreshSignal) {
             // Resume case: keep slot as busy, let real idle hook handle status
-            if (!sessionId) s.status = "error";
+            if (!sessionId) {
+              s.status = "error";
+              debugLog(
+                "main",
+                `Slot resume failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+              );
+            }
           } else {
             s.status = sessionId ? "fresh" : "error";
-            if (sessionId) createFreshIdleSignal(s.pid, sessionId);
+            if (sessionId) {
+              createFreshIdleSignal(s.pid, sessionId);
+            } else {
+              debugLog(
+                "main",
+                `Slot init failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+              );
+            }
           }
           writePool(p);
         }
@@ -1492,7 +1514,10 @@ function trackNewSlot(
       return sessionId;
     })
     .catch(async (err) => {
-      console.error("[main] Slot tracking failed:", err.message);
+      debugLog(
+        "main",
+        `Slot tracking failed: termId=${slot.termId} pid=${slot.pid} err=${err.message}`,
+      );
       await withPoolLock(() => {
         const p = readPool();
         if (!p) return;

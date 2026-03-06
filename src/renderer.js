@@ -804,6 +804,7 @@ async function loadSessions() {
   const sessions = await window.api.getSessions();
   cachedSessions = sessions;
   cleanupStaleTerminals(sessions);
+  updatePoolHealthBadge();
 
   // Split into sections — pool and external mixed together
   const typing = sessions.filter((s) => s.status === "typing");
@@ -1424,13 +1425,6 @@ newSessionBtn.addEventListener("click", async () => {
   const pool = await window.api.poolRead();
   if (!pool) {
     showNotification("Pool not initialized — open pool settings");
-    return;
-  }
-
-  // Check if pool is still initializing (has starting/unresolved slots)
-  const health = await window.api.poolHealth();
-  if (health?.counts?.starting > 0) {
-    showNotification("Pool still initializing — wait for slots to be ready");
     return;
   }
 
@@ -2200,9 +2194,22 @@ async function openSlotTerminalPopup(slot) {
   });
 }
 
-// --- Pool Settings Panel ---
+// --- Pool Health Badge ---
 const poolSettingsBtn = document.getElementById("pool-settings-btn");
 let poolSettingsInterval = null;
+
+// Show a warning dot on the ⚙ button when pool has error slots
+async function updatePoolHealthBadge() {
+  const pool = await window.api.poolRead();
+  const errors = pool
+    ? pool.slots.filter((s) => s.status === "error").length
+    : 0;
+  poolSettingsBtn.dataset.errors = errors;
+  poolSettingsBtn.title =
+    errors > 0
+      ? `Pool settings — ${errors} slot${errors > 1 ? "s" : ""} in error`
+      : "Pool settings";
+}
 
 poolSettingsBtn.addEventListener("click", () => showPoolSettings());
 
