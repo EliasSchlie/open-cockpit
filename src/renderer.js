@@ -2177,6 +2177,11 @@ window.api.onNewTerminalTab(() => {
 });
 
 window.api.onCloseTerminalTab(() => {
+  const popup = document.getElementById("slot-terminal-popup");
+  if (popup && popup._cleanup) {
+    popup._cleanup();
+    return;
+  }
   const i = getActiveTermIndex();
   if (i >= 0) closeTerminal(i);
 });
@@ -2496,6 +2501,7 @@ async function openSlotTerminalPopup(slot) {
   requestAnimationFrame(() => {
     fitAddon.fit();
     window.api.ptyResize(slot.termId, term.cols, term.rows);
+    term.focus();
   });
 
   const resizeObserver = new ResizeObserver(() => {
