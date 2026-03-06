@@ -251,7 +251,7 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
 }
 
 // Cache transcriptContains results (key -> true, once true stays true)
-const userInputCache = new Map();
+const transcriptCache = new Map();
 
 // Sessions that have been through at least one processing cycle (non-pool-init).
 // Once activated, a session should never fall back to fresh/typing classification.
@@ -447,7 +447,7 @@ async function getIdleSignal(pid) {
 async function transcriptContains(transcriptPath, needle) {
   if (!transcriptPath) return false;
   const cacheKey = transcriptPath + "\0" + needle;
-  if (userInputCache.get(cacheKey)) return true;
+  if (transcriptCache.get(cacheKey)) return true;
   try {
     const fh = await fs.promises.open(transcriptPath, "r");
     const buf = Buffer.alloc(64 * 1024); // 64KB chunks
@@ -459,7 +459,7 @@ async function transcriptContains(transcriptPath, needle) {
         result.bytesRead > 0
       ) {
         if (buf.toString("utf-8", 0, result.bytesRead).includes(needle)) {
-          userInputCache.set(cacheKey, true);
+          transcriptCache.set(cacheKey, true);
           return true;
         }
         offset += result.bytesRead;
@@ -944,6 +944,10 @@ async function getSessionsUncached() {
   }
   for (const id of activatedSessions) {
     if (!liveIds.has(id)) activatedSessions.delete(id);
+  }
+  for (const key of transcriptCache.keys()) {
+    const sessionId = path.basename(key.split("\0")[0], ".jsonl");
+    if (sessionId && !liveIds.has(sessionId)) transcriptCache.delete(key);
   }
 
   // Add offloaded/archived sessions, skip if live session exists.
