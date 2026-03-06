@@ -12,7 +12,6 @@ const {
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 const { sortSessions } = require("./sort-sessions");
-const { isTranscriptNewerThanSignal } = require("./session-status");
 const { createApiServer } = require("./api-server");
 const {
   loadShortcuts,
@@ -427,13 +426,11 @@ async function getIntentionHeading(filePath) {
   }
 }
 
-// Read idle signal for a PID. Returns {cwd, ts, trigger, session_id, signalMtimeMs} or null.
+// Read idle signal for a PID. Returns {cwd, ts, trigger, session_id, transcript} or null.
 async function getIdleSignal(pid) {
   try {
     const signalFile = path.join(IDLE_SIGNALS_DIR, String(pid));
-    const stat = await fs.promises.stat(signalFile);
     const parsed = JSON.parse(await fs.promises.readFile(signalFile, "utf-8"));
-    parsed.signalMtimeMs = stat.mtimeMs;
     return parsed;
   } catch {
     /* ENOENT expected — no idle signal means session is processing */
@@ -678,17 +675,14 @@ async function getSessionsUncached() {
     if (!alive) {
       status = "dead";
     } else if (idleSignal) {
+      // IMPORTANT: Idle signal presence = session is idle. No false positives allowed.
+      // This is safe because UserPromptSubmit always clears the signal before
+      // processing begins, including cycles where Stop hooks re-prompt Claude.
+      // We intentionally do NOT compare transcript mtime with signal mtime here:
+      // local commands (e.g. /model, /help) write to the JSONL without triggering
+      // hooks, which would cause permanent false "processing" detection.
       idleTs = idleSignal.ts || 0;
-      if (
-        isTranscriptNewerThanSignal(
-          idleSignal.signalMtimeMs,
-          idleSignal.transcript,
-        )
-      ) {
-        // Transcript was written after the idle signal — a Stop hook re-prompted
-        // Claude and it's still processing (no new idle signal yet)
-        status = "processing";
-      } else if (!(await hasUserInput(idleSignal.transcript))) {
+      if (!(await hasUserInput(idleSignal.transcript))) {
         status = freshOrTyping(hasIntentionContent, hasTermInput);
       } else {
         status = "idle";
