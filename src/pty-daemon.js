@@ -181,8 +181,12 @@ function handleSpawn(socket, msg) {
       entry.meta.exited = true;
       entry.meta.exitCode = exitCode;
       broadcast(termId, { type: "exit", termId, exitCode });
-      // Keep the entry around so clients can still see the buffer and exit status.
+      // If clients are attached, keep the entry so they can see buffer and exit status.
       // It gets cleaned up when all clients detach or via kill.
+      // If no clients ever attached, clean up immediately to avoid leaking.
+      if (entry.clients.size === 0) {
+        terminals.delete(termId);
+      }
       resetIdleTimer();
     } catch (err) {
       console.error(
