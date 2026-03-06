@@ -297,6 +297,13 @@ export class DockLayout {
   // --- Rendering ---
 
   _render() {
+    // Save focused element before DOM rebuild — detaching content drops focus
+    const activeEl = document.activeElement;
+    const hadFocus =
+      activeEl &&
+      activeEl !== document.body &&
+      this.container.contains(activeEl);
+
     this._detachAllContent();
     this.container.innerHTML = "";
     if (!this.root) return;
@@ -305,6 +312,12 @@ export class DockLayout {
     // Dispatch synchronously — handlers use their own rAF to read layout after
     // the browser has recalculated flex sizes in the next frame.
     window.dispatchEvent(new Event("dock-resize"));
+
+    // Restore focus — content elements are reattached, so the previously
+    // focused element (e.g. xterm textarea) is back in the DOM
+    if (hadFocus && this.container.contains(activeEl)) {
+      activeEl.focus();
+    }
   }
 
   _renderNode(node) {

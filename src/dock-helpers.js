@@ -109,7 +109,6 @@ export function focusLeafContent(dock, leafId, terminals) {
   if (activeTabId === TAB_EDITOR) return; // caller handles editor focus
   const entry = terminals.find((t) => t.dockTabId === activeTabId);
   if (entry) {
-    dock.activateTab(activeTabId);
-    entry.term.focus();
+    dock.activateTab(activeTabId); // fires onTabActivate which focuses the terminal
   }
 }

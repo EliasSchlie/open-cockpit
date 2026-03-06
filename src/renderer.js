@@ -476,7 +476,7 @@ function ensureDock() {
       // Focus the activated tab's content — resize is handled by dock-resize event
       const entry = terminals.find((t) => t.dockTabId === tabId);
       if (entry) {
-        requestAnimationFrame(() => entry.term.focus());
+        entry.term.focus();
       }
       if (tabId === TAB_EDITOR && editorView) {
         editorView.focus();
@@ -622,6 +622,9 @@ async function spawnTerminal(cwd, cmd, args, targetLeafId) {
     dock.addTab(entry.dockTabId, leaf);
   }
 
+  // Focus the new terminal so user can type immediately
+  entry.term.focus();
+
   syncSessionCache();
   return entry;
 }
@@ -674,6 +677,9 @@ async function attachPoolTerminal(poolTermId) {
     dock.addTab(entry.dockTabId, leaf);
   }
 
+  // Focus the new terminal so user can type immediately
+  entry.term.focus();
+
   syncSessionCache();
   return entry;
 }
@@ -699,6 +705,9 @@ async function closeTerminal(index) {
   if (terminals.length === 0) {
     sessionView.classList.add("hidden");
     emptyState.classList.remove("hidden");
+  } else {
+    // Focus the remaining active terminal (or first terminal)
+    focusTerminal();
   }
 
   syncSessionCache();
