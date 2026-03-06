@@ -1340,16 +1340,25 @@ function writePool(pool) {
   invalidateSessionsCache();
 }
 
-// Accept Claude's trust prompt by sending Enter after a short delay.
-// The trust prompt ("Yes, I trust this folder") typically appears within ~0.5s
-// of spawn. The 1s delay provides margin for slower startups. Sending Enter
-// when there's no trust prompt is harmless (empty input in the Claude REPL is
-// a no-op). This replaces fragile buffer polling that required pattern matching
-// through ANSI escape codes and specific daemon protocol support.
-function acceptTrustPrompt(termId) {
-  setTimeout(() => {
+// Accept Claude's trust prompt by polling the terminal buffer until the prompt
+// appears, then sending Enter. Reliable even when spawning many sessions at once.
+async function acceptTrustPrompt(termId) {
+  try {
+    await poll(
+      async () => {
+        const buf = await readTerminalBuffer(termId);
+        // Buffer contains ANSI cursor-movement codes between words, so match
+        // a keyword that uniquely identifies the trust prompt.
+        return buf.includes("trust?");
+      },
+      { interval: 500, timeout: 15000, label: "trust-prompt" },
+    );
+    // Small delay after prompt appears to ensure the TUI is ready for input
+    await new Promise((r) => setTimeout(r, 200));
     daemonSendSafe({ type: "write", termId, data: "\r" });
-  }, 1000);
+  } catch {
+    debugLog("main", `Trust prompt not detected for termId=${termId}`);
+  }
 }
 
 // Async mutex for pool.json read-modify-write cycles.
