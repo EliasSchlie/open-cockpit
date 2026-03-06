@@ -100,6 +100,21 @@ body {
   color: var(--text);
 }
 
+#pool-settings-btn {
+  position: relative;
+}
+
+#pool-settings-btn[data-errors]:not([data-errors="0"])::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 #session-list {
   list-style: none;
   overflow-y: auto;

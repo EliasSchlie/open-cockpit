@@ -1489,10 +1489,23 @@ function trackNewSlot(
           s.sessionId = sessionId;
           if (skipFreshSignal) {
             // Resume case: keep slot as busy, let real idle hook handle status
-            if (!sessionId) s.status = "error";
+            if (!sessionId) {
+              s.status = "error";
+              debugLog(
+                "main",
+                `Slot resume failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+              );
+            }
           } else {
             s.status = sessionId ? "fresh" : "error";
-            if (sessionId) createFreshIdleSignal(s.pid, sessionId);
+            if (sessionId) {
+              createFreshIdleSignal(s.pid, sessionId);
+            } else {
+              debugLog(
+                "main",
+                `Slot init failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+              );
+            }
           }
           writePool(p);
         }
@@ -1501,7 +1514,10 @@ function trackNewSlot(
       return sessionId;
     })
     .catch(async (err) => {
-      console.error("[main] Slot tracking failed:", err.message);
+      debugLog(
+        "main",
+        `Slot tracking failed: termId=${slot.termId} pid=${slot.pid} err=${err.message}`,
+      );
       await withPoolLock(() => {
         const p = readPool();
         if (!p) return;
