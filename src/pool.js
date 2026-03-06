@@ -41,15 +41,26 @@ function createSlot(index, termId, pid) {
 }
 
 /**
+ * Check if a slot is currently pinned (pinnedUntil in the future).
+ */
+function isSlotPinned(slot) {
+  if (!slot.pinnedUntil) return false;
+  return new Date(slot.pinnedUntil) > new Date();
+}
+
+/**
  * Select candidates for shrinking: prefer fresh, then idle, then busy/starting.
+ * Pinned slots are excluded from candidates.
  */
 function selectShrinkCandidates(slots, count) {
   const priority = { fresh: 0, idle: 1, starting: 2, busy: 3, error: 4 };
-  const candidates = [...slots].sort((a, b) => {
-    const pa = priority[a.status] ?? 5;
-    const pb = priority[b.status] ?? 5;
-    return pa - pb;
-  });
+  const candidates = [...slots]
+    .filter((s) => !isSlotPinned(s))
+    .sort((a, b) => {
+      const pa = priority[a.status] ?? 5;
+      const pb = priority[b.status] ?? 5;
+      return pa - pb;
+    });
   return candidates.slice(0, count);
 }
 
@@ -177,6 +188,7 @@ module.exports = {
   readPool,
   writePool,
   createSlot,
+  isSlotPinned,
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,

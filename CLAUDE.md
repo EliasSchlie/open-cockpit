@@ -13,7 +13,8 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 - `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
-- `bin/cockpit-cli` — CLI for observing and interacting with agents. High-level commands (`ls`, `screen`, `watch`, `log`, `prompt`, `key`, `type`) + sub-claude-compatible commands + pool management ([docs/api.md](docs/api.md))
+- `bin/cockpit-cli` — CLI for observing and interacting with agents. High-level commands (`ls`, `screen`, `watch`, `log`, `prompt`, `key`, `type`) + session commands (`start`, `followup`, `wait`, `pin`, `stop`) + pool management ([docs/api.md](docs/api.md))
+- `skills/cockpit-sessions/` — Skill docs for Claude Code (SKILL.md + sub-skills)
 - `hooks/` — Claude Code plugin hooks (PID mapping, intention intro, idle/fresh signal detection, intention change notify)
 - `.claude-plugin/plugin.json` — Plugin manifest
 - `.github/workflows/auto-release.yml` — CI auto-bumps version + updates marketplace on push
@@ -47,7 +48,8 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/intentions/<session_id>.md` — Intention files (created lazily: by Claude on first prompt, or by app on first user keystroke)
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
-- `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings)
+- `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings, pinnedUntil)
+- `~/.open-cockpit/session-graph.json` — Parent-child session relationships (initiator: "user"|"model")
 - `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived session data (meta.json, snapshot.log)
 - `~/.open-cockpit/shortcuts.json` — User keyboard shortcut overrides (only non-default values)
 - `~/.open-cockpit/setup-scripts/` — Setup script files for Cmd+N picker
@@ -157,6 +159,23 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI helper)
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference + how to add new ones
 - [docs/debug-logging.md](docs/debug-logging.md) — Persistent debug logging (`~/.open-cockpit/debug.log`)
+
+## Session graph (parent-child tracking)
+
+Sessions track who started them and parent-child relationships in `~/.open-cockpit/session-graph.json`:
+- **initiator**: `"user"` (human via UI/terminal) or `"model"` (Claude via `cockpit-cli start`)
+- **parentSessionId**: the session that spawned this one (null for top-level)
+- CLI auto-detects parent by walking PPID chain → `~/.open-cockpit/session-pids/`
+- API: `pool-start` accepts optional `parentSessionId`; `get-session-graph` returns the full graph
+- `get-sessions` response enriched with `parentSessionId` and `initiator` fields
+
+## Session pinning
+
+Pool slots can be pinned to prevent LRU offloading:
+- `pool-pin { sessionId, duration }` — pin for N seconds (default 120)
+- `pool-unpin { sessionId }` — release pin
+- `pinnedUntil` field in pool.json slots; expired pins auto-cleared on eviction check
+- CLI: `cockpit-cli pin <id> [seconds]` / `cockpit-cli unpin <id>`
 
 ## Session origin tags
 

@@ -5,6 +5,15 @@ SOCKET="${COCKPIT_SOCKET:-$HOME/.open-cockpit/api.sock}"
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$HOME/.open-cockpit/session-pids}"
 
+# --- Global flags ---
+VERBOSITY="raw"
+while [[ ${1:-} =~ ^- ]]; do
+  case "$1" in
+    -v|--verbosity) VERBOSITY="${2:?verbosity level required (raw|response|conversation|full)}"; shift 2 ;;
+    *) break ;;
+  esac
+done
+
 # Auto-detect session ID by walking PID ancestry.
 # Checks each ancestor PID against session-pids/ directory.
 # Sets DETECTED_SESSION_ID on success, empty string on failure.
@@ -28,6 +37,74 @@ validate_int() {
     echo "Error: $label must be a non-negative integer, got '$1'" >&2
     exit 1
   fi
+}
+
+# Detect parent session by walking PPID chain → session-pids mapping
+detect_parent_session() {
+  local pid=$$
+  while [[ "$pid" -gt 1 ]]; do
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ') || break
+    [[ -z "$pid" || "$pid" == "0" ]] && break
+    if [[ -f "$SESSION_PIDS_DIR/$pid" ]]; then
+      cat "$SESSION_PIDS_DIR/$pid"
+      return
+    fi
+  done
+  echo ""
+}
+
+# Extract last assistant response from JSONL transcript. Args: <jsonl_path>
+parse_jsonl_response() {
+  tail -50 "$1" | jq -rs '
+    [.[] | select(.type == "assistant") |
+      (.message.content // []) | map(select(.type == "text") | .text) | join("\n")
+    ] | last // "(no response)"
+  '
+}
+
+# Extract full conversation from JSONL transcript. Args: <jsonl_path>
+parse_jsonl_conversation() {
+  tail -200 "$1" | jq -r '
+    if .type == "user" then
+      (.message.content // .message) as $c |
+      if ($c | type) == "string" then
+        if ($c | length) > 0 then "\n>>> USER:\n" + $c else empty end
+      elif ($c | type) == "array" then
+        ([.message.content[] | select(.type == "text") | .text] | join("\n")) as $text |
+        if ($text | length) > 0 then "\n>>> USER:\n" + $text else empty end
+      else empty end
+    elif .type == "assistant" then
+      (.message.content // []) as $c |
+      if ($c | type) == "array" then
+        ($c | map(select(.type == "text") | .text) | join("\n")) as $text |
+        if ($text | length) > 0 then "\n<<< ASSISTANT:\n" + $text else empty end
+      else empty end
+    else empty end
+  '
+}
+
+# Apply verbosity filter to output. Args: <session_id> <raw_buffer>
+apply_verbosity() {
+  local session_id="$1"
+  local raw_buffer="$2"
+  case "$VERBOSITY" in
+    raw) printf '%s' "$raw_buffer" ;;
+    full) printf '%s' "$raw_buffer" | strip_ansi ;;
+    response|conversation)
+      local jsonl_path
+      jsonl_path=$(find_jsonl "$session_id")
+      if [[ -z "$jsonl_path" ]]; then
+        echo "(no transcript found)" >&2
+        return 1
+      fi
+      if [[ "$VERBOSITY" == "response" ]]; then
+        parse_jsonl_response "$jsonl_path"
+      else
+        parse_jsonl_conversation "$jsonl_path"
+      fi
+      ;;
+    *) echo "Unknown verbosity: $VERBOSITY" >&2; exit 1 ;;
+  esac
 }
 
 # Send JSON to API socket. Args: <json> [timeout_seconds]
@@ -506,7 +583,12 @@ case "$CMD" in
       wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SID\",\"timeout\":300000}"
       WAIT_RESULT=$(send_api "$wait_json" 310)
       check_error "$WAIT_RESULT"
-      json_field "$WAIT_RESULT" "buffer" | strip_ansi
+      BUFFER=$(json_field "$WAIT_RESULT" "buffer")
+      if [[ "$VERBOSITY" == "raw" ]]; then
+        printf '%s' "$BUFFER" | strip_ansi
+      else
+        apply_verbosity "$SID" "$BUFFER"
+      fi
     else
       echo "Prompt sent to $SID"
     fi
@@ -568,8 +650,14 @@ case "$CMD" in
       exit 1
     fi
 
+    PARENT_SESSION=$(detect_parent_session)
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-    json="{\"type\":\"pool-start\",\"id\":1,\"prompt\":$PROMPT_JSON}"
+    if [[ -n "$PARENT_SESSION" ]]; then
+      PARENT_JSON=$(printf '%s' "$PARENT_SESSION" | jq -Rs .)
+      json="{\"type\":\"pool-start\",\"id\":1,\"prompt\":$PROMPT_JSON,\"parentSessionId\":$PARENT_JSON}"
+    else
+      json="{\"type\":\"pool-start\",\"id\":1,\"prompt\":$PROMPT_JSON}"
+    fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     SESSION_ID=$(json_field "$RESULT" "sessionId")
@@ -579,7 +667,8 @@ case "$CMD" in
       wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
       WAIT_RESULT=$(send_api "$wait_json" 310)
       check_error "$WAIT_RESULT"
-      json_field "$WAIT_RESULT" "buffer"
+      BUFFER=$(json_field "$WAIT_RESULT" "buffer")
+      apply_verbosity "$SESSION_ID" "$BUFFER"
     else
       echo "$SESSION_ID"
     fi
@@ -606,7 +695,8 @@ case "$CMD" in
       wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
       WAIT_RESULT=$(send_api "$wait_json" 310)
       check_error "$WAIT_RESULT"
-      json_field "$WAIT_RESULT" "buffer"
+      BUFFER=$(json_field "$WAIT_RESULT" "buffer")
+      apply_verbosity "$SESSION_ID" "$BUFFER"
     else
       echo "Resumed in slot $SLOT"
     fi
@@ -639,7 +729,8 @@ case "$CMD" in
       wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SID\",\"timeout\":300000}"
       WAIT_RESULT=$(send_api "$wait_json" 310)
       check_error "$WAIT_RESULT"
-      json_field "$WAIT_RESULT" "buffer"
+      BUFFER=$(json_field "$WAIT_RESULT" "buffer")
+      apply_verbosity "$SID" "$BUFFER"
     else
       echo "$SID"
     fi
@@ -654,7 +745,9 @@ case "$CMD" in
     fi
     RESULT=$(send_api "$json" 310)
     check_error "$RESULT"
-    json_field "$RESULT" "buffer"
+    BUFFER=$(json_field "$RESULT" "buffer")
+    SID=$(json_field "$RESULT" "sessionId")
+    apply_verbosity "$SID" "$BUFFER"
     ;;
 
   capture)
@@ -668,7 +761,9 @@ case "$CMD" in
     fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
-    json_field "$RESULT" "buffer"
+    BUFFER=$(json_field "$RESULT" "buffer")
+    SID=$(json_field "$RESULT" "sessionId")
+    apply_verbosity "$SID" "$BUFFER"
     ;;
 
   result)
@@ -682,7 +777,9 @@ case "$CMD" in
     fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
-    json_field "$RESULT" "buffer"
+    BUFFER=$(json_field "$RESULT" "buffer")
+    SID=$(json_field "$RESULT" "sessionId")
+    apply_verbosity "$SID" "$BUFFER"
     ;;
 
   input)
@@ -708,6 +805,36 @@ case "$CMD" in
     check_error "$RESULT"
     COUNT=$(json_field "$RESULT" "count")
     echo "Cleaned $COUNT session(s)"
+    ;;
+
+  pin)
+    SESSION_ID="${1:?sessionId required}"
+    DURATION="${2:-120}"
+    validate_int "$DURATION" "duration"
+    resolve_target "$SESSION_ID"
+    json="{\"type\":\"pool-pin\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"duration\":$DURATION}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    UNTIL=$(json_field "$RESULT" "pinnedUntil")
+    echo "Pinned $RESOLVED_VALUE until $UNTIL"
+    ;;
+
+  unpin)
+    SESSION_ID="${1:?sessionId required}"
+    resolve_target "$SESSION_ID"
+    json="{\"type\":\"pool-unpin\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    echo "Unpinned $RESOLVED_VALUE"
+    ;;
+
+  stop)
+    SESSION_ID="${1:?sessionId required}"
+    resolve_target "$SESSION_ID"
+    json="{\"type\":\"pool-stop-session\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    RESULT=$(send_api "$json")
+    check_error "$RESULT"
+    echo "Stop signal sent to $RESOLVED_VALUE"
     ;;
 
   # ==========================================================================
@@ -1151,6 +1278,7 @@ case "$CMD" in
   pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":$(printf '%s' "${1:?cwd required}" | jq -Rs .),\"cmd\":$(printf '%s' "${2:?cmd required}" | jq -Rs .),\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
   pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
   ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
+  get-session-graph) json="{\"type\":\"get-session-graph\",\"id\":1}"; send_api "$json" ;;
 
   # ==========================================================================
   # HELP
@@ -1159,7 +1287,11 @@ case "$CMD" in
   help|*)
     [[ "$CMD" != "help" ]] && echo "Unknown command: $CMD" >&2
     cat >&2 <<'USAGE'
-Usage: cockpit-cli <command> [args...]
+Usage: cockpit-cli [-v <level>] <command> [args...]
+
+Global flags:
+  -v, --verbosity <level>        Output filter for result/capture/wait/--block
+                                 Levels: raw (default), response, conversation, full
 
 Targets: Most commands accept a <target> which can be:
   • Full session ID (UUID)        e.g. 2947bf12-d307-499c-b50c-719f253a0e54
@@ -1196,16 +1328,19 @@ Targets: Most commands accept a <target> which can be:
                                    ctrl-l, ctrl-a, ctrl-e, ctrl-z,
                                    tab, backspace, up, down, left, right
 
-─── SESSION COMMANDS (sub-claude compatible) ────────────────────────────────
+─── SESSION COMMANDS ────────────────────────────────────────────────────────
 
   start <prompt> [--block]       Send prompt to fresh slot, return session ID
   resume <id> [--block]          Resume offloaded/archived session
   followup <id> <prompt> [--block]  Follow up on idle session
   wait [id]                      Wait for session to finish, print output
-  capture <id|--slot N>          Show live terminal content (raw)
+  capture <id|--slot N>          Show live terminal content
   result <id|--slot N>           Print output (error if still running)
   input <id|--slot N> <text>     Send raw input to terminal
   clean                          Free slots occupied by finished sessions
+  pin <id> [seconds]             Prevent offloading (default: 120s)
+  unpin <id>                     Allow offloading again
+  stop <id>                      Interrupt running session (Escape + Ctrl-C)
 
 ─── POOL MANAGEMENT ─────────────────────────────────────────────────────────
 
@@ -1267,6 +1402,9 @@ Targets: Most commands accept a <target> which can be:
   cockpit-cli term key @0 1 ctrl-c             # Send Ctrl+C to shell tab
   cockpit-cli term open @0                     # Open new shell tab
   cockpit-cli term close @0 1                  # Close shell tab
+  cockpit-cli -v response start "analyze code" --block   # Get just the response
+  cockpit-cli pin 2947b 300                   # Pin for 5 minutes
+  cockpit-cli stop 2947b                      # Interrupt running session
 USAGE
     [[ "$CMD" != "help" ]] && exit 1
     exit 0

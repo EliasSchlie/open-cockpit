@@ -6,6 +6,7 @@ import {
   readPool,
   writePool,
   createSlot,
+  isSlotPinned,
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,
@@ -523,5 +524,60 @@ describe("resolveSlotByAddress", () => {
     const { slot } = resolveSlotByAddress(errorPool, { slotIndex: 0 });
     expect(slot.status).toBe("error");
     expect(slot.sessionId).toBeNull();
+  });
+});
+
+describe("isSlotPinned", () => {
+  it("returns false when no pinnedUntil", () => {
+    expect(isSlotPinned({ status: "idle" })).toBe(false);
+  });
+
+  it("returns false when pinnedUntil is null", () => {
+    expect(isSlotPinned({ status: "idle", pinnedUntil: null })).toBe(false);
+  });
+
+  it("returns true when pinnedUntil is in the future", () => {
+    const future = new Date(Date.now() + 60000).toISOString();
+    expect(isSlotPinned({ status: "idle", pinnedUntil: future })).toBe(true);
+  });
+
+  it("returns false when pinnedUntil is in the past", () => {
+    const past = new Date(Date.now() - 60000).toISOString();
+    expect(isSlotPinned({ status: "idle", pinnedUntil: past })).toBe(false);
+  });
+});
+
+describe("selectShrinkCandidates with pinning", () => {
+  it("excludes pinned slots from candidates", () => {
+    const future = new Date(Date.now() + 60000).toISOString();
+    const slots = [
+      { index: 0, status: "idle" },
+      { index: 1, status: "fresh" },
+      { index: 2, status: "idle", pinnedUntil: future },
+      { index: 3, status: "fresh" },
+    ];
+    const result = selectShrinkCandidates(slots, 3);
+    expect(result.map((s) => s.index)).toEqual([1, 3, 0]);
+    expect(result.every((s) => s.index !== 2)).toBe(true);
+  });
+
+  it("includes expired pins as candidates", () => {
+    const past = new Date(Date.now() - 60000).toISOString();
+    const slots = [
+      { index: 0, status: "idle", pinnedUntil: past },
+      { index: 1, status: "fresh" },
+    ];
+    const result = selectShrinkCandidates(slots, 2);
+    expect(result.map((s) => s.index)).toEqual([1, 0]);
+  });
+
+  it("returns empty when all slots are pinned", () => {
+    const future = new Date(Date.now() + 60000).toISOString();
+    const slots = [
+      { index: 0, status: "idle", pinnedUntil: future },
+      { index: 1, status: "fresh", pinnedUntil: future },
+    ];
+    const result = selectShrinkCandidates(slots, 2);
+    expect(result).toHaveLength(0);
   });
 });
