@@ -1640,35 +1640,37 @@ async function reconcilePool() {
 
     for (const slot of pool.slots) {
       const pty = daemonPtys.get(slot.termId);
-      if (!pty || pty.exited) {
-        if (slot.status !== "dead") {
-          slot.status = "dead";
-          changed = true;
+      const needsRestart = !pty || pty.exited || slot.status === "error";
+
+      if (needsRestart) {
+        if (!pty || pty.exited) {
+          if (slot.status !== "dead") {
+            slot.status = "dead";
+            changed = true;
+          }
         }
         // Clean up terminal input cache for old termId
         terminalHasInputCache.delete(slot.termId);
-        // Kill orphaned process by PID before restarting
-        if (slot.pid) {
-          try {
-            process.kill(slot.pid, "SIGTERM");
-          } catch {
-            /* ESRCH expected — process may already be dead */
-          }
-        }
-        // Auto-restart dead slot
+        // Kill old process/PTY before restarting
+        await killSlotProcess(slot);
+        // Auto-restart slot
         try {
+          const reason = slot.status === "error" ? "error" : "dead";
+          debugLog(
+            "main",
+            `Auto-recovering ${reason} slot ${slot.index} (termId=${slot.termId} pid=${slot.pid})`,
+          );
           const newSlot = await spawnPoolSlot(slot.index);
           slot.termId = newSlot.termId;
           slot.pid = newSlot.pid;
           slot.status = "starting";
           slot.sessionId = null;
           changed = true;
-          // Track slot in background (trust prompt + session ID polling)
           trackNewSlot(slot);
         } catch (err) {
-          console.error(
-            `[main] Failed to restart slot ${slot.index}:`,
-            err.message,
+          debugLog(
+            "main",
+            `Failed to restart slot ${slot.index}: ${err.message}`,
           );
         }
         continue;
@@ -2273,12 +2275,19 @@ app.whenReady().then(async () => {
     console.error("[main] Idle signal cleanup failed:", err.message);
   }
 
-  // Reconcile pool state with surviving daemon terminals
+  // Reconcile pool state with surviving daemon terminals (startup + periodic)
   try {
     await reconcilePool();
   } catch (err) {
     console.error("[main] Pool reconciliation failed:", err.message);
   }
+  setInterval(async () => {
+    try {
+      await reconcilePool();
+    } catch {
+      /* logged inside reconcilePool */
+    }
+  }, 30000);
 
   // Watch session-pids and idle-signals dirs for changes → push updates to renderer.
   // Debounced: fs.watch fires multiple events per operation.
