@@ -13,6 +13,7 @@ const net = require("net");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 const pty = require("node-pty");
 
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -181,8 +182,12 @@ function handleSpawn(socket, msg) {
       entry.meta.exited = true;
       entry.meta.exitCode = exitCode;
       broadcast(termId, { type: "exit", termId, exitCode });
-      // Keep the entry around so clients can still see the buffer and exit status.
+      // If clients are attached, keep the entry so they can see buffer and exit status.
       // It gets cleaned up when all clients detach or via kill.
+      // If no clients ever attached, clean up immediately to avoid leaking.
+      if (entry.clients.size === 0) {
+        terminals.delete(termId);
+      }
       resetIdleTimer();
     } catch (err) {
       console.error(
@@ -358,7 +363,7 @@ function handleMessage(socket, msg) {
 }
 
 function startServer() {
-  fs.mkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
+  secureMkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
   // Remove stale socket — ENOENT expected on first run
   try {
@@ -419,7 +424,7 @@ function startServer() {
     fs.chmodSync(SOCKET_PATH, 0o600);
     console.log(`[pty-daemon] Listening on ${SOCKET_PATH}`);
     // Write PID file so clients can check if daemon is alive
-    fs.writeFileSync(
+    secureWriteFileSync(
       path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"),
       String(process.pid),
     );

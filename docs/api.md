@@ -264,6 +264,24 @@ For external tooling, either use `pool-start`/`pool-followup`/`prompt` (which ha
 - `termId` must be a finite number
 - Errors return `{ type: "error", error: "message" }`
 
+## Behavior Notes
+
+### Idle detection timing
+
+The app trusts idle signal files directly — there is no mtime comparison between the transcript and the signal. However, `pool-wait` polls session status at intervals, so there may be a brief delay (up to a few seconds) between a session completing and `pool-wait` returning.
+
+### Daemon write safety (`daemonSendSafe`)
+
+Write operations routed through the PTY daemon (`pool-input`, `slot-write`, `session-term-write`, `pty-write`, trust prompt acceptance) use a safe wrapper that returns `null` instead of throwing when the daemon is disconnected. Callers should not assume these writes always succeed — the session may have exited or the daemon may have restarted.
+
+### Auto-archiving dead sessions
+
+Dead sessions are automatically archived during session discovery. Sessions with an intention heading get archived (meta.json saved with `archived: true`). Sessions with no intention and no snapshot are silently discarded. Archived sessions without a snapshot (e.g. those that died before offloading) will not restore conversation context on `pool-resume` — only the intention and metadata are preserved.
+
+### `pool-clean` behavior
+
+`pool-clean` offloads all idle sessions (creates a snapshot + sends `/clear`) and then archives them. It does not merely mark slots as available — it performs a full offload cycle for each idle session before archiving. The returned `count` reflects the number of sessions offloaded and archived.
+
 ## Security
 
 Socket permissions are set to `0600` (owner-only). Socket is cleaned up on app quit and on startup (stale socket removal).
