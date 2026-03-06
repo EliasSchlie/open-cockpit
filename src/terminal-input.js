@@ -12,13 +12,13 @@ const { Terminal } = require("@xterm/headless");
 const PROMPT_CHAR = "❯";
 
 /**
- * Parse a terminal buffer to detect if Claude's input box has text.
+ * Parse a terminal buffer to extract text from Claude's input box.
  * @param {string} buffer - Raw PTY output buffer
  * @param {number} cols - Terminal column width
- * @returns {Promise<boolean>} true if there's text after the prompt
+ * @returns {Promise<string>} trimmed text after the prompt, or "" if none
  */
 async function parseTerminalHasInput(buffer, cols = 200) {
-  if (!buffer) return false;
+  if (!buffer) return "";
 
   const term = new Terminal({ cols, rows: 50, allowProposedApi: true });
 
@@ -41,14 +41,14 @@ async function parseTerminalHasInput(buffer, cols = 200) {
 
   term.dispose();
 
-  if (!lastPromptText) return false;
+  if (!lastPromptText) return "";
 
   // Extract text after the prompt character
   const afterPrompt = lastPromptText
     .split(PROMPT_CHAR)
     .slice(1)
     .join(PROMPT_CHAR);
-  return afterPrompt.trim().length > 0;
+  return afterPrompt.trim();
 }
 
 /**
@@ -56,19 +56,19 @@ async function parseTerminalHasInput(buffer, cols = 200) {
  * Pure function — no daemon calls, no side effects.
  * @param {Array<{termId: number, buffer: string}>} ptys - PTY list from daemon
  * @param {Set<number>} freshTermIds - termIds of fresh pool slots
- * @returns {Promise<Map<number, boolean>>} termId → hasInput
+ * @returns {Promise<Map<number, string>>} termId → input text (empty string if none)
  */
 async function checkTerminalInputs(ptys, freshTermIds) {
   const freshPtys = ptys.filter((p) => freshTermIds.has(p.termId));
   const results = await Promise.all(
     freshPtys.map(async (pty) => ({
       termId: pty.termId,
-      hasInput: await parseTerminalHasInput(pty.buffer || ""),
+      inputText: await parseTerminalHasInput(pty.buffer || ""),
     })),
   );
   const map = new Map();
-  for (const { termId, hasInput } of results) {
-    map.set(termId, hasInput);
+  for (const { termId, inputText } of results) {
+    map.set(termId, inputText);
   }
   return map;
 }
