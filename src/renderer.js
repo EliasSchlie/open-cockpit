@@ -291,6 +291,26 @@ function createTerminal(extraOpts = {}) {
   });
 }
 
+// xterm.js sends \r for both Enter and Shift+Enter (ignores shift modifier).
+// Claude Code expects CSI u encoding (\x1b[13;2u) for Shift+Enter to trigger
+// multi-line input. This handler intercepts modified Enter and sends the correct
+// escape sequence directly to the PTY.
+function wireTerminalInput(term, termId) {
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.key !== "Enter") return true;
+    if (!ev.shiftKey && !ev.ctrlKey) return true; // plain Enter or Alt+Enter: let xterm handle
+    // Must return false for ALL event types (keydown, keypress, keyup) to fully
+    // block xterm.js — otherwise keypress also sends \r alongside the CSI u.
+    if (ev.type === "keydown") {
+      const mod =
+        (ev.shiftKey ? 1 : 0) | (ev.altKey ? 2 : 0) | (ev.ctrlKey ? 4 : 0);
+      window.api.ptyWrite(termId, `\x1b[13;${mod + 1}u`);
+    }
+    return false;
+  });
+  term.onData((data) => window.api.ptyWrite(termId, data));
+}
+
 // --- Directory color coding ---
 // Neon-friendly palette for directory indicators
 const DIR_COLORS = [
@@ -493,7 +513,7 @@ async function spawnTerminal(cwd, cmd, args) {
   }
   pendingTerminals.delete(termId);
 
-  term.onData((data) => window.api.ptyWrite(termId, data));
+  wireTerminalInput(term, termId);
 
   const resizeObserver = new ResizeObserver(() => {
     if (container.style.display !== "none") {
@@ -549,7 +569,7 @@ async function attachPoolTerminal(poolTermId) {
   }
   pendingTerminals.delete(poolTermId);
 
-  term.onData((data) => window.api.ptyWrite(poolTermId, data));
+  wireTerminalInput(term, poolTermId);
 
   const resizeObserver = new ResizeObserver(() => {
     if (container.style.display !== "none") {
@@ -2058,7 +2078,7 @@ async function reconnectTerminal(ptyInfo) {
 
   if (ptyInfo.exited) term.write("\r\n[Process exited]\r\n");
 
-  term.onData((data) => window.api.ptyWrite(ptyInfo.termId, data));
+  wireTerminalInput(term, ptyInfo.termId);
 
   const resizeObserver = new ResizeObserver(() => {
     if (container.style.display !== "none") {
@@ -2194,7 +2214,7 @@ async function openSlotTerminalPopup(slot) {
   term.open(mountEl);
 
   // Wire input to the PTY so the popup is interactive
-  term.onData((data) => window.api.ptyWrite(slot.termId, data));
+  wireTerminalInput(term, slot.termId);
 
   // Register in popupTerminals so global data handlers can route data here.
   // Data is forwarded to both the main terminal entry (if any) and the popup entry.
