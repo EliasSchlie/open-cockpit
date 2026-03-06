@@ -6,14 +6,25 @@ Electron app + Claude Code plugin for session intention tracking.
 
 - `src/pty-daemon.js` — **PTY daemon**: standalone process managing all terminals ([docs/pty-daemon.md](docs/pty-daemon.md))
 - `src/api-server.js` — **API server**: Unix socket API for external process control ([docs/api.md](docs/api.md))
-- `src/main.js` — Main process: window, IPC, daemon client, session discovery
+- `src/main.js` — Main process orchestrator: window, IPC wiring, module init
+- `src/paths.js` — Shared path constants for all main-process modules
+- `src/daemon-client.js` — PTY daemon socket communication (init pattern)
+- `src/session-discovery.js` — Session state detection, caching, origin tagging
+- `src/pool-manager.js` — Pool lifecycle, offload/archive, terminal helpers
+- `src/api-handlers.js` — Shared IPC/API handler registry + API-only handlers
 - `src/preload.js` — Context bridge (`api` object)
 - `src/shortcuts.js` — Configurable keyboard shortcuts (defaults, overrides, accelerator matching)
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 - `src/dock-layout.js` — **Dock system**: recursive split tree, drag-and-drop tabs, resize handles
 - `src/dock-helpers.js` — Dock integration utilities (editor container factory, terminal resize, tab registration)
-- `src/renderer.js` — CodeMirror 6 live preview editor + session sidebar + dock integration
+- `src/renderer.js` — Renderer orchestrator: session lifecycle, auto-save, IPC wiring, module init
+- `src/renderer-state.js` — Shared mutable state, DOM refs, status classes, utilities
+- `src/editor.js` — CodeMirror 6 live preview editor setup
+- `src/session-sidebar.js` — Session list rendering, directory colors, context menus, snapshots
+- `src/terminal-manager.js` — Terminal creation, attach, switch, close, caching, reconnect, PTY IPC
+- `src/pool-ui.js` — Pool settings panel, slot terminal popup, shortcut settings
+- `src/command-palette.js` — COMMANDS registry, pane navigation, palette UI
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
 - `bin/cockpit-cli` — CLI for observing and interacting with agents. High-level commands (`ls`, `screen`, `watch`, `log`, `prompt`, `key`, `type`) + session commands (`start`, `followup`, `wait`, `pin`, `stop`) + pool management ([docs/api.md](docs/api.md))
 - `skills/cockpit-sessions/` — Skill docs for Claude Code (SKILL.md + sub-skills)
