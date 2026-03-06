@@ -1888,6 +1888,14 @@ const COMMANDS = [
     action: focusCurrentExternalTerminal,
   },
   {
+    id: "open-in-cursor",
+    label: "Open in Cursor",
+    shortcutAction: "open-in-cursor",
+    action: () => {
+      if (currentSessionCwd) window.api.openInCursor(currentSessionCwd);
+    },
+  },
+  {
     id: "refresh",
     label: "Refresh Sessions",
     action: () => {
@@ -2156,6 +2164,9 @@ window.api.onCyclePane(cyclePane);
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
+window.api.onOpenInCursor(() => {
+  if (currentSessionCwd) window.api.openInCursor(currentSessionCwd);
+});
 
 // Pool slot recovery toast
 window.api.onPoolSlotsRecovered((slots) => {

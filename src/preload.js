@@ -26,6 +26,7 @@ const channels = [
   "focus-external",
   "jump-recent-idle",
   "archive-current-session",
+  "open-in-cursor",
   "pool-slots-recovered",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
@@ -148,6 +149,12 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("jump-recent-idle", () => callback()),
   onArchiveCurrentSession: (callback) =>
     ipcRenderer.on("archive-current-session", () => callback()),
+  onOpenInCursor: (callback) =>
+    ipcRenderer.on("open-in-cursor", () => callback()),
+
+  // Open in Cursor
+  openInCursor: (cwd) => ipcRenderer.invoke("open-in-cursor", cwd),
+
   onPoolSlotsRecovered: (callback) =>
     ipcRenderer.on("pool-slots-recovered", (_e, slots) => callback(slots)),
 });

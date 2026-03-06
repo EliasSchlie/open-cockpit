@@ -2217,6 +2217,45 @@ function watchIntention(sessionId) {
 
 const pendingPolls = new Set();
 
+// Open the session's project directory in Cursor.
+// Checks for .code-workspace files (matching project name or inside folder).
+async function openInCursor(cwd) {
+  if (!cwd) return;
+
+  const projectName = path.basename(cwd);
+  const workspaceDir = path.join(
+    os.homedir(),
+    "Documents",
+    "Projects",
+    "VS code workspaces",
+  );
+
+  // Check named workspace file
+  const namedWorkspace = path.join(
+    workspaceDir,
+    `${projectName}.code-workspace`,
+  );
+  if (fs.existsSync(namedWorkspace)) {
+    await execFileAsync("open", ["-a", "Cursor", namedWorkspace]);
+    return;
+  }
+
+  // Check in-folder workspace file
+  try {
+    const entries = fs.readdirSync(cwd);
+    const localWs = entries.find((e) => e.endsWith(".code-workspace"));
+    if (localWs) {
+      await execFileAsync("open", ["-a", "Cursor", path.join(cwd, localWs)]);
+      return;
+    }
+  } catch {
+    /* ignore read errors */
+  }
+
+  // Fall back to opening the folder
+  await execFileAsync("open", ["-a", "Cursor", cwd]);
+}
+
 // Try to focus the external terminal (iTerm or Cursor) where a Claude session is running.
 // Returns { focused: true, app: "iTerm"/"Cursor" } or { focused: false }.
 function focusExternalTerminal(pid) {
@@ -2682,6 +2721,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("focus-external-terminal", (_e, pid) =>
     focusExternalTerminal(pid),
   );
+
+  ipcMain.handle("open-in-cursor", (_e, cwd) => openInCursor(cwd));
 
   // Pool / offload IPC handlers
   ipcMain.handle(
@@ -3458,6 +3499,11 @@ app.whenReady().then(async () => {
             label: "Focus External Terminal",
             accelerator: accel("focus-external"),
             click: () => send("focus-external"),
+          },
+          {
+            label: "Open in Cursor",
+            accelerator: accel("open-in-cursor"),
+            click: () => send("open-in-cursor"),
           },
           { type: "separator" },
           {
