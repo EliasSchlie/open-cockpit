@@ -253,6 +253,10 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
 // Cache transcriptContains results (key -> true, once true stays true)
 const userInputCache = new Map();
 
+// Sessions that have been through at least one processing cycle (non-pool-init).
+// Once activated, a session should never fall back to fresh/typing classification.
+const activatedSessions = new Set();
+
 const { parseOrigins } = require("./parse-origins");
 
 // Detect session origin by reading process environment via ps eww (macOS).
@@ -670,6 +674,18 @@ async function getSessionsUncached() {
       poolSlot && terminalHasInputCache.get(poolSlot.termId)
     );
 
+    // Track activation: a non-pool-init idle signal trigger means the session
+    // has been through a real processing cycle and should never revert to
+    // fresh/typing — regardless of what the transcript contains.
+    if (
+      idleSignal &&
+      idleSignal.trigger &&
+      idleSignal.trigger !== "pool-init"
+    ) {
+      activatedSessions.add(sessionId);
+    }
+    const isActivated = activatedSessions.has(sessionId);
+
     if (!alive) {
       status = "dead";
     } else if (idleSignal) {
@@ -680,14 +696,15 @@ async function getSessionsUncached() {
       // local commands (e.g. /model, /help) write to the JSONL without triggering
       // hooks, which would cause permanent false "processing" detection.
       idleTs = idleSignal.ts || 0;
-      // Use "assistant" needle — post-/clear transcripts have "user" entries
-      // from local-command metadata but never assistant responses.
+      // "assistant" needle: post-/clear transcripts have "user" entries from
+      // local-command metadata but never assistant responses.
       if (
-        !(await transcriptContains(idleSignal.transcript, '"type":"assistant"'))
+        isActivated ||
+        (await transcriptContains(idleSignal.transcript, '"type":"assistant"'))
       ) {
-        status = freshOrTyping(hasIntentionContent, hasTermInput);
-      } else {
         status = "idle";
+      } else {
+        status = freshOrTyping(hasIntentionContent, hasTermInput);
       }
     } else {
       // Fallback: if transcript size hasn't changed in a while, treat as idle.
@@ -722,11 +739,15 @@ async function getSessionsUncached() {
           );
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
-        // Use "user" needle — this path only runs when idle signal is absent
-        // (prompt just submitted), so "user" entries are real, not /clear artifacts.
-        status = (await transcriptContains(jsonlPath, '"type":"user"'))
-          ? "processing"
-          : freshOrTyping(hasIntentionContent, hasTermInput);
+        if (isActivated) {
+          status = "processing";
+        } else {
+          // "user" needle: this path only runs when idle signal is absent
+          // (prompt just submitted), so "user" entries are real, not /clear artifacts.
+          status = (await transcriptContains(jsonlPath, '"type":"user"'))
+            ? "processing"
+            : freshOrTyping(hasIntentionContent, hasTermInput);
+        }
       }
     }
 
@@ -920,6 +941,9 @@ async function getSessionsUncached() {
   const liveIds = new Set(sessions.map((s) => s.sessionId));
   for (const id of jsonlSizeTracker.keys()) {
     if (!liveIds.has(id)) jsonlSizeTracker.delete(id);
+  }
+  for (const id of activatedSessions) {
+    if (!liveIds.has(id)) activatedSessions.delete(id);
   }
 
   // Add offloaded/archived sessions, skip if live session exists.

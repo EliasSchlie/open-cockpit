@@ -239,6 +239,7 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 - **Why:** Local commands (`/model`, `/help`, etc.) write to the JSONL without triggering hooks, which would cause false "processing" if we compared transcript mtime with signal mtime.
 - **Safety:** `UserPromptSubmit` always clears the signal before processing begins. Stop-hook re-prompts happen within an already-cleared cycle, so no stale signal persists during processing.
 - **No false idle positives.** The app may trigger notifications on idle transitions — a premature "idle" is worse than a delayed one.
+- **Activation tracking:** Sessions with a non-`pool-init` idle signal trigger are marked "activated" in an in-memory Set. Activated sessions always classify as `idle`/`processing`, never `fresh`/`typing` — prevents misclassification when transcript checks fail (e.g. after `/resume` or `/clear`).
 
 ### Debugging session state
 
