@@ -257,6 +257,10 @@ const transcriptCache = new Map();
 // Once activated, a session should never fall back to fresh/typing classification.
 const activatedSessions = new Set();
 
+// Idle signal triggers that represent fresh/unactivated sessions.
+// Signals with these triggers do NOT mark a session as activated.
+const FRESH_TRIGGERS = new Set(["pool-init", "session-clear"]);
+
 const { parseOrigins } = require("./parse-origins");
 
 // Detect session origin by reading process environment via ps eww (macOS).
@@ -658,11 +662,18 @@ async function getSessionsUncached() {
     const hasIntention = fs.existsSync(intentionFile);
 
     // Run independent I/O in parallel
-    const [intentionHeading, gitRoot, idleSignal] = await Promise.all([
+    const [intentionHeading, gitRoot, rawIdleSignal] = await Promise.all([
       hasIntention ? getIntentionHeading(intentionFile) : null,
       findGitRoot(cwd),
       alive ? getIdleSignal(pid) : null,
     ]);
+    // Discard stale idle signals left by a previous session on the same PID
+    // (e.g. after manual /clear before the session-clear hook overwrites it).
+    // Keep signals with no session_id (backward compat with older hook versions).
+    const idleSignal =
+      !rawIdleSignal?.session_id || rawIdleSignal.session_id === sessionId
+        ? rawIdleSignal
+        : null;
     let status;
     let idleTs = 0;
     let staleIdle = false;
@@ -674,13 +685,12 @@ async function getSessionsUncached() {
       poolSlot && terminalHasInputCache.get(poolSlot.termId)
     );
 
-    // Track activation: a non-pool-init idle signal trigger means the session
-    // has been through a real processing cycle and should never revert to
-    // fresh/typing — regardless of what the transcript contains.
+    // Track activation: triggers NOT in FRESH_TRIGGERS mean the session has
+    // been through a real processing cycle and should never revert to fresh/typing.
     if (
       idleSignal &&
       idleSignal.trigger &&
-      idleSignal.trigger !== "pool-init"
+      !FRESH_TRIGGERS.has(idleSignal.trigger)
     ) {
       activatedSessions.add(sessionId);
     }
