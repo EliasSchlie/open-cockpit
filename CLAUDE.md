@@ -112,6 +112,8 @@ Git hooks live in `.githooks/` (version-controlled). `core.hooksPath` is set aut
 
 Worktrees auto-setup via the `post-checkout` hook — just `git worktree add` and it's ready.
 
+> ⚠️ **Never use the Agent tool with `isolation: "worktree"` from inside a worktree (`.wt/`).** This creates nested `.wt/` directories, which causes git confusion, test duplication (vitest picks up tests from nested paths), and file watching issues. Only use worktree isolation from the main repo root.
+
 ### Merging worktree PRs
 
 `gh pr merge --delete-branch` fails from worktrees. Always merge from the **root worktree** without `--delete-branch`, then clean up:
