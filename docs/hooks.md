@@ -47,8 +47,9 @@ Detects when sessions become idle (waiting for user input) or start processing. 
 
 ### How the app uses signals
 
-- **Has signal + transcript mtime > signal mtime** → processing (Stop hook re-prompted Claude)
 - **Has signal + has human turns in JSONL** → idle (ready for input)
 - **Has signal + no human turns** → fresh (never used)
-- **No signal + alive** → processing
+- **No signal + alive** → processing (fallback: size-based stale detection after 30s)
 - **Not alive** → dead
+
+**Why we trust the signal directly (no mtime/size cross-checks):** `UserPromptSubmit` always clears the signal before processing begins. Even when Stop hooks re-prompt Claude, the original `UserPromptSubmit` already cleared the signal, so no stale signal persists during processing. Local commands (e.g. `/model`, `/help`) write to the JSONL transcript without triggering hooks — comparing transcript mtime with signal mtime would cause permanent false "processing" detection.
