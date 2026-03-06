@@ -208,7 +208,12 @@ async function pollTerminalInput() {
       }
     }
 
-    if (changed) invalidateSessionsCache();
+    if (changed) {
+      invalidateSessionsCache();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("sessions-changed");
+      }
+    }
   } finally {
     pollInFlight = false;
   }
