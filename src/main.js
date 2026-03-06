@@ -2081,6 +2081,10 @@ async function poolDestroy() {
     } catch (err) {
       debugLog("main", "poolDestroy: failed to unlink pool.json:", err.message);
     }
+    // Archive non-archived offloaded sessions so they don't linger in Recent
+    for (const s of await getOffloadedSessions()) {
+      if (s.status === "offloaded") await archiveSession(s.sessionId);
+    }
   });
 }
 
