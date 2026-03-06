@@ -319,34 +319,74 @@ body {
   display: none !important;
 }
 
-/* Session view: horizontal split (terminal | editor) */
+/* Session view */
 #session-view {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }
 
-/* Terminal pane (left) */
-#terminal-pane {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
+/* Drag bar for frameless window movement */
+#dock-dragbar {
+  height: 32px;
+  -webkit-app-region: drag;
+  flex-shrink: 0;
 }
 
-#terminal-tabs {
+#dock-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* --- Dock layout system --- */
+
+.dock-split {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.dock-horizontal {
+  flex-direction: row;
+}
+
+.dock-vertical {
+  flex-direction: column;
+}
+
+.dock-split-child {
+  flex-grow: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dock-leaf {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  border: 1px solid var(--border);
+}
+
+/* --- Dock tab bar --- */
+
+.dock-tab-bar {
   display: flex;
   align-items: center;
   padding: 4px 8px;
-  padding-top: 36px;
   gap: 4px;
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
+  flex-shrink: 0;
 }
 
-#terminal-tab-list {
+.dock-tab-list {
   display: flex;
   gap: 2px;
   flex: 1;
@@ -354,7 +394,7 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.terminal-tab {
+.dock-tab {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -366,30 +406,35 @@ body {
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
+  user-select: none;
 }
 
-.terminal-tab:hover {
+.dock-tab:hover {
   background: var(--border);
   color: var(--text);
 }
 
-.terminal-tab.active {
+.dock-tab.active {
   background: var(--accent-dim);
   color: var(--text);
 }
 
-.terminal-tab-close {
+.dock-tab.dragging {
+  opacity: 0.4;
+}
+
+.dock-tab-close {
   font-size: 10px;
   opacity: 0.5;
   cursor: pointer;
   padding: 0 2px;
 }
 
-.terminal-tab-close:hover {
+.dock-tab-close:hover {
   opacity: 1;
 }
 
-#new-term-btn {
+.dock-tab-add {
   -webkit-app-region: no-drag;
   background: none;
   border: none;
@@ -401,43 +446,46 @@ body {
   flex-shrink: 0;
 }
 
-#new-term-btn:hover {
+.dock-tab-add:hover {
   background: var(--border);
   color: var(--text);
 }
 
-#terminal-mount {
+/* --- Dock content area --- */
+
+.dock-content {
   flex: 1;
   min-height: 0;
+  position: relative;
+  overflow: hidden;
 }
 
-#terminal-mount .xterm {
+.dock-content .xterm {
   height: 100%;
   padding: 4px;
 }
 
-/* Editor pane (right) */
-#editor-pane {
+/* --- Editor tab content --- */
+
+.dock-editor-content {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-width: 0;
-  border-left: 1px solid var(--border);
+  width: 100%;
+  height: 100%;
 }
 
-#editor-header {
+.dock-editor-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 10px 16px;
-  padding-top: 40px;
   border-bottom: 1px solid var(--border);
-  -webkit-app-region: drag;
   transition: border-color 0.2s;
   position: relative;
+  flex-shrink: 0;
 }
 
-#editor-header-color-bar {
+.dock-editor-header-color-bar {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -445,24 +493,119 @@ body {
   height: 2px;
 }
 
-#editor-project {
+.dock-editor-project {
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
 
-#save-status {
+.dock-save-status {
   font-size: 11px;
   color: var(--text-dim);
-  -webkit-app-region: no-drag;
 }
 
-#editor-mount {
+.dock-editor-mount {
   flex: 1;
   overflow: hidden;
 }
 
-#editor-mount .cm-editor {
+.dock-editor-mount .cm-editor {
+  height: 100%;
+}
+
+/* --- Resize handles --- */
+
+.dock-resize-handle {
+  flex-shrink: 0;
+  background: var(--border);
+  z-index: 5;
+  transition: background 0.15s;
+}
+
+.dock-resize-handle:hover {
+  background: var(--accent);
+}
+
+.dock-resize-horizontal {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.dock-resize-vertical {
+  height: 4px;
+  cursor: row-resize;
+}
+
+body.dock-resizing-h {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.dock-resizing-v {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+/* --- Drop indicator --- */
+
+.dock-drop-indicator {
+  position: absolute;
+  pointer-events: none;
+  z-index: 100;
+  display: none;
+  background: rgba(255, 26, 26, 0.12);
+  border: 2px dashed rgba(255, 26, 26, 0.4);
+  border-radius: 4px;
+}
+
+.dock-drop-indicator.visible {
+  display: block;
+}
+
+.dock-indicate-center {
+  inset: 0;
+}
+
+.dock-indicate-top {
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 50%;
+}
+
+.dock-indicate-bottom {
+  top: 50%;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.dock-indicate-left {
+  top: 0;
+  left: 0;
+  right: 50%;
+  bottom: 0;
+}
+
+.dock-indicate-right {
+  top: 0;
+  left: 50%;
+  right: 0;
+  bottom: 0;
+}
+
+/* Highlight leaf during drag */
+.dock-leaf.dock-drop-active {
+  outline: 1px dashed rgba(255, 26, 26, 0.25);
+  outline-offset: -1px;
+}
+
+/* --- Inline snapshot (offloaded/archived sessions) --- */
+
+.dock-snapshot-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   height: 100%;
 }
 
