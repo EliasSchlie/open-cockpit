@@ -15,6 +15,8 @@ import {
   DockLayout,
   createDefaultLayout,
   newLeafId,
+  TAB_EDITOR,
+  TAB_SNAPSHOT,
   createEditorContainer,
   registerTerminalTab,
   registerEditorTab,
@@ -458,23 +460,12 @@ function ensureDock() {
       }
     },
     onTabActivate: (tabId) => {
+      // Focus the activated tab's content — resize is handled by dock-resize event
       const entry = terminals.find((t) => t.dockTabId === tabId);
       if (entry) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (entry.container.offsetParent) {
-              entry.fitAddon.fit();
-              entry.term.focus();
-              window.api.ptyResize(
-                entry.termId,
-                entry.term.cols,
-                entry.term.rows,
-              );
-            }
-          });
-        });
+        requestAnimationFrame(() => entry.term.focus());
       }
-      if (tabId === "editor" && editorView) {
+      if (tabId === TAB_EDITOR && editorView) {
         editorView.focus();
       }
     },
@@ -497,6 +488,24 @@ function dockRegisterTerminal(entry) {
 function dockUnregisterTerminal(entry) {
   if (!dock || !entry.dockTabId) return;
   dock.unregisterTab(entry.dockTabId);
+}
+
+// Initialize dock with optional existing terminals and saved layout.
+// If no terminals/layout provided, caller adds tabs and sets layout after.
+function initDockLayout(existingTerminals, savedLayout) {
+  ensureEditorContainer();
+  ensureDock();
+  shellCounter = 0;
+  if (existingTerminals) {
+    for (const t of existingTerminals) dockRegisterTerminal(t);
+  }
+  registerEditorTab(dock, editorContainer);
+  if (savedLayout) {
+    dock.setLayout(savedLayout);
+  } else if (existingTerminals && existingTerminals.length > 0) {
+    const termTabIds = existingTerminals.map((t) => t.dockTabId);
+    dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  }
 }
 
 // Sync current terminals into the session cache (renderer + main process)
@@ -719,22 +728,7 @@ function restoreSessionTerminals(sessionId) {
   terminals = cached.terminals;
   activeTermIndex = cached.activeTermIndex;
 
-  // Re-register all terminals with the dock
-  ensureEditorContainer();
-  ensureDock();
-  shellCounter = 0;
-  for (const t of terminals) {
-    dockRegisterTerminal(t);
-  }
-  registerEditorTab(dock, editorContainer);
-
-  // Restore saved layout or create default
-  if (cached.dockLayout) {
-    dock.setLayout(cached.dockLayout);
-  } else {
-    const termTabIds = terminals.map((t) => t.dockTabId);
-    dock.setLayout(createDefaultLayout(termTabIds, ["editor"]));
-  }
+  initDockLayout(terminals, cached.dockLayout);
 
   return true;
 }
@@ -1163,20 +1157,20 @@ async function showInlineSnapshot(session, gen) {
   // Register snapshot as a dock tab
   ensureEditorContainer();
   ensureDock();
-  dock.registerTab("snapshot", {
-    type: "snapshot",
+  dock.registerTab(TAB_SNAPSHOT, {
+    type: TAB_SNAPSHOT,
     label: isArchived ? "Archived" : "Snapshot",
     closable: false,
     contentEl: container,
   });
   registerEditorTab(dock, editorContainer);
-  dock.setLayout(createDefaultLayout(["snapshot"], ["editor"]));
+  dock.setLayout(createDefaultLayout([TAB_SNAPSHOT], [TAB_EDITOR]));
 }
 
 // Clean up inline snapshot when switching away from an offloaded/archived session
 function removeInlineSnapshot() {
   if (dock) {
-    dock.unregisterTab("snapshot");
+    dock.unregisterTab(TAB_SNAPSHOT);
   }
 }
 
@@ -1279,10 +1273,7 @@ async function resumeOffloadedSession(session) {
 
   // Transition: remove inline snapshot, set up fresh dock, attach terminal
   removeInlineSnapshot();
-  ensureDock();
-  shellCounter = 0;
-  ensureEditorContainer();
-  registerEditorTab(dock, editorContainer);
+  initDockLayout();
 
   try {
     await attachPoolTerminal(result.termId);
@@ -1292,7 +1283,7 @@ async function resumeOffloadedSession(session) {
 
   // Set dock layout after terminal is attached
   const termTabIds = terminals.map((t) => t.dockTabId);
-  dock.setLayout(createDefaultLayout(termTabIds, ["editor"]));
+  dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
 
   // Poll until the slot gets its new session ID, then update our state
   const oldSessionId = session.sessionId;
@@ -1414,11 +1405,7 @@ async function selectSession(session) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
-    ensureDock();
-    shellCounter = 0;
-
-    // Register editor tab
-    registerEditorTab(dock, editorContainer);
+    initDockLayout();
 
     if (session.origin === "pool") {
       // Pool session: attach to the pool slot's existing Claude TUI
@@ -1468,7 +1455,7 @@ async function selectSession(session) {
 
     // Set the default dock layout
     const termTabIds = terminals.map((t) => t.dockTabId);
-    dock.setLayout(createDefaultLayout(termTabIds, ["editor"]));
+    dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
   }
 
   const content = await window.api.readIntention(session.sessionId);
@@ -1841,9 +1828,9 @@ function focusAdjacentPane(delta) {
   const nextLeafId = leafIds[nextIdx];
 
   const activeTabId = dock.getActiveTabInLeaf(nextLeafId);
-  if (activeTabId === "editor" || activeTabId === "snapshot") {
+  if (activeTabId === TAB_EDITOR || activeTabId === TAB_SNAPSHOT) {
     dock.activateTab(activeTabId);
-    if (activeTabId === "editor" && editorView) editorView.focus();
+    if (activeTabId === TAB_EDITOR && editorView) editorView.focus();
   } else {
     focusLeafContent(dock, nextLeafId, terminals);
   }
@@ -2387,14 +2374,7 @@ async function reconnectAllPtys() {
     await window.api.watchIntention(lastActive.sessionId);
 
     // Set up dock with restored terminals
-    ensureDock();
-    shellCounter = 0;
-    for (const t of terminals) {
-      dockRegisterTerminal(t);
-    }
-    registerEditorTab(dock, editorContainer);
-    const termTabIds = terminals.map((t) => t.dockTabId);
-    dock.setLayout(createDefaultLayout(termTabIds, ["editor"]));
+    initDockLayout(terminals);
   }
 }
 

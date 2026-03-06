@@ -3,6 +3,10 @@ import { DockLayout, createDefaultLayout, newLeafId } from "./dock-layout.js";
 
 export { DockLayout, createDefaultLayout, newLeafId };
 
+// Tab ID constants — used across renderer and dock-helpers
+export const TAB_EDITOR = "editor";
+export const TAB_SNAPSHOT = "snapshot";
+
 // Build the editor content DOM (header + mount point)
 export function createEditorContainer() {
   const editorContainer = document.createElement("div");
@@ -42,8 +46,8 @@ export function registerTerminalTab(dock, entry, label) {
 
 // Register the editor tab
 export function registerEditorTab(dock, editorContainer) {
-  dock.registerTab("editor", {
-    type: "editor",
+  dock.registerTab(TAB_EDITOR, {
+    type: TAB_EDITOR,
     label: "Intention",
     closable: false,
     contentEl: editorContainer,
@@ -94,7 +98,7 @@ export function getFocusedTabId(dock, container) {
 export function focusLeafContent(dock, leafId, terminals) {
   const activeTabId = dock.getActiveTabInLeaf(leafId);
   if (!activeTabId) return;
-  if (activeTabId === "editor") return; // caller handles editor focus
+  if (activeTabId === TAB_EDITOR) return; // caller handles editor focus
   const entry = terminals.find((t) => t.dockTabId === activeTabId);
   if (entry) {
     dock.activateTab(activeTabId);

@@ -57,7 +57,7 @@ export class DockLayout {
   }
 
   addTab(tabId, leafId) {
-    if (!leafId) leafId = this._getFirstLeafId();
+    if (!leafId) leafId = this.getFirstLeafId();
     const leaf = this._findLeaf(leafId);
     if (!leaf) return;
     if (!leaf.tabs.includes(tabId)) leaf.tabs.push(tabId);
@@ -112,10 +112,6 @@ export class DockLayout {
     return leaf.tabs[leaf.activeTab] || leaf.tabs[0];
   }
 
-  getFirstLeafId() {
-    return this._getFirstLeafId();
-  }
-
   getAllTabIds() {
     const ids = [];
     this._forEachLeaf((leaf) => ids.push(...leaf.tabs));
@@ -164,30 +160,42 @@ export class DockLayout {
 
   // --- Tree traversal ---
 
+  // Returns true from fn to stop walking early
   _walk(node, fn) {
-    if (!node) return;
-    fn(node);
-    if (node.type === "split") node.children.forEach((c) => this._walk(c, fn));
+    if (!node) return false;
+    if (fn(node)) return true;
+    if (node.type === "split") {
+      for (const c of node.children) {
+        if (this._walk(c, fn)) return true;
+      }
+    }
+    return false;
   }
 
   _forEachLeaf(fn) {
     this._walk(this.root, (n) => {
-      if (n.type === "leaf") fn(n);
+      if (n.type === "leaf") return fn(n);
     });
   }
 
   _findLeaf(id) {
     let result = null;
     this._forEachLeaf((l) => {
-      if (l.id === id) result = l;
+      if (l.id === id) {
+        result = l;
+        return true; // early exit
+      }
     });
     return result;
   }
 
-  _getFirstLeafId() {
+  getFirstLeafId() {
     let result = null;
     this._forEachLeaf((l) => {
-      if (!result) result = l.id;
+      if (!result) {
+        result = l.id;
+        return true; // early exit
+      }
     });
     return result;
   }
@@ -466,6 +474,7 @@ export class DockLayout {
       const isH = splitNode.direction === "horizontal";
       const startPos = isH ? e.clientX : e.clientY;
       const startSizes = [...splitNode.sizes];
+      let resizePending = false;
 
       document.body.classList.add(isH ? "dock-resizing-h" : "dock-resizing-v");
 
@@ -501,7 +510,13 @@ export class DockLayout {
         if (children[childIndex + 1])
           children[childIndex + 1].style.flexBasis = `${b}%`;
 
-        window.dispatchEvent(new Event("dock-resize"));
+        if (!resizePending) {
+          resizePending = true;
+          requestAnimationFrame(() => {
+            resizePending = false;
+            window.dispatchEvent(new Event("dock-resize"));
+          });
+        }
       };
 
       const onUp = () => {
