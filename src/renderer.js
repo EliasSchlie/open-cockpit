@@ -819,9 +819,32 @@ function sessionFingerprint(s) {
 
 // Track previous session fingerprints for diff-based updates
 let prevSessionFingerprints = null;
+// Play a short bell tone via Web Audio API
+let bellCtx = null;
+function playBell() {
+  try {
+    if (!bellCtx) bellCtx = new AudioContext();
+    if (bellCtx.state === "suspended") bellCtx.resume();
+    const osc = bellCtx.createOscillator();
+    const gain = bellCtx.createGain();
+    osc.connect(gain);
+    gain.connect(bellCtx.destination);
+    osc.type = "sine";
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, bellCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, bellCtx.currentTime + 0.3);
+    osc.start(bellCtx.currentTime);
+    osc.stop(bellCtx.currentTime + 0.3);
+  } catch (_) {
+    // Audio not available — ignore
+  }
+}
 let archiveExpanded = false;
 async function loadSessions() {
   const sessions = await window.api.getSessions();
+  const oldStatuses = new Map(
+    cachedSessions.map((s) => [s.sessionId, s.status]),
+  );
   cachedSessions = sessions;
   cleanupStaleTerminals(sessions);
   updatePoolHealthBadge();
@@ -845,6 +868,20 @@ async function loadSessions() {
     return;
   }
   prevSessionFingerprints = fingerprints;
+
+  // Bell when a session transitions to idle (finished processing)
+  if (oldStatuses.size > 0) {
+    for (const s of sessions) {
+      if (
+        s.status === STATUS_CLASSES.idle &&
+        oldStatuses.has(s.sessionId) &&
+        oldStatuses.get(s.sessionId) !== STATUS_CLASSES.idle
+      ) {
+        playBell();
+        break;
+      }
+    }
+  }
 
   // Full rebuild only when sessions actually changed
   sessionList.innerHTML = "";
