@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOCKET="${COCKPIT_SOCKET:-$HOME/.open-cockpit/api.sock}"
+OC_DIR="$HOME/.open-cockpit"
+PROD_SOCKET="$OC_DIR/api.sock"
+DEV_SOCKET="$OC_DIR/api-dev.sock"
+if [ -n "${COCKPIT_SOCKET:-}" ]; then
+  SOCKET="$COCKPIT_SOCKET"
+elif [ -S "$PROD_SOCKET" ]; then
+  SOCKET="$PROD_SOCKET"
+elif [ -S "$DEV_SOCKET" ]; then
+  SOCKET="$DEV_SOCKET"
+else
+  SOCKET="$PROD_SOCKET"
+fi
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$HOME/.open-cockpit/session-pids}"
 

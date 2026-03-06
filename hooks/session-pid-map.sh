@@ -10,6 +10,17 @@ source "$(dirname "$0")/common.sh"
 
 mkdir -p "$SESSION_PIDS_DIR"
 
+# Ensure cockpit-cli is accessible at a stable path
+OC_BIN_DIR="$OC_DIR/bin"
+PLUGIN_CLI="$(dirname "$0")/../bin/cockpit-cli"
+if [ -f "$PLUGIN_CLI" ]; then
+    target="$(cd "$(dirname "$PLUGIN_CLI")" && pwd)/cockpit-cli"
+    if [ "$(readlink "$OC_BIN_DIR/cockpit-cli" 2>/dev/null)" != "$target" ]; then
+        mkdir -p "$OC_BIN_DIR"
+        ln -sf "$target" "$OC_BIN_DIR/cockpit-cli"
+    fi
+fi
+
 # Read session_id from JSON stdin (avoid python3 startup overhead)
 input=""
 read -t 1 -r input 2>/dev/null || true
