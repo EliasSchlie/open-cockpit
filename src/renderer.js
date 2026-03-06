@@ -2229,7 +2229,7 @@ window.api.onApiTermOpened(async (sessionId, termId) => {
   }
   pendingTerminals.delete(termId);
 
-  term.onData((data) => window.api.ptyWrite(termId, data));
+  wireTerminalInput(term, termId);
   setupTerminalResize(entry);
 
   dockRegisterTerminal(entry);
