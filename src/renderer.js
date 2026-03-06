@@ -1327,9 +1327,16 @@ async function resumeOffloadedSession(session) {
           p.termId !== result.termId,
       );
       for (const p of extraPtys) {
-        terminals.push(await reconnectTerminal(p));
+        const entry = await reconnectTerminal(p);
+        terminals.push(entry);
+        dockRegisterTerminal(entry);
+        if (dock) {
+          const tuiTab = terminals.find((t) => t.isPoolTui)?.dockTabId;
+          const leaf =
+            (tuiTab && dock.getTabLeafId(tuiTab)) || dock.getFirstLeafId();
+          dock.addTab(entry.dockTabId, leaf);
+        }
       }
-      if (extraPtys.length > 0) renderTerminalTabs();
     } catch (err) {
       debugLog("pool", `re-attach orphaned terminals failed: ${err.message}`);
     }
