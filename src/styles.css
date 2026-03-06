@@ -843,6 +843,10 @@ body {
 }
 
 /* Slot terminal popup */
+#slot-terminal-popup {
+  z-index: 1100;
+}
+
 .slot-terminal-dialog {
   width: 80vw;
   height: 70vh;
