@@ -94,9 +94,7 @@ export class DockLayout {
     const tabList = leafEl.querySelector(".dock-tab-list");
     this._updateTabActive(tabList, targetLeaf.activeTab);
     this._showActiveContent(targetLeaf, leafEl);
-    requestAnimationFrame(() => {
-      window.dispatchEvent(new Event("dock-resize"));
-    });
+    window.dispatchEvent(new Event("dock-resize"));
   }
 
   getTabLeafId(tabId) {
@@ -303,9 +301,9 @@ export class DockLayout {
     if (!this.root) return;
     this.container.appendChild(this._renderNode(this.root));
 
-    requestAnimationFrame(() => {
-      window.dispatchEvent(new Event("dock-resize"));
-    });
+    // Dispatch synchronously — handlers use their own rAF to read layout after
+    // the browser has recalculated flex sizes in the next frame.
+    window.dispatchEvent(new Event("dock-resize"));
   }
 
   _renderNode(node) {

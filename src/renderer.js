@@ -1456,6 +1456,9 @@ async function selectSession(session) {
   if (saveStatus) saveStatus.textContent = "";
 
   await window.api.watchIntention(session.sessionId);
+
+  // Auto-focus the Claude terminal so the user can type immediately
+  focusTerminal();
 }
 
 // "+" in sidebar: acquire a fresh slot from the pool (or offload LRU idle)
