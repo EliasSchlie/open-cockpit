@@ -731,13 +731,17 @@ function restoreSessionTerminals(sessionId) {
   return true;
 }
 
-// Kill and fully dispose terminals for a specific session
-function destroySessionTerminals(sessionId) {
+// Kill and fully dispose terminals for a specific session.
+// keepAlive: if true, extra shell terminals stay alive in the daemon (detach only, no kill).
+// Used during offload so terminals can be re-attached on resume.
+function destroySessionTerminals(sessionId, { keepAlive = false } = {}) {
   const cached = sessionTerminals.get(sessionId);
   if (!cached) return;
   for (const entry of cached.terminals) {
     window.api.ptyDetach(entry.termId).catch(() => {});
-    if (!entry.isPoolTui) {
+    // Don't kill pool TUI terminals — the Claude process must stay alive.
+    // With keepAlive, also skip killing extra shells (they survive in daemon).
+    if (!entry.isPoolTui && !keepAlive) {
       window.api.ptyKill(entry.termId).catch(() => {});
     }
     disposeTerminalEntry(entry, dock);
@@ -1230,7 +1234,7 @@ async function acquireFreshSlot() {
   );
   const fresh = await pollForFreshSlot(30000);
   if (fresh) {
-    destroySessionTerminals(victim.sessionId);
+    destroySessionTerminals(victim.sessionId, { keepAlive: true });
   }
   return fresh;
 }
@@ -1283,7 +1287,36 @@ async function resumeOffloadedSession(session) {
   if (newSession) {
     currentSessionId = newSession.sessionId;
     currentSessionCwd = newSession.cwd;
+
+    // Clean up any renderer-side cached terminals for the old session
+    // (e.g. from startup reconnect). The daemon terminals were re-tagged
+    // to the new sessionId by main.js, so we just dispose the stale UI.
+    const oldCached = sessionTerminals.get(oldSessionId);
+    if (oldCached) {
+      for (const entry of oldCached.terminals) {
+        window.api.ptyDetach(entry.termId).catch(() => {});
+        disposeTerminalEntry(entry, dock);
+      }
+    }
     sessionTerminals.delete(oldSessionId);
+
+    // Re-attach orphaned extra terminals from daemon (re-tagged by main.js)
+    try {
+      const allPtys = await window.api.ptyList();
+      const extraPtys = allPtys.filter(
+        (p) =>
+          p.sessionId === newSession.sessionId &&
+          !p.exited &&
+          p.termId !== result.termId,
+      );
+      for (const p of extraPtys) {
+        terminals.push(await reconnectTerminal(p));
+      }
+      if (extraPtys.length > 0) renderTerminalTabs();
+    } catch (err) {
+      debugLog("pool", `re-attach orphaned terminals failed: ${err.message}`);
+    }
+
     if (terminals.length > 0) {
       sessionTerminals.set(newSession.sessionId, {
         terminals: [...terminals],
