@@ -1427,13 +1427,6 @@ newSessionBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Check if pool is still initializing (has starting/unresolved slots)
-  const health = await window.api.poolHealth();
-  if (health?.counts?.starting > 0) {
-    showNotification("Pool still initializing — wait for slots to be ready");
-    return;
-  }
-
   // Check for setup scripts before acquiring a slot
   let selectedScript = null;
   const scripts = await window.api.listSetupScripts();
