@@ -55,4 +55,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+O` | Focus External Terminal |
 | `Escape` | Focus Terminal |
 | `Cmd+/` | Command Palette |
+| `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
 | *(unbound)* | Toggle Pane Focus (editor ↔ terminal) |
+| *(unbound)* | Split Right |
+| *(unbound)* | Split Down |

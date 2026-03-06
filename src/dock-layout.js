@@ -72,11 +72,30 @@ export class DockLayout {
   }
 
   activateTab(tabId) {
+    let targetLeaf = null;
     this._forEachLeaf((leaf) => {
       const idx = leaf.tabs.indexOf(tabId);
-      if (idx !== -1) leaf.activeTab = idx;
+      if (idx !== -1) {
+        leaf.activeTab = idx;
+        targetLeaf = leaf;
+      }
     });
-    this._render();
+    if (!targetLeaf) return;
+
+    // In-place update — avoid full DOM rebuild
+    const leafEl = this.container.querySelector(
+      `[data-leaf-id="${targetLeaf.id}"]`,
+    );
+    if (!leafEl) {
+      this._render();
+      return;
+    }
+    const tabList = leafEl.querySelector(".dock-tab-list");
+    this._updateTabActive(tabList, targetLeaf.activeTab);
+    this._showActiveContent(targetLeaf, leafEl);
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("dock-resize"));
+    });
   }
 
   getTabLeafId(tabId) {
@@ -101,6 +120,36 @@ export class DockLayout {
     const ids = [];
     this._forEachLeaf((leaf) => ids.push(...leaf.tabs));
     return ids;
+  }
+
+  getLeafIds() {
+    const ids = [];
+    this._forEachLeaf((leaf) => ids.push(leaf.id));
+    return ids;
+  }
+
+  moveTabToSplit(tabId, direction) {
+    let sourceLeafId = null;
+    this._forEachLeaf((leaf) => {
+      if (leaf.tabs.includes(tabId)) sourceLeafId = leaf.id;
+    });
+    if (!sourceLeafId) return;
+
+    this._removeTabFromTree(tabId);
+    const newLeaf = {
+      type: "leaf",
+      id: newLeafId(),
+      tabs: [tabId],
+      activeTab: 0,
+    };
+    const splitDir =
+      direction === "left" || direction === "right" ? "horizontal" : "vertical";
+    const position =
+      direction === "left" || direction === "top" ? "before" : "after";
+    this._splitLeaf(sourceLeafId, newLeaf, splitDir, position);
+    this._cleanup();
+    this._render();
+    if (this.callbacks.onLayoutChange) this.callbacks.onLayoutChange();
   }
 
   destroy() {

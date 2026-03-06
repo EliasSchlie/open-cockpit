@@ -3461,6 +3461,27 @@ app.whenReady().then(async () => {
           },
           { type: "separator" },
           {
+            label: "Focus Next Pane",
+            accelerator: accel("focus-next-pane"),
+            click: () => send("focus-next-pane"),
+          },
+          {
+            label: "Focus Previous Pane",
+            accelerator: accel("focus-prev-pane"),
+            click: () => send("focus-prev-pane"),
+          },
+          {
+            label: "Split Right",
+            accelerator: accel("split-right"),
+            click: () => send("split-right"),
+          },
+          {
+            label: "Split Down",
+            accelerator: accel("split-down"),
+            click: () => send("split-down"),
+          },
+          { type: "separator" },
+          {
             label: "Jump to Recent Idle",
             accelerator: accel("jump-recent-idle"),
             click: () => send("jump-recent-idle"),

@@ -24,6 +24,10 @@ const channels = [
   "toggle-pane-focus",
   "cycle-pane",
   "focus-external",
+  "focus-next-pane",
+  "focus-prev-pane",
+  "split-right",
+  "split-down",
   "jump-recent-idle",
   "archive-current-session",
   "pool-slots-recovered",
@@ -144,6 +148,12 @@ contextBridge.exposeInMainWorld("api", {
   onCyclePane: (callback) => ipcRenderer.on("cycle-pane", () => callback()),
   onFocusExternalTerminal: (callback) =>
     ipcRenderer.on("focus-external", () => callback()),
+  onFocusNextPane: (callback) =>
+    ipcRenderer.on("focus-next-pane", () => callback()),
+  onFocusPrevPane: (callback) =>
+    ipcRenderer.on("focus-prev-pane", () => callback()),
+  onSplitRight: (callback) => ipcRenderer.on("split-right", () => callback()),
+  onSplitDown: (callback) => ipcRenderer.on("split-down", () => callback()),
   onJumpRecentIdle: (callback) =>
     ipcRenderer.on("jump-recent-idle", () => callback()),
   onArchiveCurrentSession: (callback) =>

@@ -11,7 +11,18 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { DockLayout, createDefaultLayout, newLeafId } from "./dock-layout.js";
+import {
+  DockLayout,
+  createDefaultLayout,
+  newLeafId,
+  createEditorContainer,
+  registerTerminalTab,
+  registerEditorTab,
+  setupTerminalResize,
+  teardownTerminalResize,
+  getFocusedTabId,
+  focusLeafContent,
+} from "./dock-helpers.js";
 
 // --- Debug logging (writes to ~/.open-cockpit/debug.log via main process) ---
 function debugLog(tag, ...args) {
@@ -429,29 +440,11 @@ let sessionGeneration = 0;
 
 function ensureEditorContainer() {
   if (editorContainer) return;
-  editorContainer = document.createElement("div");
-  editorContainer.className = "dock-editor-content";
-
-  const header = document.createElement("div");
-  header.className = "dock-editor-header";
-
-  const project = document.createElement("span");
-  project.className = "dock-editor-project";
-  header.appendChild(project);
-
-  const status = document.createElement("span");
-  status.className = "dock-save-status";
-  header.appendChild(status);
-
-  editorContainer.appendChild(header);
-
-  const mount = document.createElement("div");
-  mount.className = "dock-editor-mount";
-  editorContainer.appendChild(mount);
-
-  editorMount = mount;
-  editorProject = project;
-  saveStatus = status;
+  const result = createEditorContainer();
+  editorContainer = result.editorContainer;
+  editorMount = result.editorMount;
+  editorProject = result.editorProject;
+  saveStatus = result.saveStatus;
 }
 
 function ensureDock() {
@@ -497,56 +490,13 @@ function ensureDock() {
 
 function dockRegisterTerminal(entry) {
   if (!dock) return;
-  const tabId = `term-${entry.termId}`;
-  entry.dockTabId = tabId;
   const label = entry.isPoolTui ? "Claude" : `Terminal ${++shellCounter}`;
-  dock.registerTab(tabId, {
-    type: entry.isPoolTui ? "claude" : "terminal",
-    label,
-    closable: !entry.isPoolTui,
-    contentEl: entry.container,
-  });
+  registerTerminalTab(dock, entry, label);
 }
 
 function dockUnregisterTerminal(entry) {
   if (!dock || !entry.dockTabId) return;
   dock.unregisterTab(entry.dockTabId);
-}
-
-function registerEditorTab() {
-  dock.registerTab("editor", {
-    type: "editor",
-    label: "Intention",
-    closable: false,
-    contentEl: editorContainer,
-  });
-}
-
-// Terminal resize via dock-resize event (replaces per-terminal ResizeObservers)
-function setupTerminalResize(entry) {
-  let pending = false;
-  const handler = () => {
-    if (pending) return;
-    pending = true;
-    requestAnimationFrame(() => {
-      pending = false;
-      if (entry.container.offsetParent) {
-        entry.fitAddon.fit();
-        window.api.ptyResize(entry.termId, entry.term.cols, entry.term.rows);
-      }
-    });
-  };
-  window.addEventListener("dock-resize", handler);
-  window.addEventListener("resize", handler);
-  entry._resizeHandler = handler;
-}
-
-function teardownTerminalResize(entry) {
-  if (entry._resizeHandler) {
-    window.removeEventListener("dock-resize", entry._resizeHandler);
-    window.removeEventListener("resize", entry._resizeHandler);
-    entry._resizeHandler = null;
-  }
 }
 
 // Sync current terminals into the session cache (renderer + main process)
@@ -776,7 +726,7 @@ function restoreSessionTerminals(sessionId) {
   for (const t of terminals) {
     dockRegisterTerminal(t);
   }
-  registerEditorTab();
+  registerEditorTab(dock, editorContainer);
 
   // Restore saved layout or create default
   if (cached.dockLayout) {
@@ -1219,7 +1169,7 @@ async function showInlineSnapshot(session, gen) {
     closable: false,
     contentEl: container,
   });
-  registerEditorTab();
+  registerEditorTab(dock, editorContainer);
   dock.setLayout(createDefaultLayout(["snapshot"], ["editor"]));
 }
 
@@ -1332,7 +1282,7 @@ async function resumeOffloadedSession(session) {
   ensureDock();
   shellCounter = 0;
   ensureEditorContainer();
-  registerEditorTab();
+  registerEditorTab(dock, editorContainer);
 
   try {
     await attachPoolTerminal(result.termId);
@@ -1468,7 +1418,7 @@ async function selectSession(session) {
     shellCounter = 0;
 
     // Register editor tab
-    registerEditorTab();
+    registerEditorTab(dock, editorContainer);
 
     if (session.origin === "pool") {
       // Pool session: attach to the pool slot's existing Claude TUI
@@ -1875,6 +1825,38 @@ function cyclePane() {
   }
 }
 
+// Navigate between dock leaves (panels)
+function focusAdjacentPane(delta) {
+  if (!dock) return;
+  const leafIds = dock.getLeafIds();
+  if (leafIds.length < 2) return;
+
+  // Find which leaf currently has focus
+  const focusedTabId = getFocusedTabId(dock, dockContainer);
+  let currentLeafId = focusedTabId ? dock.getTabLeafId(focusedTabId) : null;
+  if (!currentLeafId) currentLeafId = leafIds[0];
+
+  const idx = leafIds.indexOf(currentLeafId);
+  const nextIdx = (idx + delta + leafIds.length) % leafIds.length;
+  const nextLeafId = leafIds[nextIdx];
+
+  const activeTabId = dock.getActiveTabInLeaf(nextLeafId);
+  if (activeTabId === "editor" || activeTabId === "snapshot") {
+    dock.activateTab(activeTabId);
+    if (activeTabId === "editor" && editorView) editorView.focus();
+  } else {
+    focusLeafContent(dock, nextLeafId, terminals);
+  }
+}
+
+// Move the focused tab to a new split in the given direction
+function splitFocusedTab(direction) {
+  if (!dock) return;
+  const focusedTabId = getFocusedTabId(dock, dockContainer);
+  if (!focusedTabId) return;
+  dock.moveTabToSplit(focusedTabId, direction);
+}
+
 const COMMANDS = [
   {
     id: "next-session",
@@ -1953,6 +1935,30 @@ const COMMANDS = [
     label: "Cycle Pane Focus",
     shortcutAction: "cycle-pane",
     action: cyclePane,
+  },
+  {
+    id: "focus-next-pane",
+    label: "Focus Next Pane",
+    shortcutAction: "focus-next-pane",
+    action: () => focusAdjacentPane(1),
+  },
+  {
+    id: "focus-prev-pane",
+    label: "Focus Previous Pane",
+    shortcutAction: "focus-prev-pane",
+    action: () => focusAdjacentPane(-1),
+  },
+  {
+    id: "split-right",
+    label: "Split Right",
+    shortcutAction: "split-right",
+    action: () => splitFocusedTab("right"),
+  },
+  {
+    id: "split-down",
+    label: "Split Down",
+    shortcutAction: "split-down",
+    action: () => splitFocusedTab("down"),
   },
   {
     id: "toggle-pane-focus",
@@ -2243,6 +2249,10 @@ window.api.onTogglePaneFocus(() => {
   }
 });
 window.api.onCyclePane(cyclePane);
+window.api.onFocusNextPane(() => focusAdjacentPane(1));
+window.api.onFocusPrevPane(() => focusAdjacentPane(-1));
+window.api.onSplitRight(() => splitFocusedTab("right"));
+window.api.onSplitDown(() => splitFocusedTab("down"));
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
@@ -2382,7 +2392,7 @@ async function reconnectAllPtys() {
     for (const t of terminals) {
       dockRegisterTerminal(t);
     }
-    registerEditorTab();
+    registerEditorTab(dock, editorContainer);
     const termTabIds = terminals.map((t) => t.dockTabId);
     dock.setLayout(createDefaultLayout(termTabIds, ["editor"]));
   }
