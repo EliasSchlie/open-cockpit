@@ -63,7 +63,10 @@ const POOL_FILE = path.join(
 );
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const SESSION_GRAPH_FILE = path.join(OPEN_COCKPIT_DIR, "session-graph.json");
-const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
+const API_SOCKET = path.join(
+  OPEN_COCKPIT_DIR,
+  IS_DEV ? "api-dev.sock" : "api.sock",
+);
 const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
 const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
 const DEFAULT_POOL_SIZE = 5;
@@ -1192,7 +1195,11 @@ function readSessionGraph() {
 }
 
 function writeSessionGraph(graph) {
-  secureWriteFileSync(SESSION_GRAPH_FILE, JSON.stringify(graph, null, 2));
+  const data = JSON.stringify(graph, null, 2);
+  const tmp = SESSION_GRAPH_FILE + ".tmp";
+  fs.writeFileSync(tmp, data);
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, SESSION_GRAPH_FILE);
 }
 
 function recordSessionRelation(sessionId, parentSessionId, initiator) {
@@ -1807,7 +1814,38 @@ async function reconcilePool() {
     if (recovered.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("pool-slots-recovered", recovered);
     }
+
+    // Prune session graph — remove entries for sessions that no longer exist
+    pruneSessionGraph(pool);
   });
+}
+
+function pruneSessionGraph(pool) {
+  const graph = readSessionGraph();
+  const graphKeys = Object.keys(graph);
+  if (graphKeys.length === 0) return;
+
+  // Collect all known session IDs: pool slots + offloaded/archived
+  const knownIds = new Set();
+  for (const slot of pool.slots) {
+    if (slot.sessionId) knownIds.add(slot.sessionId);
+  }
+  try {
+    for (const dir of fs.readdirSync(OFFLOADED_DIR)) {
+      knownIds.add(dir);
+    }
+  } catch {
+    /* OFFLOADED_DIR may not exist */
+  }
+
+  let pruned = false;
+  for (const id of graphKeys) {
+    if (!knownIds.has(id)) {
+      delete graph[id];
+      pruned = true;
+    }
+  }
+  if (pruned) writeSessionGraph(graph);
 }
 
 // Sync pool.json slot statuses with live session state.
@@ -2950,6 +2988,29 @@ app.whenReady().then(async () => {
       daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
       await new Promise((r) => setTimeout(r, 200));
       daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
+      // Write idle signal after delay — the hook's stop trigger defers 5s
+      // and may not fire on interruption. We write at 6s as a fallback,
+      // only if no signal exists yet (hook wins if it fires first).
+      const stopPid = slot.pid;
+      const stopSessionId = msg.sessionId;
+      if (stopPid) {
+        setTimeout(() => {
+          const sigFile = path.join(IDLE_SIGNALS_DIR, String(stopPid));
+          if (fs.existsSync(sigFile)) return; // hook already wrote it
+          const signal = JSON.stringify({
+            cwd: "",
+            session_id: stopSessionId,
+            transcript: "",
+            ts: Math.floor(Date.now() / 1000),
+            trigger: "api-stop",
+          });
+          try {
+            fs.writeFileSync(sigFile, signal + "\n");
+          } catch {
+            /* ignore — session may be dead */
+          }
+        }, 6000);
+      }
       return { type: "ok", sessionId: msg.sessionId };
     },
 
