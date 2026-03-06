@@ -56,6 +56,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Ctrl+Alt+Cmd+C` | Open in Cursor |
 | `Escape` | Focus Terminal |
 | `Cmd+/` | Command Palette |
+| `Cmd+,` | Pool Settings |
 | `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
 | *(unbound)* | Toggle Pane Focus (editor ↔ terminal) |
 | *(unbound)* | Split Right |

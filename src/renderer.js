@@ -2297,6 +2297,7 @@ window.api.onArchiveCurrentSession(archiveCurrentSession);
 window.api.onOpenInCursor(() => {
   if (currentSessionCwd) window.api.openInCursor(currentSessionCwd);
 });
+window.api.onOpenPoolSettings(() => showPoolSettings());
 
 // Pool slot recovery toast
 window.api.onPoolSlotsRecovered((slots) => {
@@ -2602,8 +2603,8 @@ function renderPoolCountsHtml(health) {
 
 function closePoolSettings(overlay) {
   stopPoolSettingsPolling();
-  if (overlay._escHandler) {
-    document.removeEventListener("keydown", overlay._escHandler, true);
+  if (overlay._keyHandler) {
+    document.removeEventListener("keydown", overlay._keyHandler, true);
   }
   overlay.remove();
 }
@@ -2650,7 +2651,7 @@ async function showPoolSettings() {
           <div class="pool-controls">
             <label class="pool-size-label">
               Pool size:
-              <input type="number" class="pool-size-input" value="5" min="1" max="20">
+              <input type="number" class="pool-size-input" value="10" min="1" max="20">
             </label>
             <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
           </div>
@@ -2662,15 +2663,119 @@ async function showPoolSettings() {
 
   document.body.appendChild(overlay);
 
-  // Close on Escape (skip if a terminal popup is open on top)
-  overlay._escHandler = (e) => {
-    if (e.key === "Escape" && !document.getElementById("slot-terminal-popup")) {
+  // --- Keyboard navigation state ---
+  // "top" = navigating between pool-slots-block and buttons
+  // "slots" = navigating individual pool slots
+  let navLevel = "top";
+  let topIndex = 0;
+  let slotIndex = 0;
+
+  // Returns the list of top-level navigable items (pool-slots-list + buttons)
+  function getTopItems() {
+    const items = [];
+    const slotsList = overlay.querySelector(".pool-slots-list");
+    if (slotsList) items.push(slotsList);
+    for (const btn of overlay.querySelectorAll(
+      ".pool-controls .offload-menu-btn",
+    ))
+      items.push(btn);
+    return items;
+  }
+
+  function getSlotRows() {
+    return Array.from(
+      overlay.querySelectorAll(".pool-slots-list .pool-slot-row"),
+    );
+  }
+
+  function clearAllSelection() {
+    for (const el of overlay.querySelectorAll(".kb-selected"))
+      el.classList.remove("kb-selected");
+  }
+
+  function applySelection() {
+    clearAllSelection();
+    if (navLevel === "top") {
+      const items = getTopItems();
+      if (items[topIndex]) items[topIndex].classList.add("kb-selected");
+    } else {
+      const rows = getSlotRows();
+      // Clamp index after poll refresh may have removed slots
+      if (rows.length > 0) slotIndex = Math.min(slotIndex, rows.length - 1);
+      if (rows[slotIndex]) {
+        rows[slotIndex].classList.add("kb-selected");
+        rows[slotIndex].scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
+
+  // Apply initial selection
+  applySelection();
+
+  overlay._keyHandler = (e) => {
+    // Skip if a terminal popup is open on top
+    if (document.getElementById("slot-terminal-popup")) return;
+    // Skip if an input is focused (e.g. pool size number input)
+    if (overlay.querySelector("input:focus")) return;
+
+    const { key } = e;
+
+    if (key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      closePoolSettings(overlay);
+      if (navLevel === "slots") {
+        navLevel = "top";
+        applySelection();
+      } else {
+        closePoolSettings(overlay);
+      }
+      return;
+    }
+
+    if (key === "ArrowDown" || key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = key === "ArrowDown" ? 1 : -1;
+      if (navLevel === "top") {
+        const items = getTopItems();
+        if (items.length === 0) return;
+        topIndex = Math.max(0, Math.min(items.length - 1, topIndex + delta));
+        applySelection();
+      } else {
+        const rows = getSlotRows();
+        if (rows.length === 0) return;
+        slotIndex = Math.max(0, Math.min(rows.length - 1, slotIndex + delta));
+        applySelection();
+      }
+      return;
+    }
+
+    if (key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (navLevel === "top") {
+        const items = getTopItems();
+        const item = items[topIndex];
+        if (!item) return;
+        if (item.classList.contains("pool-slots-list")) {
+          // Enter the slots block
+          navLevel = "slots";
+          slotIndex = 0;
+          applySelection();
+        } else {
+          // It's a button — click it
+          item.click();
+        }
+      } else {
+        // Inside slots — open terminal popup for selected slot
+        const rows = getSlotRows();
+        const row = rows[slotIndex];
+        if (row) row.click();
+      }
+      return;
     }
   };
-  document.addEventListener("keydown", overlay._escHandler, true);
+  document.addEventListener("keydown", overlay._keyHandler, true);
 
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) closePoolSettings(overlay);
@@ -2691,7 +2796,11 @@ async function showPoolSettings() {
       const summaryEl = overlay.querySelector(".pool-health-summary");
       if (summaryEl) summaryEl.innerHTML = renderPoolCountsHtml(h);
       const slotsEl = overlay.querySelector(".pool-slots-list");
-      if (slotsEl) slotsEl.innerHTML = renderPoolSlotsHtml(h);
+      if (slotsEl) {
+        slotsEl.innerHTML = renderPoolSlotsHtml(h);
+        // Re-apply selection after poll refresh (innerHTML wipes classes)
+        applySelection();
+      }
     } catch {
       // Ignore transient errors — next poll will retry
     }
@@ -2703,9 +2812,11 @@ async function showPoolSettings() {
     slotsListEl.addEventListener("click", async (e) => {
       const row = e.target.closest(".pool-slot-clickable");
       if (!row) return;
-      const slotIndex = parseInt(row.dataset.slotIndex, 10);
+      const clickedSlotIndex = parseInt(row.dataset.slotIndex, 10);
       const currentHealth = await window.api.poolHealth();
-      const slot = currentHealth.slots.find((s) => s.index === slotIndex);
+      const slot = currentHealth.slots.find(
+        (s) => s.index === clickedSlotIndex,
+      );
       if (slot) openSlotTerminalPopup(slot);
     });
   }
@@ -2853,6 +2964,7 @@ async function showPoolSettings() {
 COMMANDS.push({
   id: "pool-settings",
   label: "Pool Settings",
+  shortcutAction: "open-pool-settings",
   action: () => showPoolSettings(),
 });
 

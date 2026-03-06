@@ -717,7 +717,8 @@ body.dock-resizing-v {
   text-align: left;
 }
 
-.offload-menu-btn:hover {
+.offload-menu-btn:hover,
+.offload-menu-btn.kb-selected {
   background: var(--accent-dim);
   border-color: rgba(255, 26, 26, 0.3);
 }
@@ -926,6 +927,15 @@ body.dock-resizing-v {
 
 .pool-slot-row:last-child {
   border-bottom: none;
+}
+
+.pool-slots-list.kb-selected {
+  border-color: rgba(255, 26, 26, 0.3);
+  box-shadow: 0 0 0 1px rgba(255, 26, 26, 0.2);
+}
+
+.pool-slot-row.kb-selected {
+  background: var(--accent-dim);
 }
 
 .pool-slot-label {

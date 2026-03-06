@@ -32,6 +32,7 @@ const DEFAULT_SHORTCUTS = {
   "archive-current-session": "CmdOrCtrl+D",
   "open-in-cursor": "Ctrl+Alt+Cmd+C",
   "toggle-command-palette": "CmdOrCtrl+/",
+  "open-pool-settings": "CmdOrCtrl+,",
   // Dock panel management
   "focus-next-pane": "CmdOrCtrl+Alt+]",
   "focus-prev-pane": "CmdOrCtrl+Alt+[",

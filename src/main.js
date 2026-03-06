@@ -3661,6 +3661,11 @@ app.whenReady().then(async () => {
             accelerator: accel("toggle-command-palette"),
             click: () => send("toggle-command-palette"),
           },
+          {
+            label: "Pool Settings",
+            accelerator: accel("open-pool-settings"),
+            click: () => send("open-pool-settings"),
+          },
         ],
       },
       {
