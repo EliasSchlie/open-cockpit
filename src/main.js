@@ -2006,10 +2006,25 @@ function pruneSessionGraph(pool) {
   const graphKeys = Object.keys(graph);
   if (graphKeys.length === 0) return;
 
-  // Collect all known session IDs: pool slots + offloaded/archived
+  // Collect all known session IDs: pool slots + live sessions + offloaded/archived
   const knownIds = new Set();
   for (const slot of pool.slots) {
     if (slot.sessionId) knownIds.add(slot.sessionId);
+  }
+  // Include live non-pool sessions (ext, sub-claude) from session-pids
+  try {
+    for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
+      try {
+        const sessionId = fs
+          .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
+          .trim();
+        if (sessionId) knownIds.add(sessionId);
+      } catch {
+        /* ENOENT race — file removed between readdir and read */
+      }
+    }
+  } catch {
+    /* SESSION_PIDS_DIR may not exist */
   }
   try {
     for (const dir of fs.readdirSync(OFFLOADED_DIR)) {
