@@ -29,6 +29,7 @@ function sortSessions(sessions) {
     ...fresh,
     ...dead,
     ...archived,
+    ...recent.slice(10),
   ];
 }
 

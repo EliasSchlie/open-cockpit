@@ -52,7 +52,7 @@ describe("sortSessions", () => {
     ]);
   });
 
-  it("limits recent section to 10 sessions", () => {
+  it("places overflow recent sessions after archived", () => {
     const sessions = Array.from({ length: 15 }, (_, i) => ({
       pid: String(i),
       status: "idle",
@@ -60,10 +60,15 @@ describe("sortSessions", () => {
       isPool: true,
     }));
     const result = sortSessions(sessions);
+    // All 15 idle sessions should be present (no longer dropped)
     const recent = result.filter((s) => s.status === "idle");
-    expect(recent).toHaveLength(10);
-    expect(recent[0].idleTs).toBe(1400);
-    expect(recent[9].idleTs).toBe(500);
+    expect(recent).toHaveLength(15);
+    // First 10 sorted by most recent
+    expect(result[0].idleTs).toBe(1400);
+    expect(result[9].idleTs).toBe(500);
+    // Overflow (5) placed after the top 10
+    expect(result[10].idleTs).toBe(400);
+    expect(result[14].idleTs).toBe(0);
   });
 
   it("returns empty array for empty input", () => {
@@ -101,8 +106,8 @@ describe("sortSessions", () => {
       })),
     ];
     const result = sortSessions(sessions);
-    // typing (1) + recent capped at 10 = 11 total
-    expect(result).toHaveLength(11);
+    // typing (1) + all 12 recent (10 top + 2 overflow) = 13 total
+    expect(result).toHaveLength(13);
     expect(result[0].pid).toBe("t1");
   });
 });
