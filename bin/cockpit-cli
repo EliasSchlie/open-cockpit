@@ -3,6 +3,23 @@ set -euo pipefail
 
 SOCKET="${COCKPIT_SOCKET:-$HOME/.open-cockpit/api.sock}"
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$HOME/.open-cockpit/session-pids}"
+
+# Auto-detect session ID by walking PID ancestry.
+# Checks each ancestor PID against session-pids/ directory.
+# Sets DETECTED_SESSION_ID on success, empty string on failure.
+detect_session_id() {
+  DETECTED_SESSION_ID=""
+  local pid=$$
+  while [[ -n "$pid" && "$pid" -gt 1 ]]; do
+    if [[ -f "$SESSION_PIDS_DIR/$pid" ]]; then
+      DETECTED_SESSION_ID=$(cat "$SESSION_PIDS_DIR/$pid" 2>/dev/null | tr -d '[:space:]')
+      return 0
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+  done
+  return 1
+}
 
 # Validate that a value is a non-negative integer. Args: <value> [label]
 validate_int() {
@@ -781,12 +798,33 @@ case "$CMD" in
   # ==========================================================================
 
   term)
-    SUBCMD="${1:?subcommand required (ls|read|write|key|open|close|watch)}"
+    SUBCMD="${1:?subcommand required (ls|read|write|key|open|close|watch|run|exec)}"
     shift
+
+    # Check if an arg looks like a session target (starts with @ or is hex with letters)
+    # Pure decimal numbers (0-9) are NOT targets — they're tab indices.
+    is_target_arg() { [[ "$1" =~ ^@ ]] || [[ "$1" =~ ^[a-f0-9-]+$ && "$1" =~ [a-f-] ]]; }
+
+    # Helper: resolve target or auto-detect session for term subcommands
+    resolve_term_target() {
+      local target="$1"
+      if [[ -n "$target" ]]; then
+        resolve_to_session_id "$target"
+      else
+        if detect_session_id; then
+          RESOLVED_SESSION_ID="$DETECTED_SESSION_ID"
+        else
+          echo "Error: no target specified and could not auto-detect session." >&2
+          echo "Run from within a Claude session, or specify a target (sessionId, @slot, or prefix)." >&2
+          exit 1
+        fi
+      fi
+    }
+
     case "$SUBCMD" in
       ls|list)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        resolve_to_session_id "$TARGET"
+        TARGET="${1:-}"
+        resolve_term_target "$TARGET"
         json="{\"type\":\"session-terminals\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
         RESULT=$(send_api "$json")
         check_error "$RESULT"
@@ -810,10 +848,15 @@ case "$CMD" in
         ;;
 
       read)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        shift
-        TAB_INDEX="${1:-}"
-        resolve_to_session_id "$TARGET"
+        # Parse: [target] [tab]
+        # If first arg contains @, hex letters [a-f], or dashes → it's a target
+        # Pure decimal → tab index (auto-detect session)
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift; TAB_INDEX="${1:-}"
+        else
+          TARGET=""; TAB_INDEX="${1:-}"
+        fi
+        resolve_term_target "$TARGET"
 
         if [[ -z "$TAB_INDEX" ]]; then
           # No tab index: list available tabs
@@ -834,13 +877,18 @@ case "$CMD" in
         ;;
 
       write)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        TAB_INDEX="${2:?tab index required}"
-        TEXT="${3:?text required}"
+        # Parse: [target] <tab> <text>
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        TAB_INDEX="${1:?tab index required}"
+        TEXT="${2:?text required}"
         validate_int "$TAB_INDEX" "tab index"
         TEXT=$(printf '%b' "$TEXT")
 
-        resolve_to_session_id "$TARGET"
+        resolve_term_target "$TARGET"
         DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
         json="{\"type\":\"session-term-write\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX,\"data\":$DATA_JSON}"
         RESULT=$(send_api "$json")
@@ -849,12 +897,17 @@ case "$CMD" in
         ;;
 
       key)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        TAB_INDEX="${2:?tab index required}"
-        KEY="${3:?key name required (enter, escape, ctrl-c, etc.)}"
+        # Parse: [target] <tab> <keyname>
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        TAB_INDEX="${1:?tab index required}"
+        KEY="${2:?key name required (enter, escape, ctrl-c, etc.)}"
         validate_int "$TAB_INDEX" "tab index"
 
-        resolve_to_session_id "$TARGET"
+        resolve_term_target "$TARGET"
         resolve_key "$KEY"
 
         DATA_JSON=$(printf '%s' "$KEY_DATA" | jq -Rs .)
@@ -865,12 +918,17 @@ case "$CMD" in
         ;;
 
       watch)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        TAB_INDEX="${2:?tab index required}"
-        INTERVAL="${3:-1}"
+        # Parse: [target] <tab> [interval]
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        TAB_INDEX="${1:?tab index required}"
+        INTERVAL="${2:-1}"
         validate_int "$TAB_INDEX" "tab index"
 
-        resolve_to_session_id "$TARGET"
+        resolve_term_target "$TARGET"
 
         json="{\"type\":\"session-term-read\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
 
@@ -956,10 +1014,16 @@ case "$CMD" in
         ;;
 
       open)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        CWD="${2:-}"
+        # Parse: [target] [cwd]
+        # Target starts with @ or is hex/dash only (UUID prefix); cwd is a path
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        CWD="${1:-}"
 
-        resolve_to_session_id "$TARGET"
+        resolve_term_target "$TARGET"
 
         if [[ -n "$CWD" ]]; then
           CWD_JSON=$(printf '%s' "$CWD" | jq -Rs .)
@@ -975,20 +1039,94 @@ case "$CMD" in
         ;;
 
       close)
-        TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-        TAB_INDEX="${2:?tab index required}"
+        # Parse: [target] <tab>
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        TAB_INDEX="${1:?tab index required}"
         validate_int "$TAB_INDEX" "tab index"
 
-        resolve_to_session_id "$TARGET"
+        resolve_term_target "$TARGET"
         json="{\"type\":\"session-term-close\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
         RESULT=$(send_api "$json")
         check_error "$RESULT"
         echo "Closed tab $TAB_INDEX"
         ;;
 
+      run)
+        # Parse: [target] <tab> <command> [--timeout N]
+        # Target starts with @ or is hex/dash only (UUID prefix)
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        TAB_INDEX="${1:?tab index required}"
+        COMMAND="${2:?command required}"
+        validate_int "$TAB_INDEX" "tab index"
+        TIMEOUT=30000
+        if [[ "${3:-}" == "--timeout" ]]; then
+          validate_int "${4:?timeout value required}" "timeout"
+          TIMEOUT=$(( ${4} * 1000 ))
+        fi
+
+        resolve_term_target "$TARGET"
+        CMD_JSON=$(printf '%s' "$COMMAND" | jq -Rs .)
+        json="{\"type\":\"session-term-run\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX,\"command\":$CMD_JSON,\"timeout\":$TIMEOUT}"
+        RESULT=$(send_api "$json" $(( TIMEOUT / 1000 + 5 )))
+        check_error "$RESULT"
+        OUTPUT=$(json_field "$RESULT" "output")
+        printf '%s\n' "$OUTPUT"
+        ;;
+
+      exec)
+        # Parse: [target] <command> [--timeout N]
+        # Target starts with @ or is hex/dash only (UUID prefix)
+        if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
+          TARGET="$1"; shift
+        else
+          TARGET=""
+        fi
+        COMMAND="${1:?command required}"
+        TIMEOUT=30000
+        if [[ "${2:-}" == "--timeout" ]]; then
+          validate_int "${3:?timeout value required}" "timeout"
+          TIMEOUT=$(( ${3} * 1000 ))
+        fi
+
+        resolve_term_target "$TARGET"
+
+        # Open ephemeral shell tab
+        json="{\"type\":\"session-term-open\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
+        RESULT=$(send_api "$json")
+        check_error "$RESULT"
+        TAB_INDEX=$(json_field "$RESULT" "tabIndex")
+
+        # Run command in the new tab
+        CMD_JSON=$(printf '%s' "$COMMAND" | jq -Rs .)
+        json="{\"type\":\"session-term-run\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX,\"command\":$CMD_JSON,\"timeout\":$TIMEOUT}"
+        RESULT=$(send_api "$json" $(( TIMEOUT / 1000 + 5 )))
+        # Capture output before closing (even on error)
+        RUN_ERROR=$(echo "$RESULT" | jq -r '.error // empty' 2>/dev/null) || true
+        OUTPUT=$(json_field "$RESULT" "output")
+
+        # Close the ephemeral tab
+        json="{\"type\":\"session-term-close\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
+        send_api "$json" >/dev/null 2>&1 || true
+
+        if [[ -n "$RUN_ERROR" ]]; then
+          echo "Error: $RUN_ERROR" >&2
+          [[ -n "$OUTPUT" && "$OUTPUT" != "null" ]] && printf '%s\n' "$OUTPUT"
+          exit 1
+        fi
+        printf '%s\n' "$OUTPUT"
+        ;;
+
       *)
         echo "Unknown term subcommand: $SUBCMD" >&2
-        echo "Available: ls, read, write, key, watch, open, close" >&2
+        echo "Available: ls, read, write, key, watch, open, close, run, exec" >&2
         exit 1
         ;;
     esac
@@ -1077,14 +1215,21 @@ Targets: Most commands accept a <target> which can be:
 
 ─── SESSION TERMINALS ───────────────────────────────────────────────────────
 
-  term ls <target>                   List terminal tabs for a session
-  term read <target> [tab]           Read tab content (ANSI-stripped)
-                                     Omit tab to list available tabs
-  term write <target> <tab> <text>   Type text into a tab (interprets escapes)
-  term key <target> <tab> <keyname>  Send named key to a tab
-  term watch <target> <tab> [interval]  Follow tab output in real-time
-  term open <target> [cwd]           Open a new shell tab
-  term close <target> <tab>          Close a tab (cannot close TUI)
+  All term commands auto-detect the session when called from within a
+  Claude session (via PID ancestry). Specify <target> to override.
+
+  term ls [target]                      List terminal tabs for a session
+  term read [target] [tab]              Read tab content (ANSI-stripped)
+                                        Omit tab to list available tabs
+  term write [target] <tab> <text>      Type text into a tab (interprets escapes)
+  term key [target] <tab> <keyname>     Send named key to a tab
+  term watch [target] <tab> [interval]  Follow tab output in real-time
+  term open [target] [cwd]              Open a new shell tab
+  term close [target] <tab>             Close a tab (cannot close TUI)
+  term run [target] <tab> <cmd> [--timeout N]
+                                        Run command, wait for output, return it
+  term exec [target] <cmd> [--timeout N]
+                                        Open tab → run → return output → close
 
 ─── SLOT ACCESS ─────────────────────────────────────────────────────────────
 

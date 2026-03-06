@@ -1034,6 +1034,18 @@ async function readTerminalBuffer(termId) {
   }
 }
 
+// Strip ANSI escape codes and normalize line endings.
+function stripAnsi(str) {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[()][AB012]/g, "")
+    .replace(/\x1b\[?\??[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b[>=]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
 // Wait until the terminal buffer's tail contains the given text (or timeout).
 // Only checks the last portion of the buffer to avoid false-matching scrollback.
 async function waitForBufferContent(termId, text, timeoutMs = 3000) {
@@ -2953,6 +2965,70 @@ app.whenReady().then(async () => {
         termId: resp.termId,
         tabIndex: newTab ? newTab.index : terminals.length - 1,
       };
+    },
+
+    "session-term-run": async (msg) => {
+      if (!msg.sessionId) throw new Error("sessionId required");
+      if (msg.tabIndex === undefined) throw new Error("tabIndex required");
+      if (!msg.command) throw new Error("command required");
+      const timeoutMs = msg.timeout || 30000;
+
+      const terminals = await getSessionTerminals(msg.sessionId);
+      const tab = terminals[msg.tabIndex];
+      if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
+      if (tab.isTui)
+        throw new Error("Cannot run commands in the Claude TUI tab");
+
+      // Snapshot current buffer
+      const beforeBuffer = tab.buffer;
+
+      // Write command + Enter
+      daemonSendSafe({
+        type: "write",
+        termId: tab.termId,
+        data: msg.command + "\r",
+      });
+
+      // Poll until a shell prompt appears after the command output
+      const promptRe = /[\$❯%#>] *$/; /* common prompt endings */
+      const deadline = Date.now() + timeoutMs;
+
+      // Wait a short initial delay for the command to start producing output
+      await new Promise((r) => setTimeout(r, 300));
+
+      while (Date.now() < deadline) {
+        const buf = await readTerminalBuffer(tab.termId);
+
+        // Check if buffer has new content beyond what was there before,
+        // and the last non-empty line looks like a shell prompt
+        if (buf.length > beforeBuffer.length) {
+          const newContent = buf.slice(beforeBuffer.length);
+          const clean = stripAnsi(newContent);
+          const lines = clean.split("\n").filter((l) => l.trim());
+          if (lines.length > 1) {
+            const lastLine = lines[lines.length - 1].trimEnd();
+            if (promptRe.test(lastLine)) {
+              // Extract output: everything between command echo and final prompt
+              // Skip first line (command echo) and last line (prompt)
+              const outputLines = lines.slice(1, -1);
+              return {
+                type: "output",
+                output: outputLines.join("\n"),
+                termId: tab.termId,
+              };
+            }
+          }
+        }
+
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      // Timeout — return whatever we have
+      const finalBuf = await readTerminalBuffer(tab.termId);
+      const delta = finalBuf.slice(beforeBuffer.length);
+      throw new Error(
+        `Command timed out after ${timeoutMs}ms. Partial output: ${stripAnsi(delta).trim()}`,
+      );
     },
 
     "session-term-close": async (msg) => {

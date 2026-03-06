@@ -181,7 +181,19 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 ### Programmatic terminal access
 
-Sessions can discover and interact with their own terminal tabs via the `session-terminals` API and `cockpit-cli term` commands. This lets Claude sessions read, write to, open, and close sibling terminal tabs. Tabs are addressed by index (0 = first tab, typically TUI for pool sessions). See [docs/api.md](docs/api.md) for full reference.
+Sessions can discover and interact with their own terminal tabs via the `session-terminals` API and `cockpit-cli term` commands. All `term` subcommands auto-detect the caller's session ID by walking PID ancestry (checks `~/.open-cockpit/session-pids/<PID>`), so no target is needed when calling from within a Claude session.
+
+**High-level commands (recommended):**
+- `cockpit-cli term exec 'npm test'` — one-shot: opens ephemeral shell → runs command → returns output → closes tab
+- `cockpit-cli term run 1 'make build'` — runs command in an existing shell tab, returns output when done
+
+**Low-level primitives:**
+- `cockpit-cli term ls` — list terminal tabs (index, label, TUI flag)
+- `cockpit-cli term read 1` / `term write 1 'text'` / `term key 1 enter` — direct tab I/O
+- `cockpit-cli term open` / `term close 1` — manage tabs
+- `cockpit-cli term watch 1` — follow output in real-time
+
+Tabs are addressed by index (0 = first tab, typically TUI for pool sessions). See [docs/api.md](docs/api.md) for full reference.
 
 ## Session lifecycle
 

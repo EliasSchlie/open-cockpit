@@ -208,6 +208,19 @@ const mockHandlers = {
     termId: 20,
     tabIndex: 2,
   }),
+  "session-term-run": (msg) => {
+    if (msg.tabIndex === 0) {
+      return {
+        type: "error",
+        error: "Cannot run commands in the Claude TUI tab",
+      };
+    }
+    return {
+      type: "output",
+      output: `total 8\n-rw-r--r-- 1 user staff 0 Jan 1 00:00 file1.txt\n-rw-r--r-- 1 user staff 0 Jan 1 00:00 file2.txt`,
+      termId: 15,
+    };
+  },
   "session-term-close": (msg) => {
     if (msg.tabIndex === 0) {
       return { type: "error", error: "Cannot close the Claude TUI tab" };
@@ -611,6 +624,79 @@ describe("cockpit-cli", () => {
       const r = await runCli(["term", "close", "@0", "0"]);
       expect(r.code).not.toBe(0);
       expect(r.stderr).toContain("TUI");
+    });
+  });
+
+  describe("term run", () => {
+    it("runs a command in a terminal tab", async () => {
+      const r = await runCli(["term", "run", "@0", "1", "ls -la"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("file1.txt");
+      expect(r.stdout).toContain("file2.txt");
+    });
+
+    it("refuses to run in TUI tab", async () => {
+      const r = await runCli(["term", "run", "@0", "0", "ls"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("TUI");
+    });
+  });
+
+  describe("term exec", () => {
+    it("opens tab, runs command, closes tab", async () => {
+      const r = await runCli(["term", "exec", "@0", "ls -la"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("file1.txt");
+    });
+  });
+
+  describe("self-detection", () => {
+    it("detects session from PID ancestry", async () => {
+      // Create a session-pids entry for our test process's PID
+      const pidDir = path.join(TMP_DIR, ".open-cockpit", "session-pids");
+      fs.mkdirSync(pidDir, { recursive: true });
+      // Write session ID for PID 1 (init — every process has this ancestor)
+      // Instead, write for a known PID in the ancestry
+      // Use process.pid as a parent that the bash child will have
+      fs.writeFileSync(path.join(pidDir, String(process.pid)), SESSION_ID);
+
+      const r = await runCli(["term", "ls"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Claude");
+      expect(r.stdout).toContain("Shell 1");
+
+      // Clean up
+      fs.rmSync(pidDir, { recursive: true, force: true });
+    });
+
+    it("errors when no target and no session detected", async () => {
+      const r = await runCli(["term", "ls"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("auto-detect");
+    });
+
+    it("auto-detects for term read with tab index only", async () => {
+      const pidDir = path.join(TMP_DIR, ".open-cockpit", "session-pids");
+      fs.mkdirSync(pidDir, { recursive: true });
+      fs.writeFileSync(path.join(pidDir, String(process.pid)), SESSION_ID);
+
+      const r = await runCli(["term", "read", "1"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("file1.txt");
+
+      fs.rmSync(pidDir, { recursive: true, force: true });
+    });
+
+    it("auto-detects for term exec with command only", async () => {
+      const pidDir = path.join(TMP_DIR, ".open-cockpit", "session-pids");
+      fs.mkdirSync(pidDir, { recursive: true });
+      fs.writeFileSync(path.join(pidDir, String(process.pid)), SESSION_ID);
+
+      const r = await runCli(["term", "exec", "ls -la"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("file1.txt");
+
+      fs.rmSync(pidDir, { recursive: true, force: true });
     });
   });
 
