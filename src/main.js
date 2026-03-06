@@ -35,6 +35,7 @@ const {
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
 } = require("./pool");
+const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 
 // Secure file helpers — restrict to owner-only access
 function secureMkdirSync(dirPath, opts = {}) {
@@ -1150,12 +1151,12 @@ async function offloadSession(
   claudeSessionId,
   { cwd, gitRoot, pid } = {},
 ) {
-  // Get terminal buffer as snapshot
+  // Get terminal buffer and render to readable text
   let snapshot = null;
   try {
     const resp = await daemonRequest({ type: "list" });
     const pty = resp.ptys.find((p) => p.termId === termId);
-    if (pty && pty.buffer) snapshot = pty.buffer;
+    if (pty && pty.buffer) snapshot = await renderBufferToText(pty.buffer);
   } catch (err) {
     console.error(
       "[main] Failed to get terminal snapshot for offload of session",
@@ -1269,6 +1270,35 @@ function enrichSessionsWithGraphData(sessions) {
       s.initiator = rel.initiator;
     }
   }
+}
+
+// Render raw PTY buffer into readable screen text using a headless terminal.
+async function renderBufferToText(buffer, cols = 200) {
+  if (!buffer) return null;
+  const term = new HeadlessTerminal({
+    cols,
+    rows: 500,
+    scrollback: 5000,
+    allowProposedApi: true,
+  });
+  await new Promise((resolve) => term.write(buffer, resolve));
+  const lines = [];
+  const buf = term.buffer.active;
+  // Only read up to the last non-empty line
+  let lastNonEmpty = -1;
+  for (let i = buf.length - 1; i >= 0; i--) {
+    const line = buf.getLine(i);
+    if (line && line.translateToString(true).trim()) {
+      lastNonEmpty = i;
+      break;
+    }
+  }
+  for (let i = 0; i <= lastNonEmpty; i++) {
+    const line = buf.getLine(i);
+    lines.push(line ? line.translateToString(true) : "");
+  }
+  term.dispose();
+  return lines.join("\n");
 }
 
 // Write offload metadata (and optional snapshot) to disk for a session.
@@ -1442,16 +1472,31 @@ function removeOffloadData(sessionId) {
   }
 }
 
-// Read offload snapshot
-function readOffloadSnapshot(sessionId) {
+// Read offload snapshot (renders legacy raw PTY snapshots on the fly)
+async function readOffloadSnapshot(sessionId) {
   validateSessionId(sessionId);
   const snapshotFile = path.join(OFFLOADED_DIR, sessionId, "snapshot.log");
+  let text;
   try {
-    return fs.readFileSync(snapshotFile, "utf-8");
+    text = fs.readFileSync(snapshotFile, "utf-8");
   } catch {
     /* ENOENT expected — snapshot may not exist */
     return null;
   }
+  // Detect legacy raw PTY snapshots (contain ANSI escape sequences)
+  if (text.includes("\x1b[")) {
+    const rendered = await renderBufferToText(text);
+    if (rendered != null) {
+      // Overwrite with rendered version so future reads are fast
+      try {
+        secureWriteFileSync(snapshotFile, rendered);
+      } catch {
+        /* write-back is best-effort */
+      }
+      return rendered;
+    }
+  }
+  return text;
 }
 
 // Read offload meta
