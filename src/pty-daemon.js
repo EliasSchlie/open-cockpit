@@ -13,6 +13,7 @@ const net = require("net");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 const pty = require("node-pty");
 
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
@@ -362,7 +363,7 @@ function handleMessage(socket, msg) {
 }
 
 function startServer() {
-  fs.mkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
+  secureMkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
   // Remove stale socket — ENOENT expected on first run
   try {
@@ -423,7 +424,7 @@ function startServer() {
     fs.chmodSync(SOCKET_PATH, 0o600);
     console.log(`[pty-daemon] Listening on ${SOCKET_PATH}`);
     // Write PID file so clients can check if daemon is alive
-    fs.writeFileSync(
+    secureWriteFileSync(
       path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"),
       String(process.pid),
     );

@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 
 const SHORTCUTS_FILE = path.join(
   os.homedir(),
@@ -80,8 +81,8 @@ function loadShortcuts() {
 
 function saveShortcuts() {
   try {
-    fs.mkdirSync(path.dirname(SHORTCUTS_FILE), { recursive: true });
-    fs.writeFileSync(SHORTCUTS_FILE, JSON.stringify(userOverrides, null, 2));
+    secureMkdirSync(path.dirname(SHORTCUTS_FILE), { recursive: true });
+    secureWriteFileSync(SHORTCUTS_FILE, JSON.stringify(userOverrides, null, 2));
   } catch (err) {
     console.error("[shortcuts] Failed to save:", err.message);
   }
