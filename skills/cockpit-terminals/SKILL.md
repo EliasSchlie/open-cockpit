@@ -7,27 +7,31 @@ description: Use when needing to run shell commands, check server output, or do 
 
 Your session has **terminal tabs** visible in the Open Cockpit sidebar. Tab 0 is the Claude TUI (you). Additional tabs are persistent shells — the user can see, type into, and read them in real-time, and so can you.
 
-The CLI lives at `~/.open-cockpit/bin/cockpit-cli`. All `term` commands auto-detect your session ID — no target argument needed.
+The CLI path is `~/.open-cockpit/bin/cockpit-cli`. Do NOT create a shell alias — aliases don't persist across Bash tool calls. All examples below use the full path.
 
-**First, set up an alias** (run once per session):
-```bash
-alias cockpit-cli=~/.open-cockpit/bin/cockpit-cli
-```
+All `term` commands auto-detect your session ID — no target argument needed.
+
+## Key concepts
+
+- **Tab 0 is your TUI** — you cannot `run` or `exec` on it. Only shell tabs (1+) accept commands.
+- **Fresh sessions may only have tab 0.** Use `term open` or `term exec` (which creates an ephemeral tab automatically).
+- **`term run`** returns clean output (command result only). Prefer it for getting data.
+- **`term exec`** output includes shell prompts and ANSI artifacts — use when you don't need to parse the output.
 
 ## Quick Start
 
 ```bash
 # One-shot: run a command, get output, tab auto-closes
-cockpit-cli term exec 'npm test'
+~/.open-cockpit/bin/cockpit-cli term exec 'npm test'
 
 # Run in an existing shell tab (preserves state, env vars, cwd)
-cockpit-cli term run 1 'git status'
+~/.open-cockpit/bin/cockpit-cli term run 1 'git status'
 
 # Open a new persistent shell tab
-cockpit-cli term open
+~/.open-cockpit/bin/cockpit-cli term open
 
 # See what tabs you have
-cockpit-cli term ls
+~/.open-cockpit/bin/cockpit-cli term ls
 ```
 
 ## Choosing the Right Command
@@ -41,20 +45,21 @@ cockpit-cli term ls
 
 ## Command Reference
 
-```bash
-cockpit-cli term ls                      # List tabs (index, label, TUI flag)
-cockpit-cli term read <tab>              # Read terminal buffer
-cockpit-cli term write <tab> 'text\r'    # Type into terminal (\r = Enter)
-cockpit-cli term key <tab> ctrl-c        # Send named key
-cockpit-cli term watch <tab>             # Follow output live (Ctrl+C to stop)
-cockpit-cli term open                    # New shell at session cwd
-cockpit-cli term open /path/to/dir       # New shell at specific directory
-cockpit-cli term close <tab>             # Close tab (can't close TUI tab)
-cockpit-cli term run <tab> 'cmd'         # Run command, return output when done
-cockpit-cli term run <tab> 'cmd' --timeout 120  # With timeout (default 30s)
-cockpit-cli term exec 'cmd'              # Ephemeral: open → run → output → close
-cockpit-cli term exec 'cmd' --timeout 120
-```
+All commands below follow the pattern `~/.open-cockpit/bin/cockpit-cli term <subcommand> [args]`.
+
+| Subcommand | Description |
+|------------|-------------|
+| `ls` | List tabs (index, label, TUI flag) |
+| `read <tab>` | Read terminal buffer |
+| `write <tab> 'text\r'` | Type into terminal (`\r` = Enter) |
+| `key <tab> ctrl-c` | Send named key |
+| `watch <tab>` | Follow output live (Ctrl+C to stop) |
+| `open [/path]` | New shell tab at session cwd or given path |
+| `close <tab>` | Close tab (can't close TUI tab) |
+| `run <tab> 'cmd'` | Run command, return output when done (default 30s timeout) |
+| `run <tab> 'cmd' --timeout 120` | With custom timeout in seconds |
+| `exec 'cmd'` | Ephemeral: open tab, run, return output, close |
+| `exec 'cmd' --timeout 120` | With custom timeout |
 
 Available keys: `enter`, `escape`, `ctrl-c`, `ctrl-d`, `ctrl-u`, `ctrl-l`, `ctrl-a`, `ctrl-e`, `ctrl-z`, `tab`, `backspace`, `up`, `down`, `left`, `right`.
 
@@ -68,3 +73,7 @@ Available keys: `enter`, `escape`, `ctrl-c`, `ctrl-d`, `ctrl-u`, `ctrl-l`, `ctrl
 **Use the Bash tool when:**
 - You just need command output for your own reasoning
 - The operation is quick and self-contained
+
+## Troubleshooting
+
+If commands fail with `ENOENT` or "API socket not found", the Open Cockpit app lost its API socket or isn't running. Ask the user to restart Open Cockpit — terminals survive restarts (the PTY daemon keeps them alive).

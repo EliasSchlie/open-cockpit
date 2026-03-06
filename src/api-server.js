@@ -3,7 +3,7 @@ const fs = require("fs");
 
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
-function createApiServer(socketPath, handlers) {
+function createApiServer(socketPath, handlers, { onListening } = {}) {
   const server = net.createServer((socket) => {
     const chunks = [];
     let chunksLen = 0;
@@ -72,13 +72,49 @@ function createApiServer(socketPath, handlers) {
     if (!socket.destroyed) socket.write(JSON.stringify(msg) + "\n");
   }
 
-  // Clean up stale socket
-  try {
-    fs.unlinkSync(socketPath);
-  } catch {}
+  // Only replace socket if no live instance is listening on it.
+  // Blindly unlinking lets a second instance steal (and then orphan)
+  // the socket of a running instance.
+  function tryListen() {
+    server.listen(socketPath, () => {
+      fs.chmodSync(socketPath, 0o600);
+      if (onListening) onListening();
+    });
+  }
 
-  server.listen(socketPath, () => {
-    fs.chmodSync(socketPath, 0o600);
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`API socket ${socketPath} is in use. Skipping API server.`);
+    } else {
+      console.error("API server error:", err);
+    }
+  });
+
+  // Probe the socket — connect handles both missing (ENOENT) and stale sockets.
+  const probe = new net.Socket();
+  probe.setTimeout(2000);
+  probe.connect(socketPath, () => {
+    // Another instance is alive — don't steal its socket
+    probe.destroy();
+    console.error(
+      `API socket ${socketPath} is in use by another instance. Skipping API server.`,
+    );
+  });
+  probe.on("error", () => {
+    // Socket missing or stale — safe to replace
+    probe.destroy();
+    try {
+      fs.unlinkSync(socketPath);
+    } catch {}
+    tryListen();
+  });
+  probe.on("timeout", () => {
+    // Hung socket — treat as stale
+    probe.destroy();
+    try {
+      fs.unlinkSync(socketPath);
+    } catch {}
+    tryListen();
   });
 
   return server;
