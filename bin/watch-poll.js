@@ -54,27 +54,31 @@ async function poll() {
     if (prevLines.length === 0) {
       process.stdout.write(clean.join("\n") + "\n");
     } else {
-      let matchLen = 0;
-      for (
-        let tryLen = Math.min(prevLines.length, clean.length);
-        tryLen > 0;
-        tryLen--
-      ) {
-        const prevSuffix = prevLines.slice(-tryLen).join("\n");
-        for (let start = 0; start <= clean.length - tryLen; start++) {
-          if (clean.slice(start, start + tryLen).join("\n") === prevSuffix) {
-            const newStart = start + tryLen;
-            if (newStart < clean.length) {
-              matchLen = tryLen;
-              const newLines = clean.slice(newStart);
-              process.stdout.write(newLines.join("\n") + "\n");
-            }
-            prevLines = clean;
-            return;
-          }
+      // O(n) diff: find longest common suffix between prevLines tail and clean
+      const maxCheck = Math.min(prevLines.length, clean.length);
+      let common = 0;
+      for (let i = 1; i <= maxCheck; i++) {
+        if (prevLines[prevLines.length - i] === clean[clean.length - i]) {
+          common = i;
+        } else {
+          break;
         }
       }
-      if (matchLen === 0 && clean.join("\n") !== prevLines.join("\n")) {
+      if (common > 0) {
+        const newEnd = clean.length - common;
+        const prevEnd = prevLines.length - common;
+        if (newEnd > prevEnd) {
+          const newLines = clean.slice(prevEnd, newEnd);
+          process.stdout.write(newLines.join("\n") + "\n");
+        } else if (newEnd < prevEnd) {
+          const newLines = clean.slice(0, newEnd);
+          if (newLines.length > 0) {
+            process.stdout.write(
+              "\n--- buffer changed ---\n" + clean.join("\n") + "\n",
+            );
+          }
+        }
+      } else if (clean.join("\n") !== prevLines.join("\n")) {
         process.stdout.write(
           "\n--- buffer changed ---\n" + clean.join("\n") + "\n",
         );
