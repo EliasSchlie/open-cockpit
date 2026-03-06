@@ -24,6 +24,7 @@ const channels = [
   "focus-external",
   "jump-recent-idle",
   "archive-current-session",
+  "pool-slots-recovered",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
@@ -137,4 +138,6 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("jump-recent-idle", () => callback()),
   onArchiveCurrentSession: (callback) =>
     ipcRenderer.on("archive-current-session", () => callback()),
+  onPoolSlotsRecovered: (callback) =>
+    ipcRenderer.on("pool-slots-recovered", (_e, slots) => callback(slots)),
 });

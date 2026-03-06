@@ -1630,6 +1630,7 @@ async function reconcilePool() {
     if (!pool) return;
 
     let changed = false;
+    const recovered = [];
     let daemonPtys;
     try {
       const resp = await daemonRequest({ type: "list" });
@@ -1643,6 +1644,7 @@ async function reconcilePool() {
       const needsRestart = !pty || pty.exited || slot.status === "error";
 
       if (needsRestart) {
+        const reason = !pty || pty.exited ? "dead" : "error";
         if (!pty || pty.exited) {
           if (slot.status !== "dead") {
             slot.status = "dead";
@@ -1655,7 +1657,6 @@ async function reconcilePool() {
         await killSlotProcess(slot);
         // Auto-restart slot
         try {
-          const reason = slot.status === "error" ? "error" : "dead";
           debugLog(
             "main",
             `Auto-recovering ${reason} slot ${slot.index} (termId=${slot.termId} pid=${slot.pid})`,
@@ -1666,6 +1667,7 @@ async function reconcilePool() {
           slot.status = "starting";
           slot.sessionId = null;
           changed = true;
+          recovered.push({ index: slot.index, reason });
           trackNewSlot(slot);
         } catch (err) {
           debugLog(
@@ -1698,6 +1700,11 @@ async function reconcilePool() {
     }
 
     if (changed) writePool(pool);
+
+    // Notify renderer about recovered slots
+    if (recovered.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("pool-slots-recovered", recovered);
+    }
   });
 }
 
