@@ -863,6 +863,13 @@ async function loadSessions() {
     cachedSessions.map((s) => [s.sessionId, s.status]),
   );
   cachedSessions = sessions;
+
+  // Keep CWD in sync (may change as JSONL records cd commands)
+  if (currentSessionId) {
+    const current = sessions.find((s) => s.sessionId === currentSessionId);
+    if (current?.cwd) currentSessionCwd = current.cwd;
+  }
+
   cleanupStaleTerminals(sessions);
   updatePoolHealthBadge();
 
