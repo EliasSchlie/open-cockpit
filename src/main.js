@@ -458,16 +458,19 @@ async function transcriptContains(transcriptPath, needle) {
     const fh = await fs.promises.open(transcriptPath, "r");
     const buf = Buffer.alloc(64 * 1024); // 64KB chunks
     let offset = 0;
+    let overlap = ""; // Keep tail of previous chunk to catch boundary-spanning needles
     try {
       let result;
       while (
         (result = await fh.read(buf, 0, buf.length, offset)) &&
         result.bytesRead > 0
       ) {
-        if (buf.toString("utf-8", 0, result.bytesRead).includes(needle)) {
+        const chunk = buf.toString("utf-8", 0, result.bytesRead);
+        if ((overlap + chunk).includes(needle)) {
           transcriptCache.set(cacheKey, true);
           return true;
         }
+        overlap = chunk.slice(-(needle.length - 1));
         offset += result.bytesRead;
       }
     } finally {
