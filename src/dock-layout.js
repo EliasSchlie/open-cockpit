@@ -125,27 +125,9 @@ export class DockLayout {
   }
 
   moveTabToSplit(tabId, direction) {
-    let sourceLeafId = null;
-    this._forEachLeaf((leaf) => {
-      if (leaf.tabs.includes(tabId)) sourceLeafId = leaf.id;
-    });
-    if (!sourceLeafId) return;
-
-    this._removeTabFromTree(tabId);
-    const newLeaf = {
-      type: "leaf",
-      id: newLeafId(),
-      tabs: [tabId],
-      activeTab: 0,
-    };
-    const splitDir =
-      direction === "left" || direction === "right" ? "horizontal" : "vertical";
-    const position =
-      direction === "left" || direction === "top" ? "before" : "after";
-    this._splitLeaf(sourceLeafId, newLeaf, splitDir, position);
-    this._cleanup();
-    this._render();
-    if (this.callbacks.onLayoutChange) this.callbacks.onLayoutChange();
+    const leafId = this.getTabLeafId(tabId);
+    if (!leafId) return;
+    this._handleDrop(tabId, leafId, direction);
   }
 
   destroy() {
