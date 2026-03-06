@@ -2200,17 +2200,15 @@ let poolSettingsInterval = null;
 
 // Show a warning dot on the ⚙ button when pool has error slots
 async function updatePoolHealthBadge() {
-  try {
-    const health = await window.api.poolHealth();
-    const errors = health?.counts?.error || 0;
-    poolSettingsBtn.dataset.errors = errors;
-    poolSettingsBtn.title =
-      errors > 0
-        ? `Pool settings — ${errors} slot${errors > 1 ? "s" : ""} in error`
-        : "Pool settings";
-  } catch {
-    /* pool may not be initialized */
-  }
+  const pool = await window.api.poolRead();
+  const errors = pool
+    ? pool.slots.filter((s) => s.status === "error").length
+    : 0;
+  poolSettingsBtn.dataset.errors = errors;
+  poolSettingsBtn.title =
+    errors > 0
+      ? `Pool settings — ${errors} slot${errors > 1 ? "s" : ""} in error`
+      : "Pool settings";
 }
 
 poolSettingsBtn.addEventListener("click", () => showPoolSettings());
