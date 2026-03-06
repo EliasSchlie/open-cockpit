@@ -1229,11 +1229,6 @@ async function selectSession(session) {
   // If already viewing this session, nothing to do
   if (session.sessionId === currentSessionId) return;
 
-  // Report editor text state when leaving a session
-  if (currentSessionId && editorView) {
-    window.api.setEditorHasText(currentSessionId, editorHasText());
-  }
-
   hideCurrentTerminals();
 
   currentSessionId = session.sessionId;
@@ -1503,27 +1498,24 @@ function scheduleSave() {
   }, 500);
 }
 
-function editorHasText() {
-  return !!editorView?.state.doc.toString().trim();
-}
+let typingRefreshTimeout;
 
 function invalidateSidebar() {
   prevSessionFingerprints = null;
   loadSessions();
 }
 
-// Report editor text state to main process and refresh sidebar if changed
+// After editing a fresh/typing session, refresh sidebar so main re-checks intention file
 function updateTypingState() {
-  if (!currentSessionId || !editorView) return;
+  if (!currentSessionId) return;
   const session = cachedSessions.find((s) => s.sessionId === currentSessionId);
   if (!session || (session.status !== "fresh" && session.status !== "typing")) {
     return;
   }
-  const hasText = editorHasText();
-  if (hasText !== session.hasEditorText) {
-    window.api.setEditorHasText(currentSessionId, hasText);
-    invalidateSidebar();
-  }
+  // Sidebar will refresh after the debounced save writes the file
+  // Main process detects content from the file, so just invalidate
+  clearTimeout(typingRefreshTimeout);
+  typingRefreshTimeout = setTimeout(invalidateSidebar, 600); // after 500ms save debounce
 }
 
 // Handle external file changes

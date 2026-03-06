@@ -148,11 +148,66 @@ const staleLoggedSessions = new Set();
 
 // Track last-seen JSONL file sizes and when they last changed (sessionId -> { size, changedAt })
 const jsonlSizeTracker = new Map();
-// Renderer reports which sessions have text in the editor (sessionId → boolean)
-const editorTextState = new Map();
+// Track terminal input characters per termId (incremented on printable, decremented on backspace)
+// Reset on Enter (prompt submitted) or /clear. Used to detect if Claude's input box has text.
+const terminalInputChars = new Map();
 
-function freshOrTyping(sessionId) {
-  return editorTextState.get(sessionId) ? "typing" : "fresh";
+function trackTerminalInput(termId, data) {
+  let count = terminalInputChars.get(termId) || 0;
+  for (let i = 0; i < data.length; i++) {
+    const c = data.charCodeAt(i);
+    if (c === 0x0d || c === 0x0a) {
+      // Enter — prompt submitted, reset
+      count = 0;
+    } else if (c === 0x7f || c === 0x08) {
+      // Backspace/DEL
+      count = Math.max(0, count - 1);
+    } else if (c === 0x15) {
+      // Ctrl-U — kill line
+      count = 0;
+    } else if (c === 0x1b) {
+      // Escape sequence — skip entirely (not printable input)
+      if (i + 1 < data.length) {
+        const next = data[i + 1];
+        if (next === "[") {
+          // CSI: ESC [ ... <0x40-0x7e>
+          i += 2;
+          while (i < data.length && data.charCodeAt(i) < 0x40) i++;
+        } else if (next === "]") {
+          // OSC: ESC ] ... (ST or BEL)
+          i += 2;
+          while (i < data.length && data[i] !== "\x07" && data[i] !== "\x1b")
+            i++;
+          if (i < data.length && data[i] === "\x1b") i++; // skip ESC of ST
+        } else {
+          // Two-char sequence (SS2/SS3/etc): ESC + one char
+          i++;
+        }
+      }
+    } else if (c >= 0x20) {
+      // Printable character
+      count++;
+    }
+  }
+  const prevCount = terminalInputChars.get(termId) || 0;
+  if (count > 0) {
+    terminalInputChars.set(termId, count);
+  } else {
+    terminalInputChars.delete(termId);
+  }
+  // Invalidate cache if typing state changed
+  if (prevCount > 0 !== count > 0) {
+    invalidateSessionsCache();
+  }
+}
+
+// Check if an intention file has non-whitespace content (reuses readIntention below)
+function intentionHasContent(sessionId) {
+  return !!readIntention(sessionId).trim();
+}
+
+function freshOrTyping(hasIntentionContent, hasTermInput) {
+  return hasIntentionContent || hasTermInput ? "typing" : "fresh";
 }
 
 // Cache hasUserInput results (transcript -> true, once true stays true)
@@ -487,6 +542,7 @@ async function batchGetCwds(pids) {
 
 async function getSessionsUncached() {
   const sessions = [];
+  const pool = readPool();
 
   // Live sessions from session-pids
   const pidEntries = []; // {pid, sessionId}
@@ -538,6 +594,11 @@ async function getSessionsUncached() {
     let status;
     let idleTs = 0;
     let staleIdle = false;
+    const hasIntentionContent = intentionHasContent(sessionId);
+    const poolSlot = pool?.slots.find((s) => s.sessionId === sessionId);
+    const hasTermInput = !!(
+      poolSlot && terminalInputChars.has(poolSlot.termId)
+    );
 
     if (!alive) {
       status = "dead";
@@ -553,7 +614,7 @@ async function getSessionsUncached() {
         // Claude and it's still processing (no new idle signal yet)
         status = "processing";
       } else if (!(await hasUserInput(idleSignal.transcript))) {
-        status = freshOrTyping(sessionId);
+        status = freshOrTyping(hasIntentionContent, hasTermInput);
       } else {
         status = "idle";
       }
@@ -592,7 +653,7 @@ async function getSessionsUncached() {
         const jsonlPath = jsonlPathCache.get(sessionId);
         status = (await hasUserInput(jsonlPath))
           ? "processing"
-          : freshOrTyping(sessionId);
+          : freshOrTyping(hasIntentionContent, hasTermInput);
       }
     }
 
@@ -607,7 +668,8 @@ async function getSessionsUncached() {
       hasIntention,
       intentionHeading,
       status,
-      hasEditorText: !!editorTextState.get(sessionId),
+      intentionHasContent: hasIntentionContent,
+      terminalHasInput: hasTermInput,
       idleTs,
       staleIdle,
     });
@@ -658,7 +720,6 @@ async function getSessionsUncached() {
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (s.status !== "dead") continue;
-    editorTextState.delete(s.sessionId);
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
@@ -708,7 +769,6 @@ async function getSessionsUncached() {
   }
 
   // Tag sessions with origin: pool, sub-claude, or ext
-  const pool = readPool();
   const poolSessionIds = new Set();
   if (pool) {
     for (const slot of pool.slots) {
@@ -942,7 +1002,8 @@ async function offloadSession(
     snapshot,
     origin: "pool",
   });
-  editorTextState.delete(sessionId);
+  // Clean up terminal input tracking for the offloaded slot
+  if (termId) terminalInputChars.delete(termId);
 
   // Send /clear to the terminal to free the slot (mirroring sub-Claude's offload flow)
   try {
@@ -1508,6 +1569,8 @@ async function reconcilePool() {
           slot.status = "dead";
           changed = true;
         }
+        // Clean up terminal input tracking for old termId
+        terminalInputChars.delete(slot.termId);
         // Kill orphaned process by PID before restarting
         if (slot.pid) {
           try {
@@ -2227,16 +2290,6 @@ app.whenReady().then(async () => {
     return watchIntention(sessionId);
   });
 
-  ipcMain.handle("set-editor-has-text", (_e, sessionId, hasText) => {
-    validateSessionId(sessionId);
-    if (hasText) {
-      editorTextState.set(sessionId, true);
-    } else {
-      editorTextState.delete(sessionId);
-    }
-    invalidateSessionsCache();
-  });
-
   // PTY IPC handlers — all forwarded to daemon
 
   ipcMain.handle("pty-spawn", async (_e, { cwd, cmd, args, sessionId }) => {
@@ -2252,6 +2305,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("pty-write", async (_e, termId, data) => {
     await ensureDaemon();
+    trackTerminalInput(termId, data);
     daemonSendSafe({ type: "write", termId, data });
   });
 
@@ -2463,22 +2517,13 @@ app.whenReady().then(async () => {
       writeIntention(msg.sessionId, msg.content);
       return { type: "ok" };
     },
-    "set-editor-has-text": async (msg) => {
-      validateSessionId(msg.sessionId);
-      if (msg.hasText) {
-        editorTextState.set(msg.sessionId, true);
-      } else {
-        editorTextState.delete(msg.sessionId);
-      }
-      invalidateSessionsCache();
-      return { type: "ok" };
-    },
     "pty-list": async () => {
       const resp = await daemonRequest({ type: "list" });
       return { type: "ptys", ptys: resp.ptys };
     },
     "pty-write": async (msg) => {
       validateTermId(msg.termId);
+      trackTerminalInput(msg.termId, msg.data);
       daemonSendSafe({ type: "write", termId: msg.termId, data: msg.data });
       return { type: "ok" };
     },

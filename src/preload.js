@@ -36,8 +36,6 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("write-intention", sessionId, content),
   watchIntention: (sessionId) =>
     ipcRenderer.invoke("watch-intention", sessionId),
-  setEditorHasText: (sessionId, hasText) =>
-    ipcRenderer.invoke("set-editor-has-text", sessionId, hasText),
   onIntentionChanged: (callback) =>
     ipcRenderer.on("intention-changed", (_e, content) => callback(content)),
   onSessionsChanged: (callback) =>
