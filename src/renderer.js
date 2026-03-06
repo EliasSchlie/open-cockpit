@@ -429,13 +429,25 @@ let saveTimeout = null;
 let editorView = null;
 
 // Terminal state: per-session cache for persistent terminals
-// Map<sessionId, { terminals: [], activeTermIndex: number, lastAccessed: number }>
+// Map<sessionId, { terminals: [], lastAccessed: number }>
 const sessionTerminals = new Map();
 const CLEANUP_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
 // Active view into current session's terminals
 let terminals = [];
-let activeTermIndex = -1;
+
+// Derive active terminal index from dock state (no separate state to desync)
+function getActiveTermIndex() {
+  if (!dock || terminals.length === 0) return -1;
+  // Check all leaves for a terminal tab that is active
+  for (let i = 0; i < terminals.length; i++) {
+    const tabId = terminals[i].dockTabId;
+    if (!tabId) continue;
+    const leafId = dock.getTabLeafId(tabId);
+    if (leafId && dock.getActiveTabInLeaf(leafId) === tabId) return i;
+  }
+  return -1;
+}
 // Generation counter to detect stale async operations after session switches
 let sessionGeneration = 0;
 
@@ -512,7 +524,6 @@ function syncSessionCache() {
   } else {
     sessionTerminals.set(currentSessionId, {
       terminals: [...terminals],
-      activeTermIndex,
       dockLayout: dock ? dock.getLayout() : null,
       lastAccessed: Date.now(),
     });
@@ -669,7 +680,6 @@ async function attachPoolTerminal(poolTermId) {
 
 function switchToTerminal(index) {
   if (index < 0 || index >= terminals.length) return;
-  activeTermIndex = index;
   const entry = terminals[index];
   if (entry.dockTabId && dock) {
     dock.activateTab(entry.dockTabId);
@@ -682,18 +692,13 @@ async function closeTerminal(index) {
   const entry = terminals[index];
   if (entry.isPoolTui) return; // Can't close the main Claude terminal
   await window.api.ptyDetach(entry.termId).catch(() => {});
-  if (!entry.isPoolTui) {
-    await window.api.ptyKill(entry.termId);
-  }
+  await window.api.ptyKill(entry.termId);
   disposeTerminalEntry(entry, dock);
   terminals.splice(index, 1);
 
   if (terminals.length === 0) {
-    activeTermIndex = -1;
     sessionView.classList.add("hidden");
     emptyState.classList.remove("hidden");
-  } else {
-    activeTermIndex = Math.min(index, terminals.length - 1);
   }
 
   syncSessionCache();
@@ -703,16 +708,10 @@ async function closeTerminal(index) {
 function hideCurrentTerminals() {
   removeInlineSnapshot();
   if (currentSessionId && terminals.length > 0) {
+    syncSessionCache();
     for (const entry of terminals) teardownTerminalResize(entry);
-    sessionTerminals.set(currentSessionId, {
-      terminals: [...terminals],
-      activeTermIndex,
-      dockLayout: dock ? dock.getLayout() : null,
-      lastAccessed: Date.now(),
-    });
   }
   terminals = [];
-  activeTermIndex = -1;
   shellCounter = 0;
 }
 
@@ -723,7 +722,6 @@ function restoreSessionTerminals(sessionId) {
 
   cached.lastAccessed = Date.now();
   terminals = cached.terminals;
-  activeTermIndex = cached.activeTermIndex;
 
   initDockLayout(terminals, cached.dockLayout);
   for (const entry of terminals) setupTerminalResize(entry);
@@ -762,7 +760,6 @@ function killAllTerminals() {
     disposeTerminalEntry(entry, dock);
   }
   terminals = [];
-  activeTermIndex = -1;
   shellCounter = 0;
 }
 
@@ -1320,7 +1317,6 @@ async function resumeOffloadedSession(session) {
     if (terminals.length > 0) {
       sessionTerminals.set(newSession.sessionId, {
         terminals: [...terminals],
-        activeTermIndex,
         dockLayout: dock ? dock.getLayout() : null,
         lastAccessed: Date.now(),
       });
@@ -1489,6 +1485,10 @@ async function selectSession(session) {
   if (saveStatus) saveStatus.textContent = "";
 
   await window.api.watchIntention(session.sessionId);
+  if (gen !== sessionGeneration) return;
+
+  // Auto-focus the Claude terminal so the user can type immediately
+  focusTerminal();
 }
 
 // "+" in sidebar: acquire a fresh slot from the pool (or offload LRU idle)
@@ -1790,8 +1790,11 @@ function toggleSidebar() {
 
 // --- Focus management ---
 function focusTerminal() {
-  if (activeTermIndex >= 0 && terminals[activeTermIndex]) {
-    terminals[activeTermIndex].term.focus();
+  const idx = getActiveTermIndex();
+  const entry = idx >= 0 ? terminals[idx] : terminals[0];
+  if (entry) {
+    if (entry.dockTabId && dock) dock.activateTab(entry.dockTabId);
+    entry.term.focus();
   }
 }
 
@@ -1831,10 +1834,11 @@ let shortcutConfig = {};
 
 // Cycle pane focus: editor → terminal tabs (round-robin) → back to editor
 function cyclePane() {
+  const activeIdx = getActiveTermIndex();
   if (editorMount && editorMount.contains(document.activeElement)) {
     focusTerminal();
-  } else if (activeTermIndex >= 0 && terminals.length > 1) {
-    const nextIdx = activeTermIndex + 1;
+  } else if (activeIdx >= 0 && terminals.length > 1) {
+    const nextIdx = activeIdx + 1;
     if (nextIdx < terminals.length) {
       switchToTerminal(nextIdx);
     } else {
@@ -1909,7 +1913,8 @@ const COMMANDS = [
     label: "Close Terminal Tab",
     shortcutAction: "close-terminal-tab",
     action: () => {
-      if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
+      const i = getActiveTermIndex();
+      if (i >= 0) closeTerminal(i);
     },
   },
   {
@@ -1918,7 +1923,7 @@ const COMMANDS = [
     shortcutAction: "next-tab",
     action: () => {
       if (terminals.length > 1)
-        switchToTerminal((activeTermIndex + 1) % terminals.length);
+        switchToTerminal((getActiveTermIndex() + 1) % terminals.length);
     },
   },
   {
@@ -1928,7 +1933,7 @@ const COMMANDS = [
     action: () => {
       if (terminals.length > 1)
         switchToTerminal(
-          (activeTermIndex - 1 + terminals.length) % terminals.length,
+          (getActiveTermIndex() - 1 + terminals.length) % terminals.length,
         );
     },
   },
@@ -2156,7 +2161,8 @@ window.api.onNewTerminalTab(() => {
 });
 
 window.api.onCloseTerminalTab(() => {
-  if (activeTermIndex >= 0) closeTerminal(activeTermIndex);
+  const i = getActiveTermIndex();
+  if (i >= 0) closeTerminal(i);
 });
 
 // API-spawned terminal: attach to it and show a tab (if it belongs to current session)
@@ -2222,11 +2228,8 @@ window.api.onApiTermClosed((sessionId, termId) => {
   terminals.splice(idx, 1);
 
   if (terminals.length === 0) {
-    activeTermIndex = -1;
     sessionView.classList.add("hidden");
     emptyState.classList.remove("hidden");
-  } else {
-    activeTermIndex = Math.min(idx, terminals.length - 1);
   }
 
   syncSessionCache();
@@ -2234,14 +2237,14 @@ window.api.onApiTermClosed((sessionId, termId) => {
 
 window.api.onNextTerminalTab(() => {
   if (terminals.length > 1) {
-    switchToTerminal((activeTermIndex + 1) % terminals.length);
+    switchToTerminal((getActiveTermIndex() + 1) % terminals.length);
   }
 });
 
 window.api.onPrevTerminalTab(() => {
   if (terminals.length > 1) {
     switchToTerminal(
-      (activeTermIndex - 1 + terminals.length) % terminals.length,
+      (getActiveTermIndex() - 1 + terminals.length) % terminals.length,
     );
   }
 });
@@ -2373,7 +2376,6 @@ async function reconnectAllPtys() {
     }
     sessionTerminals.set(sid, {
       terminals: entries,
-      activeTermIndex: 0,
       lastAccessed: Date.now(),
     });
   }
@@ -2389,7 +2391,6 @@ async function reconnectAllPtys() {
 
     const cached = sessionTerminals.get(lastActive.sessionId);
     terminals = cached.terminals;
-    activeTermIndex = 0;
 
     emptyState.classList.add("hidden");
     sessionView.classList.remove("hidden");
