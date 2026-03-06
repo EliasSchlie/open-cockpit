@@ -149,7 +149,7 @@ const staleLoggedSessions = new Set();
 const jsonlSizeTracker = new Map();
 // Terminal input detection via buffer parsing (true ground truth).
 // Cached results refreshed by pollTerminalInput() every TERMINAL_POLL_MS.
-const terminalHasInputCache = new Map(); // termId → boolean
+const terminalHasInputCache = new Map(); // termId → input text string
 const {
   parseTerminalHasInput,
   checkTerminalInputs,
@@ -187,11 +187,11 @@ async function pollTerminalInput() {
     const results = await checkTerminalInputs(ptys, freshTermIds);
 
     let changed = false;
-    for (const [termId, hasInput] of results) {
-      const prev = terminalHasInputCache.get(termId) || false;
-      if (hasInput !== prev) {
-        if (hasInput) {
-          terminalHasInputCache.set(termId, true);
+    for (const [termId, inputText] of results) {
+      const prev = terminalHasInputCache.get(termId) || "";
+      if (inputText !== prev) {
+        if (inputText) {
+          terminalHasInputCache.set(termId, inputText);
         } else {
           terminalHasInputCache.delete(termId);
         }
@@ -726,6 +726,23 @@ async function getSessionsUncached() {
       }
     }
 
+    // Build a preview of typed text for "typing" sessions with no heading
+    let intentionPreview = null;
+    if (status === "typing" && !intentionHeading) {
+      if (hasIntentionContent) {
+        const raw = readIntention(sessionId).trim();
+        // Strip markdown heading if present (shouldn't be, but defensive)
+        const preview = raw.replace(/^#\s+.*\n?/, "").trim();
+        if (preview) intentionPreview = preview.slice(0, 80);
+      }
+      if (!intentionPreview && hasTermInput) {
+        const termText = poolSlot
+          ? terminalHasInputCache.get(poolSlot.termId)
+          : null;
+        if (termText) intentionPreview = termText.slice(0, 80);
+      }
+    }
+
     sessions.push({
       pid,
       sessionId,
@@ -736,6 +753,7 @@ async function getSessionsUncached() {
       project: cwd ? path.basename(cwd) : null,
       hasIntention,
       intentionHeading,
+      intentionPreview,
       status,
       intentionHasContent: hasIntentionContent,
       terminalHasInput: hasTermInput,

@@ -99,46 +99,53 @@ describe("parseTerminalHasInput", () => {
   ].join("");
 
   it("detects empty input box", async () => {
-    expect(await parseTerminalHasInput(emptyPrompt, 80)).toBe(false);
+    expect(await parseTerminalHasInput(emptyPrompt, 80)).toBe("");
   });
 
-  it("detects text in input box", async () => {
-    expect(await parseTerminalHasInput(inputWithText, 80)).toBe(true);
+  it("returns text from input box", async () => {
+    expect(await parseTerminalHasInput(inputWithText, 80)).toBe(
+      "fix the login bug",
+    );
   });
 
   it("detects multi-line input", async () => {
-    expect(await parseTerminalHasInput(multiLineInput, 80)).toBe(true);
+    // Only the prompt line is returned (first line with ❯)
+    expect(await parseTerminalHasInput(multiLineInput, 80)).toBe("first line");
   });
 
   it("works with narrow terminal", async () => {
-    expect(await parseTerminalHasInput(narrowEmpty, 60)).toBe(false);
-    expect(await parseTerminalHasInput(narrowWithInput, 60)).toBe(true);
+    expect(await parseTerminalHasInput(narrowEmpty, 60)).toBe("");
+    expect(await parseTerminalHasInput(narrowWithInput, 60)).toBe(
+      "hello world",
+    );
   });
 
   it("detects empty after /clear", async () => {
     // Last ❯ is the empty one after /clear
-    expect(await parseTerminalHasInput(afterClear, 80)).toBe(false);
+    expect(await parseTerminalHasInput(afterClear, 80)).toBe("");
   });
 
-  it("detects text written via daemon bypass", async () => {
+  it("returns text written via daemon bypass", async () => {
     // This is the critical test — keystroke tracking would miss this
-    expect(await parseTerminalHasInput(bypassText, 80)).toBe(true);
+    expect(await parseTerminalHasInput(bypassText, 80)).toBe(
+      "sneaky bypass text",
+    );
   });
 
-  it("returns false for empty buffer", async () => {
-    expect(await parseTerminalHasInput("", 80)).toBe(false);
+  it("returns empty string for empty buffer", async () => {
+    expect(await parseTerminalHasInput("", 80)).toBe("");
   });
 
-  it("returns false for buffer without prompt", async () => {
-    expect(await parseTerminalHasInput("just some text\r\n", 80)).toBe(false);
+  it("returns empty string for buffer without prompt", async () => {
+    expect(await parseTerminalHasInput("just some text\r\n", 80)).toBe("");
   });
 
   // Regression: pollTerminalInput previously used per-slot `read-buffer` daemon
   // requests that silently failed (returning "") when the daemon didn't support
-  // that command. This caused parseTerminalHasInput to always return false,
+  // that command. This caused parseTerminalHasInput to always return "",
   // hiding typed text. The fix uses `list` (which returns all buffers) instead.
   // This test verifies the core invariant: a buffer with visible text after the
-  // prompt MUST return true, never be silently swallowed by empty-string fallback.
+  // prompt MUST return the text, never be silently swallowed by empty-string fallback.
   it("never misses input when given the actual buffer (regression: silent empty fallback)", async () => {
     const bufferWithText = [
       "\x1b[2J\x1b[H",
@@ -152,12 +159,14 @@ describe("parseTerminalHasInput", () => {
     ].join("");
 
     // With the actual buffer: must detect input
-    expect(await parseTerminalHasInput(bufferWithText)).toBe(true);
+    expect(await parseTerminalHasInput(bufferWithText)).toBe(
+      "implement the feature",
+    );
 
     // With empty string (what readTerminalBuffer returned on daemon error):
     // must NOT detect input — this is correct behavior, but the bug was that
     // pollTerminalInput always got empty strings due to silent daemon errors
-    expect(await parseTerminalHasInput("")).toBe(false);
+    expect(await parseTerminalHasInput("")).toBe("");
   });
 });
 
@@ -179,7 +188,7 @@ describe("checkTerminalInputs", () => {
       "────────────────────────────────────────────────────────────────────────────────\r\n",
     ].join("");
 
-  it("detects input from real daemon list buffers", async () => {
+  it("returns input text from real daemon list buffers", async () => {
     const ptys = [
       { termId: 1, buffer: makeBuffer(" fix the bug") },
       { termId: 2, buffer: makeBuffer("") },
@@ -190,13 +199,13 @@ describe("checkTerminalInputs", () => {
 
     const results = await checkTerminalInputs(ptys, freshTermIds);
 
-    expect(results.get(1)).toBe(true);
-    expect(results.get(2)).toBe(false);
-    expect(results.get(3)).toBe(true);
+    expect(results.get(1)).toBe("fix the bug");
+    expect(results.get(2)).toBe("");
+    expect(results.get(3)).toBe("deploy to prod");
     expect(results.has(99)).toBe(false); // not fresh, excluded
   });
 
-  it("returns empty map when daemon returns empty buffers (regression)", async () => {
+  it("returns empty strings when daemon returns empty buffers (regression)", async () => {
     // Simulates the old bug: daemon returns empty/missing buffers
     const ptys = [
       { termId: 1, buffer: "" },
@@ -206,8 +215,8 @@ describe("checkTerminalInputs", () => {
 
     const results = await checkTerminalInputs(ptys, freshTermIds);
 
-    expect(results.get(1)).toBe(false);
-    expect(results.get(2)).toBe(false);
+    expect(results.get(1)).toBe("");
+    expect(results.get(2)).toBe("");
   });
 
   it("returns empty map when no fresh PTYs in list", async () => {

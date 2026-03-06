@@ -891,6 +891,8 @@ function createSessionItem(s) {
   li.className = `session-item${s.sessionId === currentSessionId ? " active" : ""}${s.status === "offloaded" || s.status === "archived" ? " offloaded" : ""}`;
   li.dataset.sessionId = s.sessionId;
   const heading = s.intentionHeading || "No intention yet";
+  const previewText =
+    !s.intentionHeading && s.intentionPreview ? s.intentionPreview : null;
   const dp = displayPath(s);
   const dirColor = getDirColor(s);
   const indicatorStyle = dirColor
@@ -909,7 +911,7 @@ function createSessionItem(s) {
     <div class="session-item-content">
       <div class="session-project">
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
-        ${escapeHtml(heading)}
+        ${previewText ? `<span class="session-preview">${escapeHtml(previewText)}</span>` : escapeHtml(heading)}
         ${originTag}${staleTag}
       </div>
       <div class="session-cwd">${escapeHtml(dp)}</div>

@@ -155,6 +155,15 @@ body {
   gap: 6px;
 }
 
+.session-preview {
+  opacity: 0.5;
+  font-style: italic;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-status {
   width: 6px;
   height: 6px;
