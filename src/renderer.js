@@ -611,6 +611,7 @@ async function spawnTerminal(cwd, cmd, args, targetLeafId) {
     dock.addTab(entry.dockTabId, leaf);
   }
 
+  activeTermIndex = terminals.length - 1;
   syncSessionCache();
   return entry;
 }
@@ -663,6 +664,7 @@ async function attachPoolTerminal(poolTermId) {
     dock.addTab(entry.dockTabId, leaf);
   }
 
+  activeTermIndex = terminals.length - 1;
   syncSessionCache();
   return entry;
 }
