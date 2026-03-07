@@ -500,6 +500,7 @@ async function batchGetCwds(pids) {
   return cwdMap;
 }
 
+// Internal — not exported. Use getSessions() from other modules.
 async function getSessionsUncached() {
   const sessions = [];
   const pool = readPool();

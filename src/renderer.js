@@ -493,7 +493,7 @@ async function archiveCurrentSession() {
   try {
     await window.api.archiveSession(archivingSessionId);
   } catch (err) {
-    console.error("Failed to archive session:", err);
+    showNotification(`Archive failed: ${err.message}`);
   }
   await loadSessions();
 }
