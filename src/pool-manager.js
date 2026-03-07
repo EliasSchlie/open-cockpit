@@ -267,15 +267,67 @@ function recordSessionRelation(sessionId, parentSessionId, initiator) {
   writeSessionGraph(graph);
 }
 
+// Walk PPID chain for a process, checking each ancestor against session-pids/.
+// Returns the parent session ID if found, null otherwise.
+function detectParentFromPidAncestry(pid) {
+  if (!pid) return null;
+  let current;
+  try {
+    current = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+      encoding: "utf-8",
+      timeout: 2000,
+    }).trim();
+  } catch {
+    return null;
+  }
+  while (current && current !== "0" && current !== "1") {
+    const pidFile = path.join(SESSION_PIDS_DIR, current);
+    try {
+      return fs.readFileSync(pidFile, "utf-8").trim();
+    } catch {
+      // Not a known session — keep walking
+    }
+    try {
+      current = execFileSync("ps", ["-o", "ppid=", "-p", current], {
+        encoding: "utf-8",
+        timeout: 2000,
+      }).trim();
+    } catch {
+      break;
+    }
+  }
+  return null;
+}
+
 function enrichSessionsWithGraphData(sessions) {
   const graph = readSessionGraph();
+  let graphChanged = false;
   for (const s of sessions) {
     const rel = graph[s.sessionId];
     if (rel) {
       s.parentSessionId = rel.parentSessionId;
       s.initiator = rel.initiator;
+    } else if (s.alive && s.pid) {
+      // Session not in graph — auto-detect parent from PID ancestry.
+      // Only for alive sessions (dead PIDs can't be walked).
+      const parentId = detectParentFromPidAncestry(s.pid);
+      if (parentId && parentId !== s.sessionId) {
+        graph[s.sessionId] = {
+          parentSessionId: parentId,
+          initiator: INITIATOR.MODEL,
+          createdAt: new Date().toISOString(),
+        };
+        s.parentSessionId = parentId;
+        s.initiator = INITIATOR.MODEL;
+        graphChanged = true;
+        _debugLog(
+          "main",
+          `auto-detected parent for ${s.sessionId}: ${parentId}`,
+        );
+      }
     }
   }
+  if (graphChanged) writeSessionGraph(graph);
 }
 
 // Render raw PTY buffer into readable screen text using a headless terminal.
