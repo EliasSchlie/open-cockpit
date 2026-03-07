@@ -315,6 +315,8 @@ stat -f "mtime=%m" <transcript_path>    # compare with signal mtime
 ## Conventions
 
 - **Every user-facing action must have a keyboard shortcut.** See [docs/shortcuts.md](docs/shortcuts.md) for the full list and how to add new ones.
+- **Every UI element must be keyboard-accessible.** Dialogs use hierarchical arrow key navigation (↑↓ between items, → drill in, ← back, Enter activate). All inputs, buttons, lists, and search bars must be reachable via arrow keys — never require mouse interaction.
+- **Every action a user can do, a Claude session should also be able to do.** Use the API (`~/.open-cockpit/api-dev.sock` for dev, `api.sock` for production), `cockpit-cli`, and `osascript` to test the app programmatically — don't ask the user to press keys and report back. Send keystrokes, query state, and verify results yourself.
 - Electron: contextIsolation, sandbox off (preload needs npm packages)
 - CodeMirror 6 bundled with esbuild
 - Auto-save 500ms debounce, file watching via `fs.watchFile` (polling)

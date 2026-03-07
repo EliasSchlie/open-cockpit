@@ -11,7 +11,7 @@ import {
   popupTerminals,
   findTerminalEntry,
 } from "./terminal-manager.js";
-import { formatShortcutDisplay } from "./command-palette.js";
+import { formatShortcutDisplay, COMMANDS } from "./command-palette.js";
 import { createOverlayDialog } from "./overlay-dialog.js";
 
 // --- Cross-module dependencies (set via initPoolUi) ---
@@ -19,36 +19,33 @@ let _actions = {};
 
 /**
  * Initialize pool UI with dependencies from the main renderer module.
- *
- * @param {Object} actions
- * @param {Function} actions.loadSessions — refresh session sidebar
- * @param {Function} actions.focusTerminal — focus a terminal tab
- * @param {Function} actions.loadDirColors — reload directory colors
- * @param {Array} actions.COMMANDS — command palette commands array
  */
 export function initPoolUi(actions) {
   _actions = actions;
 
-  // Build shortcut labels from COMMANDS entries
-  if (_actions.COMMANDS) {
-    for (const cmd of _actions.COMMANDS) {
-      if (cmd.shortcutAction) SHORTCUT_LABELS[cmd.shortcutAction] = cmd.label;
-    }
-  }
-  // Actions only reachable via input events (no COMMANDS entry)
-  SHORTCUT_LABELS["next-terminal-tab-alt"] = "Next Tab (Alt)";
-  SHORTCUT_LABELS["prev-terminal-tab-alt"] = "Previous Tab (Alt)";
-
-  // Wire up the pool settings button
+  // Wire up the settings button
   const poolSettingsBtn = document.getElementById("pool-settings-btn");
-  poolSettingsBtn.addEventListener("click", () => showPoolSettings());
+  poolSettingsBtn.addEventListener("click", () => showSettings());
 }
 
 // --- Module-local state ---
 let poolSettingsInterval = null;
-let poolSettingsVisible = false;
-let shortcutConfig = {};
+let shortcutLabelsBuilt = false;
 const SHORTCUT_LABELS = {};
+
+// Build shortcut labels lazily (COMMANDS isn't populated until after initCommandPalette)
+function ensureShortcutLabels() {
+  if (shortcutLabelsBuilt) return;
+  // Don't cache if COMMANDS is still empty (initCommandPalette hasn't run yet)
+  if (!COMMANDS.length) return;
+  shortcutLabelsBuilt = true;
+  for (const cmd of COMMANDS) {
+    if (cmd.shortcutAction) SHORTCUT_LABELS[cmd.shortcutAction] = cmd.label;
+  }
+  // Actions only reachable via input events (no COMMANDS entry)
+  SHORTCUT_LABELS["next-terminal-tab-alt"] = "Next Tab (Alt)";
+  SHORTCUT_LABELS["prev-terminal-tab-alt"] = "Previous Tab (Alt)";
+}
 
 function poolStatusDot(status) {
   const cls = STATUS_CLASSES[status] || "dead";
@@ -166,8 +163,8 @@ async function updatePoolHealthBadge() {
   poolSettingsBtn.dataset.errors = errors;
   poolSettingsBtn.title =
     errors > 0
-      ? `Pool settings — ${errors} slot${errors > 1 ? "s" : ""} in error`
-      : "Pool settings";
+      ? `Settings — ${errors} slot${errors > 1 ? "s" : ""} in error`
+      : "Settings";
 }
 
 function stopPoolSettingsPolling() {
@@ -209,147 +206,265 @@ function renderPoolCountsHtml(health) {
     .join("&nbsp;&nbsp;&nbsp;");
 }
 
-// --- Pool Settings Panel ---
-async function showPoolSettings() {
+// --- Unified Settings Dialog ---
+
+const SETTINGS_TABS = [
+  { id: "general", label: "General" },
+  { id: "shortcuts", label: "Keyboard Shortcuts" },
+  { id: "pool", label: "Pool" },
+];
+
+async function showSettings(initialTab = "general") {
   stopPoolSettingsPolling();
 
-  const health = await window.api.poolHealth();
-  const slotsHtml = renderPoolSlotsHtml(health);
-  const countsHtml = renderPoolCountsHtml(health);
+  // Fetch data for all sections
+  const [health, shortcuts, defaults, version] = await Promise.all([
+    window.api.poolHealth(),
+    window.api.getShortcuts(),
+    window.api.getDefaultShortcuts(),
+    window.api.getAppVersion(),
+  ]);
 
   let keyHandler = null;
+
   const { overlay, close } = createOverlayDialog({
-    id: "pool-settings",
+    id: "unified-settings",
     escapeClose: false,
-    closeSelector: ".pool-close",
+    closeSelector: ".settings-close-btn",
     html: `
-      <div class="pool-settings-dialog">
-        <div class="pool-settings-header">
-          <span>Pool Settings</span>
-          <button class="snapshot-close pool-close">\u2715</button>
+      <div class="settings-dialog">
+        <div class="settings-header">
+          <span>Settings</span>
+          <button class="close-dialog-btn settings-close-btn">✕</button>
         </div>
-        <div class="pool-settings-body">
-          <div class="pool-health-summary">${countsHtml}</div>
-          ${
-            health.initialized
-              ? `
-            <div class="pool-slots-list">${slotsHtml}</div>
-            <div class="pool-controls">
-              <label class="pool-size-label">
-                Pool size:
-                <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
-              </label>
-              <button class="offload-menu-btn pool-resize-btn">Resize</button>
-              <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
-              <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
-              <button class="offload-menu-btn pool-destroy-btn">Destroy</button>
-              <button class="offload-menu-btn pool-reinit-btn">Reinitialize</button>
-            </div>
-          `
-              : `
-            <div class="pool-controls">
-              <label class="pool-size-label">
-                Pool size:
-                <input type="number" class="pool-size-input" value="10" min="1" max="20">
-              </label>
-              <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
-            </div>
-          `
-          }
+        <div class="settings-layout">
+          <div class="settings-nav">
+            ${SETTINGS_TABS.map(
+              (tab) =>
+                `<button class="settings-nav-item${tab.id === initialTab ? " active" : ""}" data-tab="${tab.id}">${tab.label}</button>`,
+            ).join("")}
+          </div>
+          <div class="settings-content">
+            ${renderGeneralTab(version)}
+            ${renderShortcutsTab(shortcuts, defaults)}
+            ${renderPoolTab(health)}
+          </div>
         </div>
       </div>
     `,
     onClose: () => {
+      window.api.setDialogOpen(false);
       stopPoolSettingsPolling();
       if (keyHandler) {
         document.removeEventListener("keydown", keyHandler, true);
       }
+      if (overlay._cleanupRecording) overlay._cleanupRecording();
     },
   });
 
-  // --- Keyboard navigation state ---
-  // "top" = navigating between pool-slots-block and buttons
-  // "slots" = navigating individual pool slots
-  let navLevel = "top";
-  let topIndex = 0;
-  let slotIndex = 0;
+  window.api.setDialogOpen(true);
 
-  // Returns the list of top-level navigable items (pool-slots-list + buttons)
-  function getTopItems() {
-    const items = [];
-    const slotsList = overlay.querySelector(".pool-slots-list");
-    if (slotsList) items.push(slotsList);
-    for (const btn of overlay.querySelectorAll(
-      ".pool-controls .offload-menu-btn",
-    ))
-      items.push(btn);
-    return items;
+  // --- Tab switching ---
+  function switchTab(tabId) {
+    overlay.querySelectorAll(".settings-nav-item").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.tab === tabId);
+    });
+    overlay.querySelectorAll(".settings-tab-panel").forEach((panel) => {
+      panel.classList.toggle("active", panel.dataset.tab === tabId);
+    });
   }
 
-  function getSlotRows() {
-    return Array.from(
-      overlay.querySelectorAll(".pool-slots-list .pool-slot-row"),
+  switchTab(initialTab);
+
+  overlay.querySelectorAll(".settings-nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  });
+
+  // --- Hierarchical keyboard navigation ---
+  // Levels: "nav" (tab sidebar) → "content" (items in active tab) → "detail" (inside an item)
+  const tabIds = SETTINGS_TABS.map((t) => t.id);
+  let navLevel = "nav"; // "nav" | "content" | "detail"
+  let contentIndex = 0;
+  let detailIndex = 0;
+
+  function getActiveTabId() {
+    const active = overlay.querySelector(".settings-nav-item.active");
+    return active ? active.dataset.tab : tabIds[0];
+  }
+
+  function cycleTab(delta) {
+    const current = getActiveTabId();
+    const idx = tabIds.indexOf(current);
+    const next = (idx + delta + tabIds.length) % tabIds.length;
+    switchTab(tabIds[next]);
+    contentIndex = 0;
+    detailIndex = 0;
+    applyNavHighlight();
+  }
+
+  // Get navigable items in the active tab's content
+  function getContentItems() {
+    const tabId = getActiveTabId();
+    const panel = overlay.querySelector(
+      `.settings-tab-panel[data-tab="${tabId}"]`,
     );
+    if (!panel) return [];
+    if (tabId === "pool") {
+      // Pool: slots list (as one block) + each button
+      const items = [];
+      const slotsList = panel.querySelector(".pool-slots-list");
+      if (slotsList) items.push(slotsList);
+      for (const btn of panel.querySelectorAll(
+        ".pool-controls .offload-menu-btn",
+      ))
+        items.push(btn);
+      // Also include pool-size input label
+      const sizeLabel = panel.querySelector(".pool-size-label");
+      if (sizeLabel) items.push(sizeLabel);
+      return items;
+    }
+    if (tabId === "shortcuts") {
+      const items = [];
+      const searchInput = panel.querySelector(".shortcut-search");
+      if (searchInput) items.push(searchInput);
+      for (const row of panel.querySelectorAll(".shortcut-row")) {
+        if (row.style.display !== "none") items.push(row);
+      }
+      return items;
+    }
+    if (tabId === "general") {
+      return Array.from(panel.querySelectorAll(".settings-info-row"));
+    }
+    return [];
   }
 
-  function clearAllSelection() {
+  // Get detail items inside a content item (e.g. pool slot rows)
+  function getDetailItems() {
+    const items = getContentItems();
+    const item = items[contentIndex];
+    if (!item) return [];
+    if (item.classList.contains("pool-slots-list")) {
+      return Array.from(item.querySelectorAll(".pool-slot-row"));
+    }
+    return [];
+  }
+
+  function clearNavHighlight() {
     for (const el of overlay.querySelectorAll(".kb-selected"))
       el.classList.remove("kb-selected");
   }
 
-  function applySelection() {
-    clearAllSelection();
-    if (navLevel === "top") {
-      const items = getTopItems();
-      if (items[topIndex]) items[topIndex].classList.add("kb-selected");
-    } else {
-      const rows = getSlotRows();
-      // Clamp index after poll refresh may have removed slots
-      if (rows.length > 0) slotIndex = Math.min(slotIndex, rows.length - 1);
-      if (rows[slotIndex]) {
-        rows[slotIndex].classList.add("kb-selected");
-        rows[slotIndex].scrollIntoView({ block: "nearest" });
+  function applyNavHighlight() {
+    clearNavHighlight();
+    if (navLevel === "nav") {
+      // Highlight active nav item
+      const navItem = overlay.querySelector(".settings-nav-item.active");
+      if (navItem) navItem.classList.add("kb-selected");
+    } else if (navLevel === "content") {
+      const items = getContentItems();
+      contentIndex = Math.min(contentIndex, Math.max(0, items.length - 1));
+      if (items[contentIndex]) {
+        items[contentIndex].classList.add("kb-selected");
+        items[contentIndex].scrollIntoView({ block: "nearest" });
+      }
+    } else if (navLevel === "detail") {
+      const items = getDetailItems();
+      detailIndex = Math.min(detailIndex, Math.max(0, items.length - 1));
+      if (items[detailIndex]) {
+        items[detailIndex].classList.add("kb-selected");
+        items[detailIndex].scrollIntoView({ block: "nearest" });
       }
     }
   }
 
-  // Apply initial selection
-  applySelection();
+  applyNavHighlight();
 
   keyHandler = (e) => {
-    // Skip if a terminal popup is open on top
     if (document.getElementById("slot-terminal-popup")) return;
-    // Skip if an input is focused (e.g. pool size number input)
-    if (overlay.querySelector("input:focus")) return;
+    if (overlay.querySelector(".shortcut-key-btn.recording")) return;
+
+    if (overlay.querySelector("input:focus")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        overlay.querySelector("input:focus").blur();
+      }
+      return;
+    }
 
     const { key } = e;
 
     if (key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      if (navLevel === "slots") {
-        navLevel = "top";
-        applySelection();
+      if (navLevel === "detail") {
+        navLevel = "content";
+        applyNavHighlight();
+      } else if (navLevel === "content") {
+        navLevel = "nav";
+        applyNavHighlight();
       } else {
         close();
       }
       return;
     }
 
-    if (key === "ArrowDown" || key === "ArrowUp") {
+    if (key === "ArrowUp" || key === "ArrowDown") {
       e.preventDefault();
       e.stopPropagation();
       const delta = key === "ArrowDown" ? 1 : -1;
-      if (navLevel === "top") {
-        const items = getTopItems();
-        if (items.length === 0) return;
-        topIndex = Math.max(0, Math.min(items.length - 1, topIndex + delta));
-        applySelection();
-      } else {
-        const rows = getSlotRows();
-        if (rows.length === 0) return;
-        slotIndex = Math.max(0, Math.min(rows.length - 1, slotIndex + delta));
-        applySelection();
+      if (navLevel === "nav") {
+        cycleTab(delta);
+      } else if (navLevel === "content") {
+        const items = getContentItems();
+        if (items.length > 0) {
+          contentIndex = Math.max(
+            0,
+            Math.min(items.length - 1, contentIndex + delta),
+          );
+          applyNavHighlight();
+        }
+      } else if (navLevel === "detail") {
+        const items = getDetailItems();
+        if (items.length > 0) {
+          detailIndex = Math.max(
+            0,
+            Math.min(items.length - 1, detailIndex + delta),
+          );
+          applyNavHighlight();
+        }
+      }
+      return;
+    }
+
+    if (key === "ArrowRight") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (navLevel === "nav") {
+        navLevel = "content";
+        contentIndex = 0;
+        applyNavHighlight();
+      } else if (navLevel === "content") {
+        // Drill into item if it has detail items (e.g. pool slots list)
+        const detailItems = getDetailItems();
+        if (detailItems.length > 0) {
+          navLevel = "detail";
+          detailIndex = 0;
+          applyNavHighlight();
+        }
+      }
+      return;
+    }
+
+    if (key === "ArrowLeft") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (navLevel === "detail") {
+        navLevel = "content";
+        applyNavHighlight();
+      } else if (navLevel === "content") {
+        navLevel = "nav";
+        applyNavHighlight();
       }
       return;
     }
@@ -357,34 +472,326 @@ async function showPoolSettings() {
     if (key === "Enter") {
       e.preventDefault();
       e.stopPropagation();
-      if (navLevel === "top") {
-        const items = getTopItems();
-        const item = items[topIndex];
-        if (!item) return;
-        if (item.classList.contains("pool-slots-list")) {
-          navLevel = "slots";
-          slotIndex = 0;
-          applySelection();
-        } else {
-          item.click();
+      if (navLevel === "content") {
+        const items = getContentItems();
+        const item = items[contentIndex];
+        if (item) {
+          // Focus input — either the item itself or a child input
+          const input =
+            item.tagName === "INPUT" ? item : item.querySelector("input");
+          if (input) {
+            input.focus();
+            input.select();
+          } else if (item.tagName === "BUTTON") {
+            item.click();
+          } else if (item.classList.contains("shortcut-row")) {
+            const keyBtn = item.querySelector(".shortcut-key-btn");
+            if (keyBtn) keyBtn.click();
+          } else if (item.classList.contains("pool-slots-list")) {
+            // Enter slots list = drill in
+            navLevel = "detail";
+            detailIndex = 0;
+            applyNavHighlight();
+          }
         }
-      } else {
-        const rows = getSlotRows();
-        const row = rows[slotIndex];
-        if (row) row.click();
+      } else if (navLevel === "detail") {
+        const items = getDetailItems();
+        const item = items[detailIndex];
+        if (item) item.click();
+      } else if (navLevel === "nav") {
+        navLevel = "content";
+        contentIndex = 0;
+        applyNavHighlight();
       }
       return;
     }
   };
   document.addEventListener("keydown", keyHandler, true);
 
-  // Poll for health updates while dialog is open
+  // --- Wire Pool tab ---
+  wirePoolTab(overlay, health, close, applyNavHighlight);
+
+  // --- Wire Shortcuts tab ---
+  wireShortcutsTab(overlay, shortcuts, defaults);
+}
+
+// --- General tab ---
+function renderGeneralTab(version) {
+  return `
+    <div class="settings-tab-panel" data-tab="general">
+      <div class="settings-section">
+        <div class="settings-section-title">About</div>
+        <div class="settings-info-row">
+          <span class="settings-info-label">Version</span>
+          <span class="settings-info-value">${escapeHtml(version)}</span>
+        </div>
+        <div class="settings-info-row">
+          <span class="settings-info-label">App</span>
+          <span class="settings-info-value">Open Cockpit</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Find actions sharing the same accelerator (for conflict warnings)
+function findShortcutConflicts(shortcuts, accelerator, excludeAction) {
+  if (!accelerator) return [];
+  const norm = accelerator.toLowerCase();
+  const conflicts = [];
+  for (const [id, val] of Object.entries(shortcuts)) {
+    if (id !== excludeAction && val && val.toLowerCase() === norm) {
+      conflicts.push(SHORTCUT_LABELS[id] || id);
+    }
+  }
+  return conflicts;
+}
+
+// --- Shortcuts tab ---
+function renderShortcutsTab(shortcuts, defaults) {
+  ensureShortcutLabels();
+  const actionIds = Object.keys(SHORTCUT_LABELS);
+
+  const rows = actionIds
+    .map((id) => {
+      const label = SHORTCUT_LABELS[id];
+      const current = shortcuts[id] || "";
+      const display = formatShortcutDisplay(current) || "—";
+      const isCustom = defaults && current !== (defaults[id] || "");
+      const conflicts = findShortcutConflicts(shortcuts, current, id);
+      const conflictHtml = conflicts.length
+        ? `<div class="shortcut-conflict">Also bound to: ${conflicts.join(", ")}</div>`
+        : "";
+      return `<div class="shortcut-row${isCustom ? " custom" : ""}" data-action="${id}">
+        <span class="shortcut-label">${label}</span>
+        <button class="shortcut-key-btn" title="Click to rebind">${display}</button>
+        <button class="shortcut-reset-btn" title="Reset to default"${isCustom ? "" : ' style="visibility:hidden"'}>↺</button>
+        ${conflictHtml}
+      </div>`;
+    })
+    .join("");
+
+  return `
+    <div class="settings-tab-panel" data-tab="shortcuts">
+      <div class="settings-section">
+        <div class="settings-section-subtitle">Click a shortcut to rebind. Right-click to unbind. Press Escape to cancel.</div>
+        <input class="shortcut-search" type="text" placeholder="Search shortcuts…" />
+        <div class="shortcut-settings-body">
+          ${rows}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function wireShortcutsTab(overlay, shortcuts, defaults) {
+  let activeKeyHandler = null;
+
+  function cleanupRecording() {
+    if (activeKeyHandler) {
+      document.removeEventListener("keydown", activeKeyHandler, true);
+      activeKeyHandler = null;
+    }
+    // Clear any conflict warnings
+    overlay.querySelectorAll(".shortcut-conflict").forEach((el) => el.remove());
+  }
+
+  function updateResetBtn(row, actionId, currentAccel) {
+    const resetBtn = row.querySelector(".shortcut-reset-btn");
+    if (!resetBtn || !defaults) return;
+    const isCustom = currentAccel !== (defaults[actionId] || "");
+    resetBtn.style.visibility = isCustom ? "" : "hidden";
+    row.classList.toggle("custom", isCustom);
+  }
+
+  // Store cleanup for dialog close
+  overlay._cleanupRecording = cleanupRecording;
+
+  function showConflictWarning(row, conflicts) {
+    row.querySelector(".shortcut-conflict")?.remove();
+    if (conflicts.length === 0) return;
+    const warn = document.createElement("div");
+    warn.className = "shortcut-conflict";
+    warn.textContent = `Also bound to: ${conflicts.join(", ")}`;
+    row.appendChild(warn);
+  }
+
+  // --- Search filtering ---
+  const searchInput = overlay.querySelector(".shortcut-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      const query = searchInput.value.toLowerCase().trim();
+      overlay.querySelectorAll(".shortcut-row").forEach((row) => {
+        const label =
+          row.querySelector(".shortcut-label")?.textContent.toLowerCase() || "";
+        const key =
+          row.querySelector(".shortcut-key-btn")?.textContent.toLowerCase() ||
+          "";
+        row.style.display =
+          !query || label.includes(query) || key.includes(query) ? "" : "none";
+      });
+    });
+  }
+
+  overlay.querySelectorAll(".shortcut-key-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      cleanupRecording();
+      const existingBtn = overlay.querySelector(".shortcut-key-btn.recording");
+      if (existingBtn && existingBtn !== btn) {
+        existingBtn.classList.remove("recording");
+        const oldAction = existingBtn.closest(".shortcut-row").dataset.action;
+        existingBtn.textContent =
+          formatShortcutDisplay(shortcuts[oldAction]) || "\u2014";
+      }
+
+      btn.classList.add("recording");
+      btn.textContent = "Press keys...";
+
+      function onKeyDown(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
+
+        if (e.key === "Escape") {
+          btn.classList.remove("recording");
+          const actionId = btn.closest(".shortcut-row").dataset.action;
+          btn.textContent =
+            formatShortcutDisplay(shortcuts[actionId]) || "\u2014";
+          cleanupRecording();
+          return;
+        }
+
+        const parts = [];
+        if (e.metaKey) parts.push("CmdOrCtrl");
+        if (e.ctrlKey && !e.metaKey) parts.push("Ctrl");
+        if (e.shiftKey) parts.push("Shift");
+        if (e.altKey) parts.push("Alt");
+
+        const keyMap = {
+          ArrowUp: "Up",
+          ArrowDown: "Down",
+          ArrowLeft: "Left",
+          ArrowRight: "Right",
+          " ": "Space",
+          Backspace: "Backspace",
+          Delete: "Delete",
+          Enter: "Return",
+          Tab: "Tab",
+        };
+        const key = keyMap[e.key] || e.key.toUpperCase();
+        parts.push(key);
+
+        const accelerator = parts.join("+");
+        const actionId = btn.closest(".shortcut-row").dataset.action;
+
+        btn.classList.remove("recording");
+        btn.textContent = formatShortcutDisplay(accelerator);
+        shortcuts[actionId] = accelerator;
+
+        const row = btn.closest(".shortcut-row");
+
+        // Show conflict warning if another action uses the same binding
+        const conflicts = findShortcutConflicts(
+          shortcuts,
+          accelerator,
+          actionId,
+        );
+        showConflictWarning(row, conflicts);
+        updateResetBtn(row, actionId, accelerator);
+
+        window.api.setShortcut(actionId, accelerator);
+        cleanupRecording();
+      }
+
+      activeKeyHandler = onKeyDown;
+      document.addEventListener("keydown", onKeyDown, true);
+    });
+
+    btn.addEventListener("contextmenu", async (e) => {
+      e.preventDefault();
+      const row = btn.closest(".shortcut-row");
+      const actionId = row.dataset.action;
+      await window.api.setShortcut(actionId, "");
+      shortcuts[actionId] = "";
+      shortcutConfig = { ...shortcuts };
+      btn.textContent = "—";
+      row.querySelector(".shortcut-conflict")?.remove();
+      updateResetBtn(row, actionId, "");
+    });
+  });
+
+  overlay.querySelectorAll(".shortcut-reset-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".shortcut-row");
+      const actionId = row.dataset.action;
+      await window.api.resetShortcut(actionId);
+      const defaultVal = await window.api.getDefaultShortcut(actionId);
+      shortcuts[actionId] = defaultVal;
+      shortcutConfig = { ...shortcuts };
+      const keyBtn = row.querySelector(".shortcut-key-btn");
+      keyBtn.textContent = formatShortcutDisplay(defaultVal) || "—";
+      // Update conflict warning and reset button
+      const conflicts = findShortcutConflicts(shortcuts, defaultVal, actionId);
+      showConflictWarning(row, conflicts);
+      updateResetBtn(row, actionId, defaultVal);
+    });
+  });
+}
+
+// --- Pool tab ---
+function renderPoolTab(health) {
+  const slotsHtml = renderPoolSlotsHtml(health);
+  const countsHtml = renderPoolCountsHtml(health);
+
+  return `
+    <div class="settings-tab-panel" data-tab="pool">
+      <div class="settings-section">
+        <div class="pool-health-summary">${countsHtml}</div>
+        ${
+          health.initialized
+            ? `
+          <div class="pool-slots-list">${slotsHtml}</div>
+          <div class="pool-controls">
+            <label class="pool-size-label">
+              Pool size:
+              <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
+            </label>
+            <button class="offload-menu-btn pool-resize-btn">Resize</button>
+            <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
+            <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
+            <button class="offload-menu-btn pool-destroy-btn">Destroy</button>
+            <button class="offload-menu-btn pool-reinit-btn">Reinitialize</button>
+          </div>
+        `
+            : `
+          <div class="pool-controls">
+            <label class="pool-size-label">
+              Pool size:
+              <input type="number" class="pool-size-input" value="10" min="1" max="20">
+            </label>
+            <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
+          </div>
+        `
+        }
+      </div>
+    </div>
+  `;
+}
+
+function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
+  // Poll for health updates while pool tab is active
   poolSettingsInterval = setInterval(async () => {
-    // Stop polling if dialog was removed externally
-    if (!document.getElementById("pool-settings")) {
+    const settingsEl = document.getElementById("unified-settings");
+    if (!settingsEl) {
       stopPoolSettingsPolling();
       return;
     }
+    // Skip polling when pool tab isn't visible
+    const poolPanel = settingsEl.querySelector(
+      '.settings-tab-panel[data-tab="pool"]',
+    );
+    if (!poolPanel || !poolPanel.classList.contains("active")) return;
     try {
       const h = await window.api.poolHealth();
       const summaryEl = overlay.querySelector(".pool-health-summary");
@@ -392,15 +799,14 @@ async function showPoolSettings() {
       const slotsEl = overlay.querySelector(".pool-slots-list");
       if (slotsEl) {
         slotsEl.innerHTML = renderPoolSlotsHtml(h);
-        // Re-apply selection after poll refresh (innerHTML wipes classes)
-        applySelection();
+        applyNavHighlight();
       }
     } catch {
-      // Ignore transient errors — next poll will retry
+      // Ignore transient errors
     }
   }, 3000);
 
-  // Slot row click → open terminal popup (delegated to survive innerHTML poll updates)
+  // Slot row click → open terminal popup
   const slotsListEl = overlay.querySelector(".pool-slots-list");
   if (slotsListEl) {
     slotsListEl.addEventListener("click", async (e) => {
@@ -433,7 +839,7 @@ async function showPoolSettings() {
         await window.api.poolInit(size);
         showNotification(`Pool initialized (${size} slots)`);
         await _actions.loadSessions();
-        showPoolSettings();
+        showSettings("pool");
       } catch (err) {
         initBtn.textContent = "Initialize Pool";
         initBtn.disabled = false;
@@ -460,7 +866,7 @@ async function showPoolSettings() {
         await window.api.poolResize(newSize);
         showNotification(`Pool resized to ${newSize} slots`);
         await _actions.loadSessions();
-        showPoolSettings();
+        showSettings("pool");
       } catch (err) {
         resizeBtn.textContent = "Resize";
         resizeBtn.disabled = false;
@@ -473,7 +879,7 @@ async function showPoolSettings() {
   const reloadBtn = overlay.querySelector(".pool-reload-btn");
   if (reloadBtn) {
     reloadBtn.addEventListener("click", async () => {
-      closePoolSettings(overlay);
+      closeDialog();
       await _actions.loadDirColors();
       await _actions.loadSessions();
       showNotification("Sessions reloaded");
@@ -492,7 +898,7 @@ async function showPoolSettings() {
           `Cleaned ${cleaned} idle session${cleaned !== 1 ? "s" : ""}`,
         );
         await _actions.loadSessions();
-        showPoolSettings();
+        showSettings("pool");
       } catch (err) {
         cleanBtn.textContent = "Clean Idle";
         cleanBtn.disabled = false;
@@ -511,7 +917,7 @@ async function showPoolSettings() {
         await window.api.poolDestroy();
         showNotification("Pool destroyed");
         await _actions.loadSessions();
-        showPoolSettings();
+        showSettings("pool");
       } catch (err) {
         destroyBtn.textContent = "Destroy";
         destroyBtn.disabled = false;
@@ -549,177 +955,14 @@ async function showPoolSettings() {
         showNotification(`Pool destroyed but re-init failed: ${err.message}`);
       }
       await _actions.loadSessions();
-      showPoolSettings();
+      showSettings("pool");
     });
   }
-}
-
-// --- Shortcut Settings UI ---
-async function showShortcutSettings() {
-  const shortcuts = await window.api.getShortcuts();
-  shortcutConfig = shortcuts;
-
-  // Track active keydown listener for cleanup
-  let activeKeyHandler = null;
-
-  function cleanupRecording() {
-    if (activeKeyHandler) {
-      document.removeEventListener("keydown", activeKeyHandler, true);
-      activeKeyHandler = null;
-    }
-  }
-
-  const actionIds = Object.keys(SHORTCUT_LABELS);
-  const rows = actionIds
-    .map((id) => {
-      const label = SHORTCUT_LABELS[id];
-      const current = shortcuts[id] || "";
-      const display = formatShortcutDisplay(current) || "—";
-      return `<div class="shortcut-row" data-action="${id}">
-        <span class="shortcut-label">${label}</span>
-        <button class="shortcut-key-btn" title="Click to rebind">${display}</button>
-        <button class="shortcut-reset-btn" title="Reset to default">↺</button>
-      </div>`;
-    })
-    .join("");
-
-  let escHandler = null;
-  const { overlay, close } = createOverlayDialog({
-    id: "shortcut-settings",
-    escapeClose: false,
-    closeSelector: ".close-dialog-btn",
-    html: `
-      <div class="shortcut-settings-dialog">
-        <div class="pool-settings-header">
-          <span>Keyboard Shortcuts</span>
-          <button class="close-dialog-btn">✕</button>
-        </div>
-        <div class="shortcut-settings-body">
-          ${rows}
-        </div>
-      </div>
-    `,
-    onClose: () => {
-      cleanupRecording();
-      if (escHandler) {
-        document.removeEventListener("keydown", escHandler, true);
-      }
-    },
-  });
-
-  // Close on Escape (only when not recording a shortcut)
-  escHandler = (e) => {
-    if (e.key === "Escape" && !activeKeyHandler) {
-      e.preventDefault();
-      e.stopPropagation();
-      close();
-    }
-  };
-  document.addEventListener("keydown", escHandler, true);
-
-  // Rebind: click key button → enter recording mode
-  overlay.querySelectorAll(".shortcut-key-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      // Cancel any existing recording
-      cleanupRecording();
-      const existingBtn = overlay.querySelector(".shortcut-key-btn.recording");
-      if (existingBtn && existingBtn !== btn) {
-        existingBtn.classList.remove("recording");
-        const oldAction = existingBtn.closest(".shortcut-row").dataset.action;
-        existingBtn.textContent =
-          formatShortcutDisplay(shortcuts[oldAction]) || "\u2014";
-      }
-
-      btn.classList.add("recording");
-      btn.textContent = "Press keys...";
-
-      function onKeyDown(e) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // Ignore lone modifier keys
-        if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
-
-        // Escape cancels recording
-        if (e.key === "Escape") {
-          btn.classList.remove("recording");
-          const actionId = btn.closest(".shortcut-row").dataset.action;
-          btn.textContent =
-            formatShortcutDisplay(shortcuts[actionId]) || "\u2014";
-          cleanupRecording();
-          return;
-        }
-
-        // Build Electron accelerator from the event
-        const parts = [];
-        if (e.metaKey) parts.push("CmdOrCtrl");
-        if (e.ctrlKey && !e.metaKey) parts.push("Ctrl");
-        if (e.shiftKey) parts.push("Shift");
-        if (e.altKey) parts.push("Alt");
-
-        const keyMap = {
-          ArrowUp: "Up",
-          ArrowDown: "Down",
-          ArrowLeft: "Left",
-          ArrowRight: "Right",
-          " ": "Space",
-          Backspace: "Backspace",
-          Delete: "Delete",
-          Enter: "Return",
-          Tab: "Tab",
-        };
-        const key = keyMap[e.key] || e.key.toUpperCase();
-        parts.push(key);
-
-        const accelerator = parts.join("+");
-        const actionId = btn.closest(".shortcut-row").dataset.action;
-
-        btn.classList.remove("recording");
-        btn.textContent = formatShortcutDisplay(accelerator);
-        shortcuts[actionId] = accelerator;
-        shortcutConfig = { ...shortcuts };
-
-        window.api.setShortcut(actionId, accelerator);
-        cleanupRecording();
-      }
-
-      activeKeyHandler = onKeyDown;
-      document.addEventListener("keydown", onKeyDown, true);
-    });
-  });
-
-  // Reset buttons
-  overlay.querySelectorAll(".shortcut-reset-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const row = btn.closest(".shortcut-row");
-      const actionId = row.dataset.action;
-      await window.api.resetShortcut(actionId);
-      const defaultVal = await window.api.getDefaultShortcut(actionId);
-      shortcuts[actionId] = defaultVal;
-      shortcutConfig = { ...shortcuts };
-      const keyBtn = row.querySelector(".shortcut-key-btn");
-      keyBtn.textContent = formatShortcutDisplay(defaultVal) || "—";
-    });
-  });
-
-  // Unbind: button to clear a shortcut
-  overlay.querySelectorAll(".shortcut-key-btn").forEach((btn) => {
-    btn.addEventListener("contextmenu", async (e) => {
-      e.preventDefault();
-      const row = btn.closest(".shortcut-row");
-      const actionId = row.dataset.action;
-      await window.api.setShortcut(actionId, "");
-      shortcuts[actionId] = "";
-      shortcutConfig = { ...shortcuts };
-      btn.textContent = "—";
-    });
-  });
 }
 
 export {
-  showPoolSettings,
+  showSettings,
   openSlotTerminalPopup,
-  showShortcutSettings,
   updatePoolHealthBadge,
   stopPoolSettingsPolling,
 };

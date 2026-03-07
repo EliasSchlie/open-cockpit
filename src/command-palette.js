@@ -179,15 +179,20 @@ export function initCommandPalette(actions) {
       action: () => toggleCommandPalette(),
     },
     {
-      id: "pool-settings",
-      label: "Pool Settings",
+      id: "settings",
+      label: "Settings",
       shortcutAction: "open-pool-settings",
-      action: () => _actions.showPoolSettings(),
+      action: () => _actions.showSettings(),
+    },
+    {
+      id: "pool-settings",
+      label: "Settings: Pool",
+      action: () => _actions.showSettings("pool"),
     },
     {
       id: "shortcut-settings",
-      label: "Keyboard Shortcuts",
-      action: () => _actions.showShortcutSettings(),
+      label: "Settings: Keyboard Shortcuts",
+      action: () => _actions.showSettings("shortcuts"),
     },
     {
       id: "toggle-bell",

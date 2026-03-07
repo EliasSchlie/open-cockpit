@@ -54,12 +54,7 @@ import {
   dockRegisterTerminal,
   cycleTabInFocusedLeaf,
 } from "./terminal-manager.js";
-import {
-  initPoolUi,
-  showPoolSettings,
-  updatePoolHealthBadge,
-  showShortcutSettings,
-} from "./pool-ui.js";
+import { initPoolUi, showSettings, updatePoolHealthBadge } from "./pool-ui.js";
 import {
   initCommandPalette,
   toggleCommandPalette,
@@ -700,7 +695,6 @@ initPoolUi({
   loadSessions,
   focusTerminal,
   loadDirColors,
-  COMMANDS,
 });
 
 // Command palette
@@ -720,8 +714,7 @@ initCommandPalette({
   focusCurrentExternalTerminal,
   loadDirColors,
   loadSessions,
-  showPoolSettings,
-  showShortcutSettings,
+  showSettings,
   toggleChildren,
   switchChildSession,
 });
@@ -837,7 +830,7 @@ window.api.onArchiveCurrentSession(archiveCurrentSession);
 window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });
-window.api.onOpenPoolSettings(() => showPoolSettings());
+window.api.onOpenPoolSettings(() => showSettings());
 window.api.onToggleBell(toggleBellMuted);
 
 // Bell toggle button

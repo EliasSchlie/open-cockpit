@@ -113,15 +113,25 @@ export class DockLayout {
     return leaf.tabs[leaf.activeTab] || leaf.tabs[0];
   }
 
+  getLeafTabInfo(leafId) {
+    const leaf = this._findLeaf(leafId);
+    if (!leaf) return null;
+    return { tabs: [...leaf.tabs], activeTab: leaf.activeTab };
+  }
+
   getAllTabIds() {
     const ids = [];
-    this._forEachLeaf((leaf) => ids.push(...leaf.tabs));
+    this._forEachLeaf((leaf) => {
+      ids.push(...leaf.tabs);
+    });
     return ids;
   }
 
   getLeafIds() {
     const ids = [];
-    this._forEachLeaf((leaf) => ids.push(leaf.id));
+    this._forEachLeaf((leaf) => {
+      ids.push(leaf.id);
+    });
     return ids;
   }
 

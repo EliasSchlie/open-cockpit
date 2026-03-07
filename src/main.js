@@ -70,6 +70,7 @@ function closeDebugLog() {
 
 // --- Window management ---
 let mainWindow = null;
+let dialogOpen = false;
 const pendingPolls = new Set();
 
 function createWindow() {
@@ -112,6 +113,9 @@ function createWindow() {
 
     const matchedAction = findMatchingInputAction(input);
     if (matchedAction) {
+      // When a modal dialog is open, skip input-event shortcuts so the
+      // renderer's own keydown handlers can process them instead.
+      if (dialogOpen) return;
       event.preventDefault();
       const channel = inputEventChannels[matchedAction] || matchedAction;
       mainWindow.webContents.send(channel);
@@ -277,7 +281,7 @@ function buildMenu() {
           click: () => send("toggle-command-palette"),
         },
         {
-          label: "Pool Settings",
+          label: "Settings",
           accelerator: accel("open-pool-settings"),
           click: () => send("open-pool-settings"),
         },
@@ -593,8 +597,32 @@ app.whenReady().then(async () => {
   loadShortcuts();
   buildMenu();
 
+  // Dialog open flag — suppresses input-event shortcuts so renderer handles them
+  ipcMain.on("dialog-open", (_e, open) => {
+    dialogOpen = open;
+  });
+
+  // App version (read once from plugin.json — version never changes at runtime)
+  let cachedAppVersion;
+  try {
+    const pluginJson = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
+        "utf-8",
+      ),
+    );
+    cachedAppVersion = pluginJson.version || "unknown";
+  } catch {
+    cachedAppVersion = "unknown";
+  }
+  ipcMain.handle("get-app-version", () => cachedAppVersion);
+
   // IPC handlers for shortcut settings
   ipcMain.handle("get-shortcuts", () => getAllShortcuts());
+  ipcMain.handle(
+    "get-default-shortcuts",
+    () => require("./shortcuts").DEFAULT_SHORTCUTS,
+  );
   ipcMain.handle("get-default-shortcut", (_e, actionId) =>
     getDefaultShortcut(actionId),
   );
