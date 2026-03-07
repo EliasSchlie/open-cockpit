@@ -122,6 +122,11 @@ function createWindow() {
     }
   });
 
+  // Reset dialog state if renderer reloads (prevents stuck dialogOpen)
+  mainWindow.webContents.on("did-finish-load", () => {
+    dialogOpen = false;
+  });
+
   mainWindow.webContents.on("console-message", (_e, level, message) => {
     console.log(`[renderer] ${message}`);
   });

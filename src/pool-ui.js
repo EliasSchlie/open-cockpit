@@ -226,6 +226,7 @@ async function showSettings(initialTab = "general") {
   ]);
 
   let keyHandler = null;
+  let cleanupRecordingFn = null;
 
   const { overlay, close } = createOverlayDialog({
     id: "unified-settings",
@@ -258,7 +259,7 @@ async function showSettings(initialTab = "general") {
       if (keyHandler) {
         document.removeEventListener("keydown", keyHandler, true);
       }
-      if (overlay._cleanupRecording) overlay._cleanupRecording();
+      if (cleanupRecordingFn) cleanupRecordingFn();
     },
   });
 
@@ -605,7 +606,7 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
   }
 
   // Store cleanup for dialog close
-  overlay._cleanupRecording = cleanupRecording;
+  cleanupRecordingFn = cleanupRecording;
 
   function showConflictWarning(row, conflicts) {
     row.querySelector(".shortcut-conflict")?.remove();
@@ -714,7 +715,6 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
       const actionId = row.dataset.action;
       await window.api.setShortcut(actionId, "");
       shortcuts[actionId] = "";
-      shortcutConfig = { ...shortcuts };
       btn.textContent = "—";
       row.querySelector(".shortcut-conflict")?.remove();
       updateResetBtn(row, actionId, "");
@@ -728,7 +728,6 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
       await window.api.resetShortcut(actionId);
       const defaultVal = await window.api.getDefaultShortcut(actionId);
       shortcuts[actionId] = defaultVal;
-      shortcutConfig = { ...shortcuts };
       const keyBtn = row.querySelector(".shortcut-key-btn");
       keyBtn.textContent = formatShortcutDisplay(defaultVal) || "—";
       // Update conflict warning and reset button
