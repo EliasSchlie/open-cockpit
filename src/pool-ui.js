@@ -116,17 +116,36 @@ async function openSlotTerminalPopup(slot) {
     return;
   }
 
-  // Fit after a frame so dimensions are correct
+  // Debounced fit — avoids thrashing during resize and only sends ptyResize
+  // when dimensions actually change.
+  let fitPending = false;
+  let prevCols = term.cols;
+  let prevRows = term.rows;
+  const doFit = () => {
+    if (fitPending) return;
+    fitPending = true;
+    requestAnimationFrame(() => {
+      fitPending = false;
+      fitAddon.fit();
+      const { cols, rows } = term;
+      if (cols !== prevCols || rows !== prevRows) {
+        prevCols = cols;
+        prevRows = rows;
+        window.api.ptyResize(slot.termId, cols, rows);
+      }
+    });
+  };
+
+  // Initial fit + focus (unconditional ptyResize for first frame)
   requestAnimationFrame(() => {
     fitAddon.fit();
+    prevCols = term.cols;
+    prevRows = term.rows;
     window.api.ptyResize(slot.termId, term.cols, term.rows);
     term.focus();
   });
 
-  const resizeObserver = new ResizeObserver(() => {
-    fitAddon.fit();
-    window.api.ptyResize(slot.termId, term.cols, term.rows);
-  });
+  const resizeObserver = new ResizeObserver(doFit);
   resizeObserver.observe(mountEl);
 
   // Cleanup function — also stored on overlay for programmatic close
