@@ -415,8 +415,8 @@ async function archiveSession(sessionId) {
   const slot = pool?.slots?.find((s) => s.sessionId === sessionId);
   if (slot) {
     // Pool session: offload it first, then mark archived
-    const { getSessionsUncached } = getSessionDiscovery();
-    const sessions = await getSessionsUncached();
+    const { getSessions } = getSessionDiscovery();
+    const sessions = await getSessions();
     const session = sessions.find((s) => s.sessionId === sessionId);
     await offloadSession(sessionId, slot.termId, sessionId, {
       cwd: session?.cwd,
