@@ -71,13 +71,16 @@ Download the latest `.dmg` from [GitHub Releases](https://github.com/EliasSchlie
 
 ### First launch (unsigned app)
 
-The app is not code-signed. macOS will block it on first open. To fix:
+The app is ad-hoc signed but not notarized. macOS will show "damaged" or "can't be verified" on first open. To fix:
 
-```bash
-xattr -cr /Applications/Open\ Cockpit.app
-```
+1. Open the DMG and drag **Open Cockpit** to `/Applications`
+2. Run in Terminal:
+   ```bash
+   xattr -cr /Applications/Open\ Cockpit.app
+   ```
+3. Open the app normally
 
-Or: right-click the app → **Open** (instead of double-clicking).
+The `xattr -cr` must be run on the `.app` in `/Applications`, not just the DMG — macOS re-adds quarantine when you copy.
 
 ### Plugin
 
