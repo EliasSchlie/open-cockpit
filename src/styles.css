@@ -303,11 +303,11 @@ body {
 }
 
 .session-children-toggle {
-  font-size: 10px;
+  font-size: 14px;
   cursor: pointer;
   flex-shrink: 0;
   color: var(--text-dim);
-  padding: 2px;
+  padding: 2px 4px;
 }
 
 .session-children-toggle:hover {
