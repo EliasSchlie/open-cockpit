@@ -5,6 +5,7 @@ import {
   debugLog,
   STATUS_CLASSES,
   escapeHtml,
+  showNotification,
 } from "./renderer-state.js";
 import { STATUS } from "./session-statuses.js";
 import {
@@ -176,6 +177,14 @@ async function loadSessions() {
   const { childIds } = tree;
   const isTopLevel = (s) => !childIds.has(s.sessionId);
 
+  // Parents with alive children should stay in a non-archive section even if
+  // the parent itself is archived/offloaded — keeps the tree visible.
+  const hasAliveChildren = (s) => {
+    const children = childrenMap.get(s.sessionId);
+    if (!children) return false;
+    return children.some((c) => c.alive || hasAliveChildren(c));
+  };
+
   // Split into sections — pool and external mixed together (top-level only)
   const typing = sessions.filter(
     (s) => isTopLevel(s) && s.status === STATUS.TYPING,
@@ -183,13 +192,17 @@ async function loadSessions() {
   const recent = sessions.filter(
     (s) =>
       isTopLevel(s) &&
-      (s.status === STATUS.IDLE || s.status === STATUS.OFFLOADED),
+      (s.status === STATUS.IDLE ||
+        s.status === STATUS.OFFLOADED ||
+        // Archived/offloaded parents with alive children stay in Recent
+        (s.status === STATUS.ARCHIVED && hasAliveChildren(s))),
   );
   const processing = sessions.filter(
     (s) => isTopLevel(s) && s.status === STATUS.PROCESSING,
   );
   const archived = sessions.filter(
-    (s) => isTopLevel(s) && s.status === STATUS.ARCHIVED,
+    (s) =>
+      isTopLevel(s) && s.status === STATUS.ARCHIVED && !hasAliveChildren(s),
   );
 
   // Build fingerprint to check if anything changed
@@ -373,6 +386,112 @@ function createSessionItem(s, depth = 0) {
   return li;
 }
 
+// Collect all descendant sessions depth-first (children's children first)
+// Uses childrenMap for O(d) traversal instead of filtering all sessions per level
+function getDescendantsDepthFirst(sessionId) {
+  const children = childrenMap.get(sessionId) || [];
+  const result = [];
+  for (const child of children) {
+    result.push(...getDescendantsDepthFirst(child.sessionId));
+    result.push(child);
+  }
+  return result;
+}
+
+// Get all alive descendants (recursive) — used for archive guard + dialog count
+function getAliveDescendants(sessionId) {
+  const descendants = getDescendantsDepthFirst(sessionId);
+  return descendants.filter((s) => s.alive);
+}
+
+// Archive with child check: warns if session has alive descendants, archives depth-first
+async function archiveWithChildCheck(session) {
+  const aliveDescendants = getAliveDescendants(session.sessionId);
+
+  if (aliveDescendants.length > 0) {
+    const confirmed = await showArchiveChildrenConfirm(
+      session,
+      aliveDescendants,
+    );
+    if (!confirmed) return;
+
+    // Archive depth-first: deepest descendants first, then parent
+    const descendants = getDescendantsDepthFirst(session.sessionId);
+    for (const desc of descendants) {
+      try {
+        await window.api.archiveSession(desc.sessionId);
+      } catch (err) {
+        console.error("Failed to archive child session:", desc.sessionId, err);
+      }
+    }
+  }
+
+  try {
+    await window.api.archiveSession(session.sessionId);
+  } catch (err) {
+    showNotification(`Archive failed: ${err.message}`);
+  }
+}
+
+// Confirmation dialog for archiving a parent with alive descendants
+function showArchiveChildrenConfirm(session, aliveDescendants) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "offload-menu-overlay";
+    const count = aliveDescendants.length;
+    overlay.innerHTML = `
+      <div class="snapshot-dialog" style="max-width: 400px;">
+        <div class="snapshot-header">
+          <span>Archive with children?</span>
+          <button class="snapshot-close">\u2715</button>
+        </div>
+        <div style="padding: 16px; color: var(--text); font-size: 13px; line-height: 1.5;">
+          <p style="margin: 0 0 12px;">
+            <strong>${escapeHtml(session.intentionHeading || "This session")}</strong>
+            has ${count} running descendant${count > 1 ? "s" : ""}.
+          </p>
+          <p style="margin: 0 0 16px; color: var(--text-dim);">
+            All descendants will be archived first (deepest first).
+          </p>
+          <div style="display: flex; gap: 8px; justify-content: flex-end;">
+            <button class="inline-snapshot-restart" style="background: var(--border);" data-action="cancel">Cancel</button>
+            <button class="inline-snapshot-restart" data-action="confirm">Archive All</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    function close(result) {
+      document.removeEventListener("keydown", escHandler, true);
+      overlay.remove();
+      resolve(result);
+    }
+    function escHandler(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close(false);
+      }
+    }
+    document.addEventListener("keydown", escHandler, true);
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close(false);
+    });
+    overlay
+      .querySelector(".snapshot-close")
+      .addEventListener("click", () => close(false));
+    overlay
+      .querySelector('[data-action="cancel"]')
+      .addEventListener("click", () => close(false));
+    overlay
+      .querySelector('[data-action="confirm"]')
+      .addEventListener("click", () => close(true));
+  });
+}
+
 // Right-click context menu for sessions
 function showSessionContextMenu(e, session) {
   const existing = document.getElementById("session-context-menu");
@@ -412,11 +531,7 @@ function showSessionContextMenu(e, session) {
     const action = ev.target.dataset.action;
     menu.remove();
     if (action === "archive") {
-      try {
-        await window.api.archiveSession(session.sessionId);
-      } catch (err) {
-        console.error("Failed to archive session:", err);
-      }
+      await archiveWithChildCheck(session);
       await loadSessions();
     } else if (action === "unarchive") {
       try {
@@ -625,4 +740,5 @@ export {
   toggleChildrenExpanded,
   isChildrenExpanded,
   hasSessionChildren,
+  archiveWithChildCheck,
 };

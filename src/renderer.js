@@ -28,6 +28,7 @@ import {
   toggleChildrenExpanded,
   isChildrenExpanded,
   hasSessionChildren,
+  archiveWithChildCheck,
 } from "./session-sidebar.js";
 import {
   initTerminals,
@@ -557,12 +558,8 @@ async function archiveCurrentSession() {
     window.api.closeExternalTerminal(session.pid).catch(() => {});
   }
 
-  // Archive in background
-  try {
-    await window.api.archiveSession(archivingSessionId);
-  } catch (err) {
-    showNotification(`Archive failed: ${err.message}`);
-  }
+  // Archive in background (with child check + confirmation if needed)
+  await archiveWithChildCheck(session);
   await loadSessions();
 }
 
