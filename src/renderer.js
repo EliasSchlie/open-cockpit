@@ -301,8 +301,8 @@ async function resumeOffloadedSession(session) {
     return;
   }
 
-  // Transition: remove inline snapshot, set up fresh dock, attach terminal
-  removeInlineSnapshot();
+  // Transition: cache previous session's terminals, set up fresh dock, attach terminal
+  hideCurrentTerminals();
   initDockLayout();
 
   try {
@@ -366,6 +366,11 @@ async function resumeOffloadedSession(session) {
         lastAccessed: Date.now(),
       });
     }
+
+    // Reload intention file for the new session ID and update the watcher
+    const content = await window.api.readIntention(newSession.sessionId);
+    createEditor(content);
+    await window.api.watchIntention(newSession.sessionId);
   }
   await loadSessions();
 }
