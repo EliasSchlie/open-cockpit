@@ -884,8 +884,19 @@ async function reconcilePool() {
           }
           slot.sessionId = sessionId;
           slot.status = POOL_STATUS.FRESH;
+          createFreshIdleSignal(slot.pid, sessionId);
           changed = true;
         }
+      }
+
+      // Recreate missing pool-init idle signals for fresh slots.
+      // Signals can be lost on app restart or hook race conditions.
+      if (
+        slot.status === POOL_STATUS.FRESH &&
+        slot.sessionId &&
+        !fs.existsSync(path.join(IDLE_SIGNALS_DIR, String(slot.pid)))
+      ) {
+        createFreshIdleSignal(slot.pid, slot.sessionId);
       }
     }
 
