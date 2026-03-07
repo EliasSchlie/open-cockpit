@@ -420,13 +420,14 @@ function scheduleSave() {
 // --- Session switching ---
 
 function switchSession(direction) {
-  // Navigate between loaded sessions (idle + processing + typing), skip offloaded/fresh/dead
+  // Navigate between active sessions (idle + processing + typing) + archived
   const navigable = state.cachedSessions.filter(
     (s) =>
-      s.alive &&
-      (s.status === STATUS.IDLE ||
-        s.status === STATUS.PROCESSING ||
-        s.status === STATUS.TYPING),
+      (s.alive &&
+        (s.status === STATUS.IDLE ||
+          s.status === STATUS.PROCESSING ||
+          s.status === STATUS.TYPING)) ||
+      s.status === STATUS.ARCHIVED,
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
