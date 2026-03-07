@@ -12,6 +12,7 @@ import {
   findTerminalEntry,
 } from "./terminal-manager.js";
 import { formatShortcutDisplay } from "./command-palette.js";
+import { createOverlayDialog } from "./overlay-dialog.js";
 
 // --- Cross-module dependencies (set via initPoolUi) ---
 let _actions = {};
@@ -63,38 +64,47 @@ async function openSlotTerminalPopup(slot) {
     return;
   }
 
-  // Close existing popup if any (run its cleanup)
-  const existingPopup = document.getElementById("slot-terminal-popup");
-  if (existingPopup && existingPopup._cleanup) existingPopup._cleanup();
-  else if (existingPopup) existingPopup.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "slot-terminal-popup";
-  overlay.className = "offload-menu-overlay";
-
   const label =
     slot.intentionHeading ||
     slot.sessionId?.slice(0, 8) ||
     `slot-${slot.index}`;
 
-  overlay.innerHTML = `
-    <div class="slot-terminal-dialog">
-      <div class="slot-terminal-header">
-        <span class="slot-terminal-title">${escapeHtml(label)}</span>
-        <button class="snapshot-close slot-terminal-close">\u2715</button>
-      </div>
-      <div class="slot-terminal-mount"></div>
-    </div>
-  `;
+  const term = createTerminal();
+  const fitAddon = new FitAddon();
+  let resizeObserver = null;
 
-  document.body.appendChild(overlay);
+  const { overlay, close } = createOverlayDialog({
+    id: "slot-terminal-popup",
+    escapeClose: false,
+    closeSelector: ".slot-terminal-close",
+    html: `
+      <div class="slot-terminal-dialog">
+        <div class="slot-terminal-header">
+          <span class="slot-terminal-title">${escapeHtml(label)}</span>
+          <button class="snapshot-close slot-terminal-close">\u2715</button>
+        </div>
+        <div class="slot-terminal-mount"></div>
+      </div>
+    `,
+    onClose: () => {
+      if (resizeObserver) resizeObserver.disconnect();
+      popupTerminals.delete(slot.termId);
+      const otherEntry = findTerminalEntry(slot.termId);
+      if (otherEntry) {
+        window.api.ptyResize(
+          slot.termId,
+          otherEntry.term.cols,
+          otherEntry.term.rows,
+        );
+      } else {
+        window.api.ptyDetach(slot.termId).catch(() => {});
+      }
+      term.dispose();
+    },
+  });
 
   const mountEl = overlay.querySelector(".slot-terminal-mount");
-  const closeBtn = overlay.querySelector(".slot-terminal-close");
 
-  const term = createTerminal();
-
-  const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   term.open(mountEl);
 
@@ -102,7 +112,6 @@ async function openSlotTerminalPopup(slot) {
   wireTerminalInput(term, slot.termId);
 
   // Register in popupTerminals so global data handlers can route data here.
-  // Data is forwarded to both the main terminal entry (if any) and the popup entry.
   const popupEntry = { termId: slot.termId, term, fitAddon };
   popupTerminals.set(slot.termId, popupEntry);
 
@@ -110,9 +119,7 @@ async function openSlotTerminalPopup(slot) {
     await window.api.ptyAttach(slot.termId);
   } catch (err) {
     showNotification(`Failed to attach: ${err.message}`);
-    popupTerminals.delete(slot.termId);
-    term.dispose();
-    overlay.remove();
+    close();
     return;
   }
 
@@ -145,35 +152,8 @@ async function openSlotTerminalPopup(slot) {
     term.focus();
   });
 
-  const resizeObserver = new ResizeObserver(doFit);
+  resizeObserver = new ResizeObserver(doFit);
   resizeObserver.observe(mountEl);
-
-  // Cleanup function — also stored on overlay for programmatic close
-  const cleanup = () => {
-    resizeObserver.disconnect();
-    popupTerminals.delete(slot.termId);
-    // Only detach if there's no other terminal entry still using this termId
-    // (i.e. the session might be open in the main view)
-    const otherEntry = findTerminalEntry(slot.termId);
-    if (otherEntry) {
-      // Restore PTY size to the main tab's dimensions
-      window.api.ptyResize(
-        slot.termId,
-        otherEntry.term.cols,
-        otherEntry.term.rows,
-      );
-    } else {
-      window.api.ptyDetach(slot.termId).catch(() => {});
-    }
-    term.dispose();
-    overlay.remove();
-  };
-  overlay._cleanup = cleanup;
-
-  closeBtn.addEventListener("click", cleanup);
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) cleanup();
-  });
 }
 
 // --- Pool Health Badge ---
@@ -229,68 +209,63 @@ function renderPoolCountsHtml(health) {
     .join("&nbsp;&nbsp;&nbsp;");
 }
 
-function closePoolSettings(overlay) {
-  stopPoolSettingsPolling();
-  if (overlay._keyHandler) {
-    document.removeEventListener("keydown", overlay._keyHandler, true);
-  }
-  overlay.remove();
-}
-
 // --- Pool Settings Panel ---
 async function showPoolSettings() {
   stopPoolSettingsPolling();
-  const existing = document.getElementById("pool-settings");
-  if (existing) closePoolSettings(existing);
 
   const health = await window.api.poolHealth();
-
-  const overlay = document.createElement("div");
-  overlay.id = "pool-settings";
-  overlay.className = "offload-menu-overlay";
-
   const slotsHtml = renderPoolSlotsHtml(health);
   const countsHtml = renderPoolCountsHtml(health);
 
-  overlay.innerHTML = `
-    <div class="pool-settings-dialog">
-      <div class="pool-settings-header">
-        <span>Pool Settings</span>
-        <button class="snapshot-close pool-close">\u2715</button>
+  let keyHandler = null;
+  const { overlay, close } = createOverlayDialog({
+    id: "pool-settings",
+    escapeClose: false,
+    closeSelector: ".pool-close",
+    html: `
+      <div class="pool-settings-dialog">
+        <div class="pool-settings-header">
+          <span>Pool Settings</span>
+          <button class="snapshot-close pool-close">\u2715</button>
+        </div>
+        <div class="pool-settings-body">
+          <div class="pool-health-summary">${countsHtml}</div>
+          ${
+            health.initialized
+              ? `
+            <div class="pool-slots-list">${slotsHtml}</div>
+            <div class="pool-controls">
+              <label class="pool-size-label">
+                Pool size:
+                <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
+              </label>
+              <button class="offload-menu-btn pool-resize-btn">Resize</button>
+              <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
+              <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
+              <button class="offload-menu-btn pool-destroy-btn">Destroy</button>
+              <button class="offload-menu-btn pool-reinit-btn">Reinitialize</button>
+            </div>
+          `
+              : `
+            <div class="pool-controls">
+              <label class="pool-size-label">
+                Pool size:
+                <input type="number" class="pool-size-input" value="10" min="1" max="20">
+              </label>
+              <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
+            </div>
+          `
+          }
+        </div>
       </div>
-      <div class="pool-settings-body">
-        <div class="pool-health-summary">${countsHtml}</div>
-        ${
-          health.initialized
-            ? `
-          <div class="pool-slots-list">${slotsHtml}</div>
-          <div class="pool-controls">
-            <label class="pool-size-label">
-              Pool size:
-              <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
-            </label>
-            <button class="offload-menu-btn pool-resize-btn">Resize</button>
-            <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
-            <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
-            <button class="offload-menu-btn pool-destroy-btn">Destroy</button>
-            <button class="offload-menu-btn pool-reinit-btn">Reinitialize</button>
-          </div>
-        `
-            : `
-          <div class="pool-controls">
-            <label class="pool-size-label">
-              Pool size:
-              <input type="number" class="pool-size-input" value="10" min="1" max="20">
-            </label>
-            <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
-          </div>
-        `
-        }
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
+    `,
+    onClose: () => {
+      stopPoolSettingsPolling();
+      if (keyHandler) {
+        document.removeEventListener("keydown", keyHandler, true);
+      }
+    },
+  });
 
   // --- Keyboard navigation state ---
   // "top" = navigating between pool-slots-block and buttons
@@ -341,7 +316,7 @@ async function showPoolSettings() {
   // Apply initial selection
   applySelection();
 
-  overlay._keyHandler = (e) => {
+  keyHandler = (e) => {
     // Skip if a terminal popup is open on top
     if (document.getElementById("slot-terminal-popup")) return;
     // Skip if an input is focused (e.g. pool size number input)
@@ -356,7 +331,7 @@ async function showPoolSettings() {
         navLevel = "top";
         applySelection();
       } else {
-        closePoolSettings(overlay);
+        close();
       }
       return;
     }
@@ -387,16 +362,13 @@ async function showPoolSettings() {
         const item = items[topIndex];
         if (!item) return;
         if (item.classList.contains("pool-slots-list")) {
-          // Enter the slots block
           navLevel = "slots";
           slotIndex = 0;
           applySelection();
         } else {
-          // It's a button — click it
           item.click();
         }
       } else {
-        // Inside slots — open terminal popup for selected slot
         const rows = getSlotRows();
         const row = rows[slotIndex];
         if (row) row.click();
@@ -404,14 +376,7 @@ async function showPoolSettings() {
       return;
     }
   };
-  document.addEventListener("keydown", overlay._keyHandler, true);
-
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closePoolSettings(overlay);
-  });
-  overlay
-    .querySelector(".pool-close")
-    .addEventListener("click", () => closePoolSettings(overlay));
+  document.addEventListener("keydown", keyHandler, true);
 
   // Poll for health updates while dialog is open
   poolSettingsInterval = setInterval(async () => {
@@ -591,9 +556,6 @@ async function showPoolSettings() {
 
 // --- Shortcut Settings UI ---
 async function showShortcutSettings() {
-  const existing = document.getElementById("shortcut-settings");
-  if (existing) existing.remove();
-
   const shortcuts = await window.api.getShortcuts();
   shortcutConfig = shortcuts;
 
@@ -606,10 +568,6 @@ async function showShortcutSettings() {
       activeKeyHandler = null;
     }
   }
-
-  const overlay = document.createElement("div");
-  overlay.id = "shortcut-settings";
-  overlay.className = "offload-menu-overlay";
 
   const actionIds = Object.keys(SHORTCUT_LABELS);
   const rows = actionIds
@@ -625,43 +583,39 @@ async function showShortcutSettings() {
     })
     .join("");
 
-  overlay.innerHTML = `
-    <div class="shortcut-settings-dialog">
-      <div class="pool-settings-header">
-        <span>Keyboard Shortcuts</span>
-        <button class="close-dialog-btn">✕</button>
+  let escHandler = null;
+  const { overlay, close } = createOverlayDialog({
+    id: "shortcut-settings",
+    escapeClose: false,
+    closeSelector: ".close-dialog-btn",
+    html: `
+      <div class="shortcut-settings-dialog">
+        <div class="pool-settings-header">
+          <span>Keyboard Shortcuts</span>
+          <button class="close-dialog-btn">✕</button>
+        </div>
+        <div class="shortcut-settings-body">
+          ${rows}
+        </div>
       </div>
-      <div class="shortcut-settings-body">
-        ${rows}
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-
-  function closeDialog() {
-    cleanupRecording();
-    document.removeEventListener("keydown", escHandler, true);
-    overlay.remove();
-  }
+    `,
+    onClose: () => {
+      cleanupRecording();
+      if (escHandler) {
+        document.removeEventListener("keydown", escHandler, true);
+      }
+    },
+  });
 
   // Close on Escape (only when not recording a shortcut)
-  function escHandler(e) {
+  escHandler = (e) => {
     if (e.key === "Escape" && !activeKeyHandler) {
       e.preventDefault();
       e.stopPropagation();
-      closeDialog();
+      close();
     }
-  }
+  };
   document.addEventListener("keydown", escHandler, true);
-
-  // Close on overlay click or close button
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeDialog();
-  });
-  overlay
-    .querySelector(".close-dialog-btn")
-    .addEventListener("click", closeDialog);
 
   // Rebind: click key button → enter recording mode
   overlay.querySelectorAll(".shortcut-key-btn").forEach((btn) => {
