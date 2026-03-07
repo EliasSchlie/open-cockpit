@@ -35,6 +35,7 @@ const channels = [
   "archive-current-session",
   "open-in-cursor",
   "open-pool-settings",
+  "toggle-bell",
   "pool-slots-recovered",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
@@ -175,6 +176,7 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("open-in-cursor", () => callback()),
   onOpenPoolSettings: (callback) =>
     ipcRenderer.on("open-pool-settings", () => callback()),
+  onToggleBell: (callback) => ipcRenderer.on("toggle-bell", () => callback()),
 
   // Open in Cursor
   openInCursor: (cwd) => ipcRenderer.invoke("open-in-cursor", cwd),

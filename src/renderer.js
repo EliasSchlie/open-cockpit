@@ -7,6 +7,8 @@ import {
   sessionTerminals,
   showNotification,
   showToast,
+  toggleBellMuted,
+  syncBellButton,
 } from "./renderer-state.js";
 import { STATUS } from "./session-statuses.js";
 import {
@@ -820,6 +822,13 @@ window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });
 window.api.onOpenPoolSettings(() => showPoolSettings());
+window.api.onToggleBell(toggleBellMuted);
+
+// Bell toggle button
+document
+  .getElementById("bell-toggle-btn")
+  .addEventListener("click", toggleBellMuted);
+syncBellButton();
 
 // Pool slot recovery toast
 window.api.onPoolSlotsRecovered((slots) => {

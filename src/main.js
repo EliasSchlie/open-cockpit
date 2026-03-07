@@ -281,6 +281,11 @@ function buildMenu() {
           accelerator: accel("open-pool-settings"),
           click: () => send("open-pool-settings"),
         },
+        {
+          label: "Toggle Bell",
+          accelerator: accel("toggle-bell"),
+          click: () => send("toggle-bell"),
+        },
       ],
     },
     {

@@ -120,6 +120,8 @@ case "${1:-}" in
             disown
         else
             # tool/permission triggers write immediately (user is already waiting)
+            # Clear any pending deferred stop write so it doesn't overwrite this signal
+            rm -f "$signal_file.pending"
             printf '%s\n' "$signal_json" > "$signal_file"
         fi
         ;;

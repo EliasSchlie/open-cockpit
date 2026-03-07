@@ -6,6 +6,10 @@ import {
   STATUS_CLASSES,
   escapeHtml,
   showNotification,
+  isUserActive,
+  isBellMuted,
+  toggleBellMuted,
+  syncBellButton,
 } from "./renderer-state.js";
 import { STATUS } from "./session-statuses.js";
 import {
@@ -107,6 +111,7 @@ let prevSessionFingerprints = null;
 // Play a short bell tone via Web Audio API
 let bellCtx = null;
 function playBell() {
+  if (isBellMuted()) return;
   try {
     if (!bellCtx) bellCtx = new AudioContext();
     if (bellCtx.state === "suspended") bellCtx.resume();
@@ -221,9 +226,12 @@ async function loadSessions() {
   }
   prevSessionFingerprints = fingerprints;
 
-  // Bell when a session transitions to idle (finished processing)
-  // Skip child sessions (initiator === "model") — they shouldn't bing
+  // Bell when a session transitions to idle (finished processing).
+  // Skip child sessions (initiator === "model") — they shouldn't ring.
+  // Suppress for the currently-viewed session if the window is focused
+  // and the user has been active in the last 20 seconds.
   if (oldStatuses.size > 0) {
+    let shouldBell = false;
     for (const s of sessions) {
       if (
         s.status === STATUS.IDLE &&
@@ -231,10 +239,17 @@ async function loadSessions() {
         oldStatuses.has(s.sessionId) &&
         oldStatuses.get(s.sessionId) !== STATUS.IDLE
       ) {
-        playBell();
-        break;
+        const isViewing =
+          s.sessionId === state.currentSessionId &&
+          document.hasFocus() &&
+          isUserActive();
+        if (!isViewing) {
+          shouldBell = true;
+          break;
+        }
       }
     }
+    if (shouldBell) playBell();
   }
 
   // Full rebuild only when sessions actually changed

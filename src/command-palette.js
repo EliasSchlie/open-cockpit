@@ -1,5 +1,5 @@
 // Command palette: COMMANDS registry, shortcut display, pane navigation, palette UI
-import { state, dom } from "./renderer-state.js";
+import { state, dom, toggleBellMuted } from "./renderer-state.js";
 import {
   getFocusedTabId,
   focusLeafContent,
@@ -188,6 +188,12 @@ export function initCommandPalette(actions) {
       id: "shortcut-settings",
       label: "Keyboard Shortcuts",
       action: () => _actions.showShortcutSettings(),
+    },
+    {
+      id: "toggle-bell",
+      label: "Toggle Bell",
+      shortcutAction: "toggle-bell",
+      action: () => toggleBellMuted(),
     },
   ];
 
