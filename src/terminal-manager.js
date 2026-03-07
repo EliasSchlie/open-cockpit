@@ -19,6 +19,7 @@ import {
   teardownTerminalResize,
   disposeTerminalEntry,
   getFocusedTabId,
+  focusLeafContent,
 } from "./dock-helpers.js";
 
 // --- Cross-module dependencies (set via initTerminals) ---
@@ -375,14 +376,8 @@ export async function closeTerminal(index) {
   } else {
     // Focus the tab that's now active in the same leaf (dock already adjusted
     // activeTab index). Falls back to focusTerminal() if the leaf collapsed.
-    let focused = false;
-    if (state.dock && closedLeafId) {
-      const activeTabId = state.dock.getActiveTabInLeaf(closedLeafId);
-      if (activeTabId) {
-        state.dock.activateTab(activeTabId);
-        focused = true;
-      }
-    }
+    const focused =
+      state.dock && closedLeafId && focusLeafContent(state.dock, closedLeafId);
     if (!focused) focusTerminal();
   }
 

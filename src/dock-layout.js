@@ -30,6 +30,12 @@ export class DockLayout {
     this.lastFocusedLeafId = null;
   }
 
+  // --- Focus tracking ---
+
+  setFocusedLeaf(leafId) {
+    this.lastFocusedLeafId = leafId;
+  }
+
   // --- Public API ---
 
   registerTab(id, { type, label, closable = true, contentEl }) {
@@ -62,7 +68,7 @@ export class DockLayout {
     if (!leaf) return;
     if (!leaf.tabs.includes(tabId)) leaf.tabs.push(tabId);
     leaf.activeTab = leaf.tabs.indexOf(tabId);
-    this.lastFocusedLeafId = leaf.id;
+    this.setFocusedLeaf(leaf.id);
     this._patchLeaf(leaf);
   }
 
@@ -82,7 +88,7 @@ export class DockLayout {
       }
     });
     if (!targetLeaf) return;
-    this.lastFocusedLeafId = targetLeaf.id;
+    this.setFocusedLeaf(targetLeaf.id);
 
     // In-place update — avoid full DOM rebuild
     const leafEl = this.container.querySelector(
@@ -228,6 +234,10 @@ export class DockLayout {
   _cleanup() {
     if (!this.root) return;
     this.root = this._cleanNode(this.root);
+    // Clear stale focus ref if the leaf was removed
+    if (this.lastFocusedLeafId && !this._findLeaf(this.lastFocusedLeafId)) {
+      this.lastFocusedLeafId = null;
+    }
   }
 
   // Cleanup tree, then patch the leaf in-place if it survived — otherwise full rebuild.
@@ -325,7 +335,7 @@ export class DockLayout {
     this._cleanup();
     // Track the leaf where the tab landed
     const landedLeafId = this.getTabLeafId(tabId);
-    if (landedLeafId) this.lastFocusedLeafId = landedLeafId;
+    if (landedLeafId) this.setFocusedLeaf(landedLeafId);
     this._render();
     if (this.callbacks.onLayoutChange) this.callbacks.onLayoutChange();
   }
@@ -414,7 +424,7 @@ export class DockLayout {
       // Click → activate
       tab.addEventListener("click", () => {
         node.activeTab = i;
-        this.lastFocusedLeafId = node.id;
+        this.setFocusedLeaf(node.id);
         this._showActiveContent(node, leafEl);
         this._updateTabActive(tabList, i);
         window.dispatchEvent(new Event("dock-resize"));

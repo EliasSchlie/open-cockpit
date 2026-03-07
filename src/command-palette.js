@@ -317,7 +317,7 @@ function focusAdjacentPane(delta) {
     if (activeTabId === TAB_EDITOR && state.editorView)
       state.editorView.focus();
   } else {
-    focusLeafContent(state.dock, nextLeafId, state.terminals);
+    focusLeafContent(state.dock, nextLeafId);
   }
 }
 
