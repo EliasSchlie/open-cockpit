@@ -1,6 +1,18 @@
-# Open Cockpit
+<p align="center">
+  <img src="build/icon.png" width="128" alt="Open Cockpit icon" />
+</p>
 
-An Electron app for orchestrating multiple Claude Code sessions through a shared pool.
+<h1 align="center">Open Cockpit</h1>
+
+<p align="center">
+  Orchestrate multiple Claude Code sessions through a shared pool.
+  <br /><br />
+  <a href="https://github.com/EliasSchlie/open-cockpit/releases/latest"><strong>⬇️ Download for macOS</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="https://github.com/EliasSchlie/open-cockpit/releases">All releases</a>
+</p>
+
+---
 
 ## The problem
 
