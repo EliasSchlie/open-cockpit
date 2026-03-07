@@ -25,6 +25,8 @@ jobs:
       - run: npm run build
 
       - name: Build .dmg with electron-builder (ad-hoc signed)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --mac --publish never
 
       - name: Upload .dmg artifact

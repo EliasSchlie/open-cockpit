@@ -36,7 +36,6 @@
       "skills/**/*",
       ".claude-plugin/**/*"
     ],
-    "afterPack": "./build/afterPack.js",
     "mac": {
       "target": [
         {
@@ -46,8 +45,7 @@
             "arm64"
           ]
         }
-      ],
-      "identity": null
+      ]
     },
     "dmg": {
       "title": "Open Cockpit"
