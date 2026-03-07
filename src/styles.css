@@ -485,12 +485,11 @@ body {
   flex-shrink: 0;
 }
 
-.dock-editor-header-color-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
+/* Repo color border around all panes */
+#session-view.colored {
+  border: 2px solid var(--repo-color);
+  box-shadow: inset 0 0 12px
+    color-mix(in srgb, var(--repo-color) 25%, transparent);
 }
 
 .dock-editor-project {

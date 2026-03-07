@@ -122,17 +122,13 @@ async function selectSession(session) {
     ? `${session.project} — ${displayPath(session)}`
     : session.sessionId;
 
-  // Apply directory color to editor header
+  // Apply directory color as border around all panes
   const dirColor = getDirColor(session);
-  const header = state.editorContainer.querySelector(".dock-editor-header");
-  const existingBar = header.querySelector(".dock-editor-header-color-bar");
-  if (existingBar) existingBar.remove();
   if (dirColor) {
-    const colorBar = document.createElement("div");
-    colorBar.className = "dock-editor-header-color-bar";
-    colorBar.style.background = dirColor;
-    colorBar.style.boxShadow = `0 0 8px ${dirColor}`;
-    header.appendChild(colorBar);
+    dom.sessionView.style.setProperty("--repo-color", dirColor);
+    dom.sessionView.classList.add("colored");
+  } else {
+    dom.sessionView.classList.remove("colored");
   }
 
   // Offloaded/archived: show snapshot inline instead of a terminal
