@@ -41,10 +41,9 @@ export class DockLayout {
   }
 
   unregisterTab(id) {
-    this._removeTabFromTree(id);
+    const leaf = this._removeTabFromTree(id);
     this.tabs.delete(id);
-    this._cleanup();
-    this._render();
+    this._cleanupAndPatch(leaf);
   }
 
   setLayout(layout) {
@@ -62,13 +61,12 @@ export class DockLayout {
     if (!leaf) return;
     if (!leaf.tabs.includes(tabId)) leaf.tabs.push(tabId);
     leaf.activeTab = leaf.tabs.indexOf(tabId);
-    this._render();
+    this._patchLeaf(leaf);
   }
 
   removeTab(tabId) {
-    this._removeTabFromTree(tabId);
-    this._cleanup();
-    this._render();
+    const leaf = this._removeTabFromTree(tabId);
+    this._cleanupAndPatch(leaf);
   }
 
   activateTab(tabId) {
@@ -189,22 +187,36 @@ export class DockLayout {
     return result;
   }
 
+  // Remove a tab from its leaf and return the leaf (or null).
   _removeTabFromTree(tabId) {
+    let found = null;
     this._forEachLeaf((leaf) => {
       const idx = leaf.tabs.indexOf(tabId);
       if (idx !== -1) {
         leaf.tabs.splice(idx, 1);
         if (leaf.activeTab >= leaf.tabs.length)
           leaf.activeTab = Math.max(0, leaf.tabs.length - 1);
+        found = leaf;
         return true; // early exit — tab is in exactly one leaf
       }
     });
+    return found;
   }
 
   // Remove empty leaves, collapse single-child splits
   _cleanup() {
     if (!this.root) return;
     this.root = this._cleanNode(this.root);
+  }
+
+  // Cleanup tree, then patch the leaf in-place if it survived — otherwise full rebuild.
+  _cleanupAndPatch(leaf) {
+    this._cleanup();
+    if (leaf && leaf.tabs.length > 0 && this._findLeaf(leaf.id)) {
+      this._patchLeaf(leaf);
+    } else {
+      this._render();
+    }
   }
 
   _cleanNode(node) {
@@ -344,17 +356,10 @@ export class DockLayout {
     return el;
   }
 
-  _renderLeaf(node) {
-    const el = document.createElement("div");
-    el.className = "dock-leaf";
-    el.dataset.leafId = node.id;
-
-    // --- Tab bar ---
-    const tabBar = document.createElement("div");
-    tabBar.className = "dock-tab-bar";
-
-    const tabList = document.createElement("div");
-    tabList.className = "dock-tab-list";
+  // Populate a tab list element with tab buttons for the given leaf node.
+  // Shared by _renderLeaf (full build) and _patchLeaf (incremental update).
+  _populateTabList(tabList, node, leafEl) {
+    tabList.innerHTML = "";
 
     for (let i = 0; i < node.tabs.length; i++) {
       const tabId = node.tabs[i];
@@ -385,7 +390,7 @@ export class DockLayout {
       // Click → activate
       tab.addEventListener("click", () => {
         node.activeTab = i;
-        this._showActiveContent(node, el);
+        this._showActiveContent(node, leafEl);
         this._updateTabActive(tabList, i);
         window.dispatchEvent(new Event("dock-resize"));
         if (this.callbacks.onTabActivate) this.callbacks.onTabActivate(tabId);
@@ -408,6 +413,35 @@ export class DockLayout {
 
       tabList.appendChild(tab);
     }
+  }
+
+  // Update a single leaf's tab bar and content in-place (no full DOM rebuild).
+  _patchLeaf(leafNode) {
+    const leafEl = this.container.querySelector(
+      `[data-leaf-id="${leafNode.id}"]`,
+    );
+    if (!leafEl) {
+      this._render();
+      return;
+    }
+    const tabList = leafEl.querySelector(".dock-tab-list");
+    this._populateTabList(tabList, leafNode, leafEl);
+    this._showActiveContent(leafNode, leafEl);
+    window.dispatchEvent(new Event("dock-resize"));
+  }
+
+  _renderLeaf(node) {
+    const el = document.createElement("div");
+    el.className = "dock-leaf";
+    el.dataset.leafId = node.id;
+
+    // --- Tab bar ---
+    const tabBar = document.createElement("div");
+    tabBar.className = "dock-tab-bar";
+
+    const tabList = document.createElement("div");
+    tabList.className = "dock-tab-list";
+    this._populateTabList(tabList, node, el);
 
     tabBar.appendChild(tabList);
 
