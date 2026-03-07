@@ -501,6 +501,8 @@ async function archiveSession(sessionId) {
   // Kill any orphaned extra terminals for this session immediately
   killOrphanedTerminals(sessionId);
 
+  // Offloaded children are cascade-archived in getOffloadedSessions() on next
+  // session discovery pass — no need to duplicate that logic here.
   invalidateSessionsCache();
 }
 
