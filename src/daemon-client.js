@@ -1,4 +1,5 @@
 const net = require("net");
+const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { spawn: spawnChild } = require("child_process");
@@ -35,7 +36,7 @@ function isDaemonRunning() {
 
 function getDaemonExecPath() {
   if (process.platform !== "darwin") return process.execPath;
-  const link = os.homedir() + "/.open-cockpit/electron-node";
+  const link = path.join(os.homedir(), ".open-cockpit", "electron-node");
   try {
     const target = fs.readlinkSync(link);
     if (target === process.execPath) return link;

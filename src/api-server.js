@@ -1,5 +1,6 @@
 const net = require("net");
 const fs = require("fs");
+const { chmodSync } = require("./platform");
 
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
@@ -77,7 +78,7 @@ function createApiServer(socketPath, handlers, { onListening } = {}) {
   // the socket of a running instance.
   function tryListen() {
     server.listen(socketPath, () => {
-      fs.chmodSync(socketPath, 0o600);
+      chmodSync(socketPath, 0o600);
       if (onListening) onListening();
     });
   }

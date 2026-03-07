@@ -1,3 +1,10 @@
+// Detect origin from an environment string (env vars separated by spaces or null bytes).
+function detectOrigin(envStr) {
+  if (/\bOPEN_COCKPIT_POOL=1\b/.test(envStr)) return "pool";
+  if (/\bSUB_CLAUDE=1\b/.test(envStr)) return "sub-claude";
+  return "ext";
+}
+
 // Parse ps eww output to detect session origins for given PIDs.
 function parseOrigins(psOutput, pids) {
   const results = new Map();
@@ -5,17 +12,9 @@ function parseOrigins(psOutput, pids) {
   for (const pid of pids) {
     // ps right-aligns PIDs with variable whitespace
     const pidLine = lines.find((l) => new RegExp(`^\\s*${pid}\\s`).test(l));
-    let origin = "ext";
-    if (pidLine) {
-      if (/\bOPEN_COCKPIT_POOL=1\b/.test(pidLine)) {
-        origin = "pool";
-      } else if (/\bSUB_CLAUDE=1\b/.test(pidLine)) {
-        origin = "sub-claude";
-      }
-    }
-    results.set(pid, origin);
+    results.set(pid, pidLine ? detectOrigin(pidLine) : "ext");
   }
   return results;
 }
 
-module.exports = { parseOrigins };
+module.exports = { parseOrigins, detectOrigin };

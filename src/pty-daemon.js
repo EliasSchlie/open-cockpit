@@ -15,17 +15,20 @@ const fs = require("fs");
 const os = require("os");
 const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 const pty = require("node-pty");
+const {
+  getAllowedShells,
+  getDefaultShell,
+  joinPathEnv,
+  getExtraPathDirs,
+  chmodSync,
+} = require("./platform");
 
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
 const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
-const ALLOWED_SHELLS = new Set(["/bin/zsh", "/bin/bash", "/bin/sh"]);
-const EXTRA_PATH_DIRS = [
-  path.join(os.homedir(), ".claude", "local", "bin"),
-  path.join(os.homedir(), ".local", "bin"),
-  "/usr/local/bin",
-];
+const ALLOWED_SHELLS = getAllowedShells();
+const EXTRA_PATH_DIRS = getExtraPathDirs();
 
 function isAllowedCmd(cmd) {
   if (ALLOWED_SHELLS.has(cmd)) return true;
@@ -105,10 +108,7 @@ function cleanup() {
 // --- Command handlers ---
 
 function handleSpawn(socket, msg) {
-  const shell =
-    msg.cmd && isAllowedCmd(msg.cmd)
-      ? msg.cmd
-      : process.env.SHELL || "/bin/zsh";
+  const shell = msg.cmd && isAllowedCmd(msg.cmd) ? msg.cmd : getDefaultShell();
   const args = msg.args || [];
   const cwd = msg.cwd || os.homedir();
   const termId = nextTermId++;
@@ -117,7 +117,7 @@ function handleSpawn(socket, msg) {
   const cleanEnv = { ...process.env, TERM: "xterm-256color" };
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_SESSION_ID;
-  cleanEnv.PATH = [...EXTRA_PATH_DIRS, process.env.PATH || ""].join(":");
+  cleanEnv.PATH = joinPathEnv(EXTRA_PATH_DIRS, process.env.PATH);
 
   // Merge caller-provided env overrides (e.g. OPEN_COCKPIT_POOL for origin tagging)
   if (msg.env && typeof msg.env === "object") {
@@ -435,7 +435,7 @@ function startServer() {
 
   server.listen(SOCKET_PATH, () => {
     // Restrict socket to owner only
-    fs.chmodSync(SOCKET_PATH, 0o600);
+    chmodSync(SOCKET_PATH, 0o600);
     console.log(`[pty-daemon] Listening on ${SOCKET_PATH}`);
     // Write PID file so clients can check if daemon is alive
     secureWriteFileSync(

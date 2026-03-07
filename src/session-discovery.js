@@ -1,11 +1,15 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { execFile } = require("child_process");
-const { promisify } = require("util");
-const execFileAsync = promisify(execFile);
+const {
+  batchGetCwds: platformBatchGetCwds,
+  batchGetProcessEnvs,
+  readFileTail,
+  findFileRecursive,
+  isRootPath,
+} = require("./platform");
 const { sortSessions } = require("./sort-sessions");
-const { parseOrigins } = require("./parse-origins");
+const { parseOrigins, detectOrigin } = require("./parse-origins");
 const {
   parseTerminalHasInput,
   checkTerminalInputs,
@@ -209,8 +213,8 @@ function triggerPollOnWrite(termId) {
   }, TERMINAL_WRITE_DEBOUNCE_MS);
 }
 
-// Detect session origin by reading process environment via ps eww (macOS).
-// Batched: resolves all uncached PIDs in a single subprocess call.
+// Detect session origin by reading process environment.
+// macOS: ps eww, Linux: /proc/<pid>/environ, Windows: best-effort (defaults to "ext").
 async function batchDetectOrigins(pids) {
   const results = new Map();
   const uncached = [];
@@ -224,21 +228,30 @@ async function batchDetectOrigins(pids) {
   }
   if (uncached.length > 0) {
     try {
-      const { stdout } = await execFileAsync(
-        "ps",
-        ["eww", "-p", uncached.join(",")],
-        { encoding: "utf-8", timeout: 3000 },
-      );
-      const parsed = parseOrigins(stdout, uncached);
-      for (const [pid, origin] of parsed) {
-        originCache.set(pid, origin);
-        results.set(pid, origin);
+      const envData = await batchGetProcessEnvs(uncached);
+      if (envData.format === "raw-ps") {
+        // macOS: raw ps eww output for parseOrigins
+        const parsed = parseOrigins(envData.raw, uncached);
+        for (const [pid, origin] of parsed) {
+          originCache.set(pid, origin);
+          results.set(pid, origin);
+        }
+      } else if (envData.format === "per-pid") {
+        // Linux: per-PID environ strings
+        for (const pid of uncached) {
+          const origin = detectOrigin(envData.byPid.get(pid) || "");
+          originCache.set(pid, origin);
+          results.set(pid, origin);
+        }
+      } else {
+        // Windows/unavailable: default to ext
+        for (const pid of uncached) {
+          originCache.set(pid, "ext");
+          results.set(pid, "ext");
+        }
       }
     } catch (err) {
-      console.error(
-        "[main] Failed to detect session origins via ps:",
-        err.message,
-      );
+      console.error("[main] Failed to detect session origins:", err.message);
       for (const pid of uncached) {
         originCache.set(pid, "ext");
         results.set(pid, "ext");
@@ -251,12 +264,10 @@ async function batchDetectOrigins(pids) {
 async function findJsonlPath(sessionId) {
   if (jsonlPathCache.has(sessionId)) return jsonlPathCache.get(sessionId);
   try {
-    const { stdout: findOut } = await execFileAsync(
-      "find",
-      [CLAUDE_PROJECTS_DIR, "-name", `${sessionId}.jsonl`],
-      { encoding: "utf-8", timeout: 5000 },
+    const jsonlPath = await findFileRecursive(
+      CLAUDE_PROJECTS_DIR,
+      `${sessionId}.jsonl`,
     );
-    const jsonlPath = findOut.split("\n")[0].trim();
     if (jsonlPath) jsonlPathCache.set(sessionId, jsonlPath);
     return jsonlPath || null;
   } catch (err) {
@@ -291,10 +302,7 @@ async function getCwdFromJsonl(sessionId) {
     const jsonlPath = await findJsonlPath(sessionId);
     if (!jsonlPath) return null;
 
-    const { stdout: tail } = await execFileAsync("tail", ["-100", jsonlPath], {
-      encoding: "utf-8",
-      timeout: 3000,
-    });
+    const tail = await readFileTail(jsonlPath, 100);
     let cwd = "";
     for (const line of tail.split("\n")) {
       if (!line.trim()) continue;
@@ -517,29 +525,9 @@ async function findGitRoot(cwd) {
   return null;
 }
 
-// Batch lsof: get CWDs for all PIDs in one call (async, non-blocking)
+// Batch CWD detection: lsof on macOS, /proc on Linux, no-op on Windows
 async function batchGetCwds(pids) {
-  const cwdMap = new Map();
-  if (pids.length === 0) return cwdMap;
-  try {
-    const { stdout } = await execFileAsync(
-      "lsof",
-      ["-a", "-p", pids.join(","), "-d", "cwd", "-F", "pn"],
-      { encoding: "utf-8", timeout: 5000 },
-    );
-    // Parse lsof -F pn output: lines starting with 'p' = PID, 'n' = path
-    let currentPid = null;
-    for (const line of stdout.split("\n")) {
-      if (line.startsWith("p")) {
-        currentPid = line.slice(1);
-      } else if (line.startsWith("n") && currentPid) {
-        cwdMap.set(currentPid, line.slice(1));
-      }
-    }
-  } catch (err) {
-    console.error("[main] lsof failed to resolve session cwds:", err.message);
-  }
-  return cwdMap;
+  return platformBatchGetCwds(pids);
 }
 
 // Internal — not exported. Use getSessions() from other modules.
@@ -585,7 +573,7 @@ async function getSessionsUncached() {
     let cwd = alive ? cwdMap.get(String(pid)) || null : null;
 
     // Refine CWD via JSONL when lsof reports a generic directory
-    if (!cwd || cwd === os.homedir() || cwd === "/") {
+    if (!cwd || cwd === os.homedir() || isRootPath(cwd)) {
       const refined = await getCwdFromJsonl(sessionId);
       if (refined && fs.existsSync(refined) && refined !== os.homedir()) {
         cwd = refined;
