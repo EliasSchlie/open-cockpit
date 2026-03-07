@@ -489,6 +489,11 @@ async function archiveCurrentSession() {
     selectSession(idle);
   }
 
+  // Close external terminal if this is an ext/sub-claude session
+  if (session.origin !== "pool" && session.alive && session.pid) {
+    window.api.closeExternalTerminal(session.pid).catch(() => {});
+  }
+
   // Archive in background
   try {
     await window.api.archiveSession(archivingSessionId);

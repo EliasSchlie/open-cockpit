@@ -497,6 +497,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("focus-external-terminal", (_e, pid) =>
     poolManager.focusExternalTerminal(pid),
   );
+  ipcMain.handle("close-external-terminal", (_e, pid) =>
+    poolManager.closeExternalTerminal(pid),
+  );
   ipcMain.handle("open-in-cursor", (_e, cwd) => poolManager.openInCursor(cwd));
   ipcMain.handle(
     "offload-session",

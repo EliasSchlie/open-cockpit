@@ -50,9 +50,11 @@ contextBridge.exposeInMainWorld("api", {
   onSessionsChanged: (callback) =>
     ipcRenderer.on("sessions-changed", () => callback()),
 
-  // External terminal focus
+  // External terminal focus / close
   focusExternalTerminal: (pid) =>
     ipcRenderer.invoke("focus-external-terminal", pid),
+  closeExternalTerminal: (pid) =>
+    ipcRenderer.invoke("close-external-terminal", pid),
 
   // Pool / offload
   offloadSession: (sessionId, termId, claudeSessionId, sessionInfo) =>
