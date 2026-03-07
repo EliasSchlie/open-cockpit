@@ -46,6 +46,7 @@ import {
   focusTerminal,
   getActiveTermIndex,
   dockRegisterTerminal,
+  cycleTabInFocusedLeaf,
 } from "./terminal-manager.js";
 import {
   initPoolUi,
@@ -632,6 +633,7 @@ initCommandPalette({
   getActiveTermIndex,
   closeTerminal,
   switchToTerminal,
+  cycleTabInFocusedLeaf,
   jumpToRecentIdle,
   archiveCurrentSession,
   toggleSidebar,
@@ -722,20 +724,9 @@ window.api.onCloseTerminalTab(() => {
   if (i >= 0) closeTerminal(i);
 });
 
-window.api.onNextTerminalTab(() => {
-  if (state.terminals.length > 1) {
-    switchToTerminal((getActiveTermIndex() + 1) % state.terminals.length);
-  }
-});
+window.api.onNextTerminalTab(() => cycleTabInFocusedLeaf(1));
 
-window.api.onPrevTerminalTab(() => {
-  if (state.terminals.length > 1) {
-    switchToTerminal(
-      (getActiveTermIndex() - 1 + state.terminals.length) %
-        state.terminals.length,
-    );
-  }
-});
+window.api.onPrevTerminalTab(() => cycleTabInFocusedLeaf(-1));
 
 window.api.onSwitchTerminalTab((index) => {
   if (index < state.terminals.length) switchToTerminal(index);

@@ -131,6 +131,14 @@ export class DockLayout {
     this._handleDrop(tabId, leafId, direction);
   }
 
+  cycleTabInLeaf(leafId, direction) {
+    const leaf = this._findLeaf(leafId);
+    if (!leaf || leaf.tabs.length < 2) return;
+    const nextIdx =
+      (leaf.activeTab + direction + leaf.tabs.length) % leaf.tabs.length;
+    this.activateTab(leaf.tabs[nextIdx]);
+  }
+
   destroy() {
     this._detachAllContent();
     this.container.innerHTML = "";

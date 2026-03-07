@@ -18,6 +18,7 @@ import {
   setupTerminalResize,
   teardownTerminalResize,
   disposeTerminalEntry,
+  getFocusedTabId,
 } from "./dock-helpers.js";
 
 // --- Cross-module dependencies (set via initTerminals) ---
@@ -308,6 +309,16 @@ export function switchToTerminal(index) {
   if (entry.dockTabId && state.dock) {
     state.dock.activateTab(entry.dockTabId);
   }
+}
+
+// Cycle to the next/prev tab within the focused pane.
+// direction: +1 for next, -1 for previous.
+export function cycleTabInFocusedLeaf(direction) {
+  if (!state.dock) return;
+  const focusedTabId = getFocusedTabId(state.dock, dom.dockContainer);
+  if (!focusedTabId) return;
+  const leafId = state.dock.getTabLeafId(focusedTabId);
+  if (leafId) state.dock.cycleTabInLeaf(leafId, direction);
 }
 
 export async function closeTerminal(index) {

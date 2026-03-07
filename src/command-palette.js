@@ -57,24 +57,13 @@ export function initCommandPalette(actions) {
       id: "next-tab",
       label: "Next Terminal Tab",
       shortcutAction: "next-tab",
-      action: () => {
-        if (state.terminals.length > 1)
-          _actions.switchToTerminal(
-            (_actions.getActiveTermIndex() + 1) % state.terminals.length,
-          );
-      },
+      action: () => _actions.cycleTabInFocusedLeaf(1),
     },
     {
       id: "prev-tab",
       label: "Previous Terminal Tab",
       shortcutAction: "prev-tab",
-      action: () => {
-        if (state.terminals.length > 1)
-          _actions.switchToTerminal(
-            (_actions.getActiveTermIndex() - 1 + state.terminals.length) %
-              state.terminals.length,
-          );
-      },
+      action: () => _actions.cycleTabInFocusedLeaf(-1),
     },
     {
       id: "jump-recent-idle",
