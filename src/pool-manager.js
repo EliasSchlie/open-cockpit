@@ -501,23 +501,8 @@ async function archiveSession(sessionId) {
   // Kill any orphaned extra terminals for this session immediately
   killOrphanedTerminals(sessionId);
 
-  // Cascade: archive offloaded children that aren't already archived.
-  // Without this, sub-agent sessions offloaded before the parent dies
-  // stay in "Recent" forever.
-  const graph = readSessionGraph();
-  for (const [childId, entry] of Object.entries(graph)) {
-    if (entry.parentSessionId !== sessionId) continue;
-    const childMeta = readOffloadMeta(childId);
-    if (childMeta && !childMeta.archived) {
-      childMeta.archived = true;
-      childMeta.archivedAt = childMeta.archivedAt || new Date().toISOString();
-      secureWriteFileSync(
-        path.join(OFFLOADED_DIR, childId, "meta.json"),
-        JSON.stringify(childMeta, null, 2),
-      );
-    }
-  }
-
+  // Offloaded children are cascade-archived in getOffloadedSessions() on next
+  // session discovery pass — no need to duplicate that logic here.
   invalidateSessionsCache();
 }
 
