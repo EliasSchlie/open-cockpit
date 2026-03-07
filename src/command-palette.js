@@ -200,6 +200,12 @@ export function initCommandPalette(actions) {
       shortcutAction: "toggle-bell",
       action: () => toggleBellMuted(),
     },
+    {
+      id: "session-info",
+      label: "Session Info",
+      shortcutAction: "session-info",
+      action: () => _actions.openSessionInfo(),
+    },
   ];
 
   // Also add Tab 1-9 commands

@@ -58,6 +58,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
 | `Alt+Right` | Toggle Child Sessions (expand/collapse) |
 | `Alt+Shift+Down` / `Up` | Next / Previous Child Session |
+| `Cmd+I` | Session Info |
 | `Cmd+Shift+B` | Toggle Bell (mute/unmute notifications) |
 | *(unbound)* | Toggle Pane Focus (editor ↔ terminal) |
 | *(unbound)* | Split Right |

@@ -1360,3 +1360,137 @@ body.dock-resizing-v {
     transform: translateY(10px);
   }
 }
+
+/* Session Info overlay */
+.stats-dialog {
+  width: 580px;
+}
+
+.stats-content {
+  padding: 16px;
+}
+
+.stats-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.stats-error {
+  padding: 20px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.stats-tab-panel {
+  display: none;
+}
+
+.stats-tab-panel.active {
+  display: block;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.stats-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stats-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stats-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.stats-cost {
+  color: #4ec9b0;
+}
+
+.stats-model {
+  color: var(--accent);
+}
+
+.stats-section {
+  margin-top: 20px;
+}
+
+.stats-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.stats-totals {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+/* Sub-agent table */
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.stats-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-dim);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-table td {
+  padding: 6px 8px;
+  color: var(--text);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stats-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-sub-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Top models in All Sessions tab */
+.stats-model-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+}
+
+.stats-model-row .stats-model {
+  font-weight: 500;
+}
+
+.stats-model-row .stats-num {
+  color: var(--text-dim);
+  font-size: 12px;
+}

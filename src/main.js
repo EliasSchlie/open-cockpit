@@ -28,6 +28,7 @@ const daemonClient = require("./daemon-client");
 const sessionDiscovery = require("./session-discovery");
 const poolManager = require("./pool-manager");
 const apiHandlersModule = require("./api-handlers");
+const sessionStats = require("./session-stats");
 const autoUpdater = require("./auto-updater");
 const { checkFirstRun } = require("./first-run");
 
@@ -286,6 +287,11 @@ function buildMenu() {
           label: "Command Palette",
           accelerator: accel("toggle-command-palette"),
           click: () => send("toggle-command-palette"),
+        },
+        {
+          label: "Session Info",
+          accelerator: accel("session-info"),
+          click: () => send("session-info"),
         },
         {
           label: "Settings",
@@ -628,6 +634,14 @@ app.whenReady().then(async () => {
     cachedAppVersion = "unknown";
   }
   ipcMain.handle("get-app-version", () => cachedAppVersion);
+
+  // Session stats (on-demand only)
+  ipcMain.handle("get-session-stats", (_e, sessionId) =>
+    sessionStats.getSessionStats(sessionId),
+  );
+  ipcMain.handle("get-all-session-stats", () =>
+    sessionStats.getAllSessionStats(),
+  );
 
   // IPC handlers for shortcut settings
   ipcMain.handle("get-shortcuts", () => getAllShortcuts());
