@@ -1360,22 +1360,26 @@ async function openInCursor(cwd) {
 // `action` is the AppleScript code to run inside the matched session block (has vars w, t, s).
 // `resultValue` is the string the AppleScript returns on success.
 // Returns { app: "iTerm" } on success, null otherwise.
-function withITermSessionByPid(pid, action, resultValue) {
-  const { execFileSync } = require("child_process");
+async function withITermSessionByPid(pid, action, resultValue) {
   const EXEC_TIMEOUT = 3000;
 
   let tty;
   try {
-    tty = execFileSync("ps", ["-p", String(pid), "-o", "tty="], {
-      encoding: "utf-8",
-    }).trim();
+    const { stdout } = await execFileAsync(
+      "ps",
+      ["-p", String(pid), "-o", "tty="],
+      {
+        timeout: EXEC_TIMEOUT,
+      },
+    );
+    tty = stdout.trim();
   } catch {
     return null;
   }
   if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty)) return null;
 
   try {
-    const result = execFileSync(
+    const { stdout } = await execFileAsync(
       "osascript",
       [
         "-e",
@@ -1396,9 +1400,9 @@ tell application "iTerm"
   return "not_found"
 end tell`,
       ],
-      { encoding: "utf-8", timeout: EXEC_TIMEOUT },
-    ).trim();
-    if (result === resultValue) return { app: "iTerm" };
+      { timeout: EXEC_TIMEOUT },
+    );
+    if (stdout.trim() === resultValue) return { app: "iTerm" };
   } catch (err) {
     console.error(
       `[main] iTerm ${resultValue} via osascript failed:`,
@@ -1410,10 +1414,10 @@ end tell`,
 
 // Close the external terminal where a Claude session is running.
 // Returns { closed: true, app } or { closed: false }.
-function closeExternalTerminal(pid) {
+async function closeExternalTerminal(pid) {
   if (!/^\d+$/.test(String(pid))) return { closed: false };
 
-  const match = withITermSessionByPid(pid, "close s", "closed");
+  const match = await withITermSessionByPid(pid, "close s", "closed");
   if (match) return { closed: true, ...match };
 
   // Fallback: kill the process (terminal app will close the tab on exit)
@@ -1427,10 +1431,10 @@ function closeExternalTerminal(pid) {
 
 // Try to focus the external terminal (iTerm or Cursor) where a Claude session is running.
 // Returns { focused: true, app } or { focused: false }.
-function focusExternalTerminal(pid) {
+async function focusExternalTerminal(pid) {
   if (!/^\d+$/.test(String(pid))) return { focused: false };
 
-  const match = withITermSessionByPid(
+  const match = await withITermSessionByPid(
     pid,
     "select t\n          set index of w to 1\n          activate",
     "focused",
@@ -1438,7 +1442,6 @@ function focusExternalTerminal(pid) {
   if (match) return { focused: true, ...match };
 
   // Try Cursor / VS Code: walk process tree to find terminal app ancestor
-  const { execFileSync } = require("child_process");
   const EXEC_TIMEOUT = 3000;
   const TERMINAL_APPS = [
     { match: /\/Cursor(\.app\/|\s|$)/, app: "Cursor", activate: "Cursor" },
@@ -1451,18 +1454,22 @@ function focusExternalTerminal(pid) {
   try {
     let checkPid = String(pid);
     for (let i = 0; i < 10; i++) {
-      const ppid = execFileSync("ps", ["-p", checkPid, "-o", "ppid="], {
-        encoding: "utf-8",
-        timeout: EXEC_TIMEOUT,
-      }).trim();
+      const { stdout: ppidOut } = await execFileAsync(
+        "ps",
+        ["-p", checkPid, "-o", "ppid="],
+        { timeout: EXEC_TIMEOUT },
+      );
+      const ppid = ppidOut.trim();
       if (!ppid || ppid === "0" || ppid === "1") break;
-      const pname = execFileSync("ps", ["-p", ppid, "-o", "comm="], {
-        encoding: "utf-8",
-        timeout: EXEC_TIMEOUT,
-      }).trim();
+      const { stdout: pnameOut } = await execFileAsync(
+        "ps",
+        ["-p", ppid, "-o", "comm="],
+        { timeout: EXEC_TIMEOUT },
+      );
+      const pname = pnameOut.trim();
       for (const { match: m, app, activate } of TERMINAL_APPS) {
         if (m.test(pname)) {
-          execFileSync("osascript", [
+          await execFileAsync("osascript", [
             "-e",
             `tell application "${activate}" to activate`,
           ]);
