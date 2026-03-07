@@ -650,47 +650,54 @@ dom.refreshBtn.addEventListener("click", async () => {
   loadSessions();
 });
 
+let newSessionInProgress = false;
 dom.newSessionBtn.addEventListener("click", async () => {
-  // Check pool is initialized
-  const pool = await window.api.poolRead();
-  if (!pool) {
-    showNotification("Pool not initialized — open pool settings");
-    return;
-  }
+  if (newSessionInProgress) return;
+  newSessionInProgress = true;
+  try {
+    // Check pool is initialized
+    const pool = await window.api.poolRead();
+    if (!pool) {
+      showNotification("Pool not initialized — open pool settings");
+      return;
+    }
 
-  // Check for setup scripts before acquiring a slot
-  let selectedScript = null;
-  const scripts = await window.api.listSetupScripts();
-  if (scripts.length > 0) {
-    selectedScript = await showSetupScriptPicker(scripts);
-    // null means "None" or Escape — proceed without script
-  }
+    // Check for setup scripts before acquiring a slot
+    let selectedScript = null;
+    const scripts = await window.api.listSetupScripts();
+    if (scripts.length > 0) {
+      selectedScript = await showSetupScriptPicker(scripts);
+      // null means "None" or Escape — proceed without script
+    }
 
-  const freshSlot = await acquireFreshSlot();
-  if (!freshSlot) {
-    showNotification(
-      "All pool slots are busy — wait for a session to finish or resize pool",
-    );
-    return;
-  }
-
-  await selectSession(freshSlot);
-
-  // Type setup script into the session's terminal
-  if (selectedScript) {
-    const content = await window.api.readSetupScript(selectedScript);
-    if (content) {
-      const poolData = await window.api.poolRead();
-      const slot = poolData?.slots.find(
-        (s) => s.sessionId === freshSlot.sessionId,
+    const freshSlot = await acquireFreshSlot();
+    if (!freshSlot) {
+      showNotification(
+        "All pool slots are busy — wait for a session to finish or resize pool",
       );
-      if (slot) {
-        await typeSetupScript(slot.termId, content);
+      return;
+    }
+
+    await selectSession(freshSlot);
+
+    // Type setup script into the session's terminal
+    if (selectedScript) {
+      const content = await window.api.readSetupScript(selectedScript);
+      if (content) {
+        const poolData = await window.api.poolRead();
+        const slot = poolData?.slots.find(
+          (s) => s.sessionId === freshSlot.sessionId,
+        );
+        if (slot) {
+          await typeSetupScript(slot.termId, content);
+        }
       }
     }
-  }
 
-  await loadSessions();
+    await loadSessions();
+  } finally {
+    newSessionInProgress = false;
+  }
 });
 
 // --- IPC event handlers ---

@@ -111,7 +111,7 @@ async function getEffectiveSlotStatus(slot) {
   if (session.status === STATUS.IDLE) return POOL_STATUS.IDLE;
   if (session.status === STATUS.PROCESSING) return POOL_STATUS.BUSY;
   if (session.status === STATUS.FRESH) return POOL_STATUS.FRESH;
-  if (session.status === STATUS.TYPING) return STATUS.TYPING;
+  if (session.status === STATUS.TYPING) return POOL_STATUS.FRESH;
   return slot.status;
 }
 
@@ -141,15 +141,19 @@ function waitForSessionIdle(sessionId, timeoutMs = 300000) {
 const sharedHandlers = {
   "get-sessions": async () => {
     const sessions = await getSessions();
-    await syncPoolStatuses(sessions);
-    const pool = readPool();
+    // syncPoolStatuses returns the pool with up-to-date slot statuses.
+    // We annotate poolStatus here (not in getSessions) to avoid stale reads.
+    const pool = await syncPoolStatuses(sessions);
     if (pool) {
       const slotMap = new Map(
         pool.slots.filter((s) => s.sessionId).map((s) => [s.sessionId, s]),
       );
       for (const s of sessions) {
         const slot = slotMap.get(s.sessionId);
-        if (slot?.pinnedUntil) s.pinnedUntil = slot.pinnedUntil;
+        if (slot) {
+          s.poolStatus = slot.status;
+          if (slot.pinnedUntil) s.pinnedUntil = slot.pinnedUntil;
+        }
       }
     }
     enrichSessionsWithGraphData(sessions);
@@ -384,7 +388,7 @@ function buildApiHandlers() {
   handlers["pool-result"] = async (msg) => {
     const { slot } = resolveSlot(msg);
     const status = await getEffectiveSlotStatus(slot);
-    if (status === POOL_STATUS.BUSY || status === STATUS.PROCESSING) {
+    if (status === POOL_STATUS.BUSY) {
       throw new Error("Session is still running");
     }
     const buffer = await getTerminalBuffer(slot.termId);

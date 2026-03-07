@@ -147,7 +147,12 @@ function syncStatuses(pool, sessions) {
     let newStatus = slot.status;
     if (session.status === STATUS.IDLE) newStatus = POOL_STATUS.IDLE;
     else if (session.status === STATUS.PROCESSING) newStatus = POOL_STATUS.BUSY;
-    else if (session.status === STATUS.FRESH) newStatus = POOL_STATUS.FRESH;
+    else if (
+      session.status === STATUS.FRESH ||
+      session.status === STATUS.TYPING
+    ) {
+      newStatus = POOL_STATUS.FRESH;
+    }
 
     if (newStatus !== slot.status) {
       slot.status = newStatus;
