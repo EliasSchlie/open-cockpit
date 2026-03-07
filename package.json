@@ -14,7 +14,7 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "dev:own-pool": "npm run build && electron . --dev --own-pool",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "command -v electron-builder >/dev/null && electron-builder install-app-deps || true",
     "prepare": "git config core.hooksPath .githooks",
     "test": "vitest run",
     "test:watch": "vitest",
