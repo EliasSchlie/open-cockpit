@@ -17,19 +17,6 @@ Pool state lives in `~/.open-cockpit/pool.json`.
 
 > **Pool init and resize run `claude` to create new slots.** This may cause any currently-running Bash tool calls from other Claude sessions to lose output. Plan init before work starts or during idle periods.
 
-## Verbosity Levels
+## Overprovisioning
 
-Use `-v` before any output command to filter what you see:
-
-| Level | What you get |
-|-------|-------------|
-| `raw` (default) | Terminal buffer as-is (ANSI codes included) |
-| `full` | Terminal buffer with ANSI stripped |
-| `conversation` | All user + assistant messages from JSONL transcript |
-| `response` | Last assistant message only (cleanest for programmatic use) |
-
-```bash
-cockpit-cli -v response result "$id"
-cockpit-cli -v conversation wait "$id"
-cockpit-cli -v full capture "$id"
-```
+Sub-agents, other Claude instances, and hooks all consume slots. A pool that looks big enough at launch saturates quickly once nested work kicks in. Start larger than you think you need.
