@@ -10,6 +10,8 @@
  * @param {boolean} [options.escapeClose=true] — close on Escape key
  * @param {string} [options.closeSelector=".snapshot-close"] — close button CSS selector
  * @param {Function} [options.onClose] — called when dialog closes (via any method)
+ * @param {Function} [options.onKeydown] — custom keydown handler (receives event + close fn).
+ *   When provided, replaces the built-in Escape handler entirely.
  * @returns {{ overlay: HTMLElement, close: () => void }}
  */
 export function createOverlayDialog({
@@ -18,6 +20,7 @@ export function createOverlayDialog({
   escapeClose = true,
   closeSelector = ".snapshot-close",
   onClose,
+  onKeydown,
 }) {
   if (id) {
     const existing = document.getElementById(id);
@@ -34,12 +37,14 @@ export function createOverlayDialog({
 
   document.body.appendChild(overlay);
 
+  const hasKeyHandler = onKeydown || escapeClose;
+
   let closed = false;
   function close() {
     if (closed) return;
     closed = true;
-    if (escapeClose) {
-      document.removeEventListener("keydown", escHandler, true);
+    if (hasKeyHandler) {
+      document.removeEventListener("keydown", keyHandler, true);
     }
     overlay.remove();
     if (onClose) onClose();
@@ -48,16 +53,18 @@ export function createOverlayDialog({
   // Store close for programmatic cleanup (e.g. dedup on next open)
   overlay._cleanup = close;
 
-  function escHandler(e) {
-    if (e.key === "Escape") {
+  function keyHandler(e) {
+    if (onKeydown) {
+      onKeydown(e, close);
+    } else if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
       close();
     }
   }
 
-  if (escapeClose) {
-    document.addEventListener("keydown", escHandler, true);
+  if (hasKeyHandler) {
+    document.addEventListener("keydown", keyHandler, true);
   }
 
   overlay.addEventListener("click", (e) => {
@@ -87,46 +94,58 @@ export function showConfirmDialog({
   cancelSelector = '[data-action="cancel"]',
 }) {
   return new Promise((resolve) => {
+    let resolved = false;
+
+    function finish(result) {
+      if (resolved) return;
+      resolved = true;
+      if (result) {
+        // Bypass onClose (which resolves false) — detach overlay directly
+        // close() still runs for cleanup (keyHandler removal) but onClose
+        // won't double-resolve because of the `resolved` guard
+        resolve(true);
+      }
+      close();
+    }
+
     const { overlay, close } = createOverlayDialog({
       html,
       escapeClose: false,
-      onClose: () => resolve(false),
+      onClose: () => {
+        if (!resolved) resolve(false);
+      },
+      onKeydown(e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+        } else if (e.key === "Tab" && buttons.length > 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          const idx = buttons.indexOf(document.activeElement);
+          const next = e.shiftKey
+            ? (idx - 1 + buttons.length) % buttons.length
+            : (idx + 1) % buttons.length;
+          buttons[next].focus();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(document.activeElement !== cancelBtn);
+        }
+      },
     });
-
-    // Escape → cancel
-    function escHandler(e) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        close(); // triggers onClose → resolve(false)
-      }
-    }
-    document.addEventListener("keydown", escHandler, true);
-
-    // Override close to also clean up our Escape handler
-    const origClose = close;
-    const wrappedClose = (result) => {
-      document.removeEventListener("keydown", escHandler, true);
-      if (result === true) {
-        // Resolve true before removing overlay
-        overlay.remove();
-        resolve(true);
-      } else {
-        origClose(); // triggers onClose → resolve(false)
-      }
-    };
-
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) wrappedClose(false);
-    });
-
-    if (cancelSelector) {
-      const btn = overlay.querySelector(cancelSelector);
-      if (btn) btn.addEventListener("click", () => wrappedClose(false));
-    }
 
     const confirmBtn = overlay.querySelector(confirmSelector);
-    if (confirmBtn)
-      confirmBtn.addEventListener("click", () => wrappedClose(true));
+    const cancelBtn = cancelSelector
+      ? overlay.querySelector(cancelSelector)
+      : null;
+    const buttons = [confirmBtn, cancelBtn].filter(Boolean);
+
+    // Auto-focus confirm button (default action on Enter)
+    if (confirmBtn) confirmBtn.focus();
+
+    if (cancelBtn) cancelBtn.addEventListener("click", () => finish(false));
+
+    if (confirmBtn) confirmBtn.addEventListener("click", () => finish(true));
   });
 }
