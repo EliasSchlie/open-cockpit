@@ -1356,29 +1356,24 @@ async function openInCursor(cwd) {
   await execFileAsync("open", ["-a", "Cursor", cwd]);
 }
 
-// Try to focus the external terminal (iTerm or Cursor) where a Claude session is running.
-// Returns { focused: true, app: "iTerm"/"Cursor" } or { focused: false }.
-function focusExternalTerminal(pid) {
-  if (!/^\d+$/.test(String(pid))) return { focused: false };
-
+// Run an AppleScript action on the iTerm session matching a PID's TTY.
+// `action` is the AppleScript code to run inside the matched session block (has vars w, t, s).
+// `resultValue` is the string the AppleScript returns on success.
+// Returns { app: "iTerm" } on success, null otherwise.
+function withITermSessionByPid(pid, action, resultValue) {
   const { execFileSync } = require("child_process");
+  const EXEC_TIMEOUT = 3000;
 
-  // Get the TTY of the Claude process
   let tty;
   try {
     tty = execFileSync("ps", ["-p", String(pid), "-o", "tty="], {
       encoding: "utf-8",
     }).trim();
   } catch {
-    /* process may have exited — can't determine TTY */
-    return { focused: false };
+    return null;
   }
-  if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty))
-    return { focused: false };
+  if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty)) return null;
 
-  const EXEC_TIMEOUT = 3000;
-
-  // Try iTerm: find the session with this TTY and focus it
   try {
     const result = execFileSync(
       "osascript",
@@ -1392,10 +1387,8 @@ tell application "iTerm"
     repeat with t in tabs of w
       repeat with s in sessions of t
         if tty of s ends with "${tty}" then
-          select t
-          set index of w to 1
-          activate
-          return "focused"
+          ${action}
+          return "${resultValue}"
         end if
       end repeat
     end repeat
@@ -1405,15 +1398,48 @@ end tell`,
       ],
       { encoding: "utf-8", timeout: EXEC_TIMEOUT },
     ).trim();
-    if (result === "focused") return { focused: true, app: "iTerm" };
+    if (result === resultValue) return { app: "iTerm" };
   } catch (err) {
     console.error(
-      "[main] iTerm focus check via osascript failed:",
+      `[main] iTerm ${resultValue} via osascript failed:`,
       err.message,
     );
   }
+  return null;
+}
+
+// Close the external terminal where a Claude session is running.
+// Returns { closed: true, app } or { closed: false }.
+function closeExternalTerminal(pid) {
+  if (!/^\d+$/.test(String(pid))) return { closed: false };
+
+  const match = withITermSessionByPid(pid, "close s", "closed");
+  if (match) return { closed: true, ...match };
+
+  // Fallback: kill the process (terminal app will close the tab on exit)
+  try {
+    process.kill(Number(pid), "SIGTERM");
+    return { closed: true, app: "process" };
+  } catch {
+    return { closed: false };
+  }
+}
+
+// Try to focus the external terminal (iTerm or Cursor) where a Claude session is running.
+// Returns { focused: true, app } or { focused: false }.
+function focusExternalTerminal(pid) {
+  if (!/^\d+$/.test(String(pid))) return { focused: false };
+
+  const match = withITermSessionByPid(
+    pid,
+    "select t\n          set index of w to 1\n          activate",
+    "focused",
+  );
+  if (match) return { focused: true, ...match };
 
   // Try Cursor / VS Code: walk process tree to find terminal app ancestor
+  const { execFileSync } = require("child_process");
+  const EXEC_TIMEOUT = 3000;
   const TERMINAL_APPS = [
     { match: /\/Cursor(\.app\/|\s|$)/, app: "Cursor", activate: "Cursor" },
     {
@@ -1434,8 +1460,8 @@ end tell`,
         encoding: "utf-8",
         timeout: EXEC_TIMEOUT,
       }).trim();
-      for (const { match, app, activate } of TERMINAL_APPS) {
-        if (match.test(pname)) {
+      for (const { match: m, app, activate } of TERMINAL_APPS) {
+        if (m.test(pname)) {
           execFileSync("osascript", [
             "-e",
             `tell application "${activate}" to activate`,
@@ -1510,4 +1536,5 @@ module.exports = {
   watchIntention,
   openInCursor,
   focusExternalTerminal,
+  closeExternalTerminal,
 };
