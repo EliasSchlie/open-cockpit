@@ -60,6 +60,28 @@ export const state = {
 export const sessionTerminals = new Map();
 export const CLEANUP_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
+// --- Bell mute toggle (persisted via localStorage) ---
+let _bellMuted = localStorage.getItem("bellMuted") === "true";
+
+export function isBellMuted() {
+  return _bellMuted;
+}
+
+export function toggleBellMuted() {
+  _bellMuted = !_bellMuted;
+  localStorage.setItem("bellMuted", _bellMuted);
+  syncBellButton();
+}
+
+export function syncBellButton() {
+  const btn = document.getElementById("bell-toggle-btn");
+  if (!btn) return;
+  btn.textContent = _bellMuted ? "\uD83D\uDD15" : "\uD83D\uDD14";
+  btn.title = _bellMuted
+    ? "Bell muted (click to unmute)"
+    : "Bell enabled (click to mute)";
+}
+
 // --- User activity tracking (for bell suppression) ---
 let lastActivityTs = Date.now();
 

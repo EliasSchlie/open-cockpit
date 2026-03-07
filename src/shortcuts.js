@@ -43,6 +43,8 @@ const DEFAULT_SHORTCUTS = {
   "toggle-children": "Alt+Right",
   "next-child-session": "Alt+Shift+Down",
   "prev-child-session": "Alt+Shift+Up",
+  // Bell
+  "toggle-bell": "CmdOrCtrl+Shift+B",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",
