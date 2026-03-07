@@ -5,7 +5,7 @@
 Dark black (`#0a0a0a`) background with neon red (`#ff1a1a`) accents.
 
 - CSS vars: `:root` in `src/styles.css`
-- CodeMirror colors: hardcoded in `src/renderer.js` theme objects (`livePreviewTheme`, `darkTheme`)
+- CodeMirror colors: hardcoded in `src/editor.js` theme objects (`livePreviewTheme`, `darkTheme`)
 - xterm theme: minimal (background + cursor only) — shell's own ANSI colors are preserved
 
 ## Session color coding
@@ -19,8 +19,8 @@ Each session gets a colored sidebar indicator and editor header bar based on its
 - Home directory (`~`) gets no color (transparent)
 
 **Implementation:**
-- `main.js` — `getSessions()` walks up from `cwd` looking for `.git` *directory* (not file — worktrees have `.git` files). Returns `gitRoot` per session.
-- `renderer.js` — `getColorKey(session)` normalizes path (strip worktree suffix, use gitRoot if available), then `getDirColor(session)` checks user config, falls back to hash.
+- `session-discovery.js` — `getSessions()` walks up from `cwd` looking for `.git` *directory* (not file — worktrees have `.git` files). Returns `gitRoot` per session.
+- `session-sidebar.js` — `getColorKey(session)` normalizes path (strip worktree suffix, use gitRoot if available), then `getDirColor(session)` checks user config, falls back to hash.
 
 ## User color overrides
 
@@ -36,4 +36,4 @@ Config file: `~/.open-cockpit/colors.json`
 - Keys are tilde-prefixed paths, matched by longest prefix
 - `null` = no color (transparent), string = exact hex color
 - Reloads on sidebar refresh (↻ button), no app restart needed
-- Served via `get-dir-colors` IPC handler in `main.js`
+- Served via `get-dir-colors` IPC handler in `api-handlers.js`
