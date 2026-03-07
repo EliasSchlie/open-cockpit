@@ -853,6 +853,68 @@ describe("findOffloadTarget", () => {
     const target = findOffloadTarget(pool, sessionMap);
     expect(target.sessionId).toBe("s2"); // idleTs defaults to 0 (oldest)
   });
+
+  it("offloads model-initiated sessions before user-initiated", () => {
+    const pool = createPool(3);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "idle", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+      { ...createSlot(2, "t3", 300), status: "idle", sessionId: "s3" },
+    );
+    const sessionMap = new Map([
+      [
+        "s1",
+        { sessionId: "s1", status: "idle", idleTs: 100, initiator: "user" },
+      ],
+      [
+        "s2",
+        { sessionId: "s2", status: "idle", idleTs: 200, initiator: "model" },
+      ],
+      [
+        "s3",
+        { sessionId: "s3", status: "idle", idleTs: 50, initiator: "user" },
+      ],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s2"); // model-initiated offloaded first
+  });
+
+  it("uses LRU within same initiator group", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "idle", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      [
+        "s1",
+        { sessionId: "s1", status: "idle", idleTs: 300, initiator: "model" },
+      ],
+      [
+        "s2",
+        { sessionId: "s2", status: "idle", idleTs: 100, initiator: "model" },
+      ],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s2"); // s2 has earlier idleTs (LRU)
+  });
+
+  it("treats missing initiator as user-initiated", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "idle", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 100 }], // no initiator
+      [
+        "s2",
+        { sessionId: "s2", status: "idle", idleTs: 200, initiator: "model" },
+      ],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target.sessionId).toBe("s2"); // model offloaded before implicit user
+  });
 });
 
 describe("readPool / writePool — edge cases", () => {

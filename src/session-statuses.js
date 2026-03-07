@@ -22,4 +22,9 @@ const POOL_STATUS = {
   ERROR: "error",
 };
 
-module.exports = { STATUS, POOL_STATUS };
+const INITIATOR = {
+  USER: "user",
+  MODEL: "model",
+};
+
+module.exports = { STATUS, POOL_STATUS, INITIATOR };

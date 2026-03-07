@@ -4,7 +4,7 @@
  */
 const path = require("path");
 const fs = require("fs");
-const { STATUS, POOL_STATUS } = require("./session-statuses");
+const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 
 /**
  * Read pool.json from disk. Returns parsed object or null on failure.
@@ -223,6 +223,10 @@ function findOffloadTarget(pool, sessionMap) {
   idleSlots.sort((a, b) => {
     const sa = sessionMap.get(a.sessionId);
     const sb = sessionMap.get(b.sessionId);
+    // Prefer offloading model-initiated sessions before user-initiated
+    const ia = sa?.initiator === INITIATOR.MODEL ? 0 : 1;
+    const ib = sb?.initiator === INITIATOR.MODEL ? 0 : 1;
+    if (ia !== ib) return ia - ib;
     return (sa?.idleTs || 0) - (sb?.idleTs || 0);
   });
   const victim = idleSlots[0];
