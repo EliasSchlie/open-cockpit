@@ -28,6 +28,8 @@ const daemonClient = require("./daemon-client");
 const sessionDiscovery = require("./session-discovery");
 const poolManager = require("./pool-manager");
 const apiHandlersModule = require("./api-handlers");
+const autoUpdater = require("./auto-updater");
+const { checkFirstRun } = require("./first-run");
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -341,6 +343,10 @@ let ownsApiSocket = false;
 
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
+
+  // First-run checks: claude binary, plugin, ~/.open-cockpit/ directory
+  await checkFirstRun();
+
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
   // Initialize modules
@@ -589,6 +595,7 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+  autoUpdater.init({ debugLog });
 
   // --- API server ---
   const apiHandlers = apiHandlersModule.buildApiHandlers();
@@ -666,6 +673,7 @@ app.on("before-quit", (e) => {
       });
     return;
   }
+  autoUpdater.destroy();
   closeDebugLog();
   daemonClient.destroySocket();
   for (const entry of pendingPolls) entry.cancel();
