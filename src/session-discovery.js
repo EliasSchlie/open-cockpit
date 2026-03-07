@@ -840,17 +840,8 @@ async function getSessionsUncached() {
     }
   }
 
-  // Annotate pool sessions with their pool slot status so the renderer
-  // can detect fresh slots without a separate poolRead() call.
-  if (pool) {
-    const slotMap = new Map(
-      pool.slots.filter((s) => s.sessionId).map((s) => [s.sessionId, s.status]),
-    );
-    for (const s of sessions) {
-      const slotStatus = slotMap.get(s.sessionId);
-      if (slotStatus) s.poolStatus = slotStatus;
-    }
-  }
+  // poolStatus is annotated by the get-sessions handler after syncPoolStatuses,
+  // so it reflects the synced (not stale) pool state.
 
   // Prune stale tracker entries for sessions that no longer exist
   const liveIds = new Set(sessions.map((s) => s.sessionId));

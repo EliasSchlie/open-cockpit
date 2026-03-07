@@ -1037,12 +1037,14 @@ function pruneSessionGraph(pool) {
 }
 
 // Sync pool.json slot statuses with live session state.
+// Returns the (possibly updated) pool object, or null if no pool.
 async function syncPoolStatuses(sessions) {
-  await withPoolLock(() => {
+  return withPoolLock(() => {
     const pool = readPool();
-    if (!pool) return;
+    if (!pool) return null;
     const updated = syncStatuses(pool, sessions);
     if (updated) writePool(updated);
+    return updated || pool;
   });
 }
 
