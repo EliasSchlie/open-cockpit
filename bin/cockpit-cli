@@ -930,13 +930,27 @@ case "$CMD" in
         ;;
 
       read)
-        # Parse: [target] [tab]
+        # Parse: [target] [tab] [--tail N] [--wait PATTERN [--timeout N]]
         # If first arg contains @, hex letters [a-f], or dashes → it's a target
         # Pure decimal → tab index (auto-detect session)
         if [[ -n "${1:-}" ]] && is_target_arg "$1"; then
-          TARGET="$1"; shift; TAB_INDEX="${1:-}"
+          TARGET="$1"; shift; TAB_INDEX="${1:-}"; [[ -n "$TAB_INDEX" ]] && shift
         else
-          TARGET=""; TAB_INDEX="${1:-}"
+          TARGET=""; TAB_INDEX="${1:-}"; [[ -n "$TAB_INDEX" && ! "$TAB_INDEX" =~ ^-- ]] && shift || TAB_INDEX=""
+        fi
+        TAIL_N=""
+        WAIT_PATTERN=""
+        WAIT_TIMEOUT=30
+        while [[ -n "${1:-}" ]]; do
+          case "$1" in
+            --tail) TAIL_N="${2:?--tail requires a number}"; validate_int "$TAIL_N" "tail lines"; shift 2 ;;
+            --wait) WAIT_PATTERN="${2:?--wait requires a pattern}"; shift 2 ;;
+            --timeout) validate_int "${2:?--timeout requires a number}" "timeout"; WAIT_TIMEOUT="$2"; shift 2 ;;
+            *) break ;;
+          esac
+        done
+        if [[ -n "$WAIT_TIMEOUT" && "$WAIT_TIMEOUT" != "30" && -z "$WAIT_PATTERN" ]]; then
+          echo "Error: --timeout requires --wait" >&2; exit 1
         fi
         resolve_term_target "$TARGET"
 
@@ -952,10 +966,39 @@ case "$CMD" in
 
         validate_int "$TAB_INDEX" "tab index"
         json="{\"type\":\"session-term-read\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"tabIndex\":$TAB_INDEX}"
+
+        # Helper: output buffer with optional --tail
+        emit_buffer() {
+          if [[ -n "$TAIL_N" ]]; then
+            printf '%s' "$1" | tail -n "$TAIL_N"
+          else
+            printf '%s' "$1"
+          fi
+        }
+
+        if [[ -n "$WAIT_PATTERN" ]]; then
+          # Poll until pattern appears in buffer or timeout
+          DEADLINE=$(( $(date +%s) + WAIT_TIMEOUT ))
+          while true; do
+            RESULT=$(send_api "$json")
+            check_error "$RESULT"
+            BUFFER=$(json_field "$RESULT" "buffer")
+            CLEAN=$(printf '%s' "$BUFFER" | strip_ansi)
+            if printf '%s' "$CLEAN" | grep -qE "$WAIT_PATTERN"; then
+              emit_buffer "$CLEAN"; exit 0
+            fi
+            if [[ $(date +%s) -ge $DEADLINE ]]; then
+              echo "Error: timed out after ${WAIT_TIMEOUT}s waiting for pattern: $WAIT_PATTERN" >&2
+              emit_buffer "$CLEAN"; exit 1
+            fi
+            sleep 1
+          done
+        fi
+
         RESULT=$(send_api "$json")
         check_error "$RESULT"
         BUFFER=$(json_field "$RESULT" "buffer")
-        printf '%s' "$BUFFER" | strip_ansi
+        emit_buffer "$(printf '%s' "$BUFFER" | strip_ansi)"
         ;;
 
       write)
@@ -1240,8 +1283,12 @@ Targets: Most commands accept a <target> which can be:
   Claude session (via PID ancestry). Specify <target> to override.
 
   term ls [target]                      List terminal tabs for a session
-  term read [target] [tab]              Read tab content (ANSI-stripped)
+  term read [target] [tab] [--tail N] [--wait PATTERN [--timeout N]]
+                                        Read tab content (ANSI-stripped)
                                         Omit tab to list available tabs
+                                        --tail N: only last N lines
+                                        --wait PATTERN: poll until regex matches (default 30s)
+                                        --timeout N: seconds for --wait (default 30)
   term write [target] <tab> <text>      Type text into a tab (interprets escapes)
   term key [target] <tab> <keyname>     Send named key to a tab
   term watch [target] <tab> [interval]  Follow tab output in real-time
