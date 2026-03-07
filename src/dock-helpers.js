@@ -68,6 +68,15 @@ export function setupTerminalResize(entry) {
     requestAnimationFrame(() => {
       pending = false;
       if (!entry.container.offsetParent) return;
+      // FitAddon.proposeDimensions() returns undefined when xterm's cell
+      // dimensions are 0 — happens when the terminal was opened in a detached
+      // or zero-sized container and hasn't painted yet. In that case fit() is
+      // a silent no-op, leaving the terminal at wrong cols/rows. Retry after
+      // the next paint so xterm can compute font metrics first.
+      if (!entry.fitAddon.proposeDimensions()) {
+        requestAnimationFrame(() => doFit());
+        return;
+      }
       entry.fitAddon.fit();
       const { cols, rows } = entry.term;
       if (cols !== prevCols || rows !== prevRows) {
