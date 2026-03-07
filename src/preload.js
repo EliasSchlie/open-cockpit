@@ -17,6 +17,9 @@ const channels = [
   "new-session",
   "next-session",
   "prev-session",
+  "toggle-children",
+  "next-child-session",
+  "prev-child-session",
   "toggle-sidebar",
   "focus-editor",
   "focus-terminal",
@@ -140,6 +143,12 @@ contextBridge.exposeInMainWorld("api", {
   onNewSession: (callback) => ipcRenderer.on("new-session", () => callback()),
   onNextSession: (callback) => ipcRenderer.on("next-session", () => callback()),
   onPrevSession: (callback) => ipcRenderer.on("prev-session", () => callback()),
+  onToggleChildren: (callback) =>
+    ipcRenderer.on("toggle-children", () => callback()),
+  onNextChildSession: (callback) =>
+    ipcRenderer.on("next-child-session", () => callback()),
+  onPrevChildSession: (callback) =>
+    ipcRenderer.on("prev-child-session", () => callback()),
   onToggleSidebar: (callback) =>
     ipcRenderer.on("toggle-sidebar", () => callback()),
   onFocusEditor: (callback) => ipcRenderer.on("focus-editor", () => callback()),

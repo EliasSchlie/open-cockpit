@@ -96,7 +96,7 @@ function getDirColor(session) {
 
 // Build a fingerprint for a session to detect changes
 function sessionFingerprint(s) {
-  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}`;
+  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}|${s.parentSessionId || ""}`;
 }
 
 // Track previous session fingerprints for diff-based update
@@ -126,6 +126,32 @@ function playBell() {
 // --- Session list ---
 let archiveExpanded = false;
 
+// Track which parent sessions have their children expanded
+const childrenExpanded = new Set();
+
+// Current parent→children map (rebuilt on each loadSessions)
+let childrenMap = new Map();
+
+// Build a map of parentSessionId -> [child sessions] (recursive tree)
+// Returns { childrenMap, topLevel set of sessionIds that have no visible parent }
+function buildSessionTree(sessions) {
+  const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+  const cMap = new Map(); // parentId -> [child sessions]
+  const childIds = new Set();
+
+  for (const s of sessions) {
+    if (s.parentSessionId && byId.has(s.parentSessionId)) {
+      childIds.add(s.sessionId);
+      if (!cMap.has(s.parentSessionId)) {
+        cMap.set(s.parentSessionId, []);
+      }
+      cMap.get(s.parentSessionId).push(s);
+    }
+  }
+
+  return { childrenMap: cMap, childIds };
+}
+
 async function loadSessions() {
   const sessions = await window.api.getSessions();
   const oldStatuses = new Map(
@@ -144,13 +170,27 @@ async function loadSessions() {
   _actions.cleanupStaleTerminals(sessions);
   _actions.updatePoolHealthBadge();
 
-  // Split into sections — pool and external mixed together
-  const typing = sessions.filter((s) => s.status === STATUS.TYPING);
-  const recent = sessions.filter(
-    (s) => s.status === STATUS.IDLE || s.status === STATUS.OFFLOADED,
+  // Build parent-child tree and filter children out of top-level sections
+  const tree = buildSessionTree(sessions);
+  childrenMap = tree.childrenMap;
+  const { childIds } = tree;
+  const isTopLevel = (s) => !childIds.has(s.sessionId);
+
+  // Split into sections — pool and external mixed together (top-level only)
+  const typing = sessions.filter(
+    (s) => isTopLevel(s) && s.status === STATUS.TYPING,
   );
-  const processing = sessions.filter((s) => s.status === STATUS.PROCESSING);
-  const archived = sessions.filter((s) => s.status === STATUS.ARCHIVED);
+  const recent = sessions.filter(
+    (s) =>
+      isTopLevel(s) &&
+      (s.status === STATUS.IDLE || s.status === STATUS.OFFLOADED),
+  );
+  const processing = sessions.filter(
+    (s) => isTopLevel(s) && s.status === STATUS.PROCESSING,
+  );
+  const archived = sessions.filter(
+    (s) => isTopLevel(s) && s.status === STATUS.ARCHIVED,
+  );
 
   // Build fingerprint to check if anything changed
   const allItems = [...typing, ...recent, ...processing, ...archived];
@@ -168,10 +208,12 @@ async function loadSessions() {
   prevSessionFingerprints = fingerprints;
 
   // Bell when a session transitions to idle (finished processing)
+  // Skip child sessions (initiator === "model") — they shouldn't bing
   if (oldStatuses.size > 0) {
     for (const s of sessions) {
       if (
         s.status === STATUS.IDLE &&
+        s.initiator !== "model" &&
         oldStatuses.has(s.sessionId) &&
         oldStatuses.get(s.sessionId) !== STATUS.IDLE
       ) {
@@ -195,14 +237,41 @@ async function loadSessions() {
     return;
   }
 
+  // Recursively count a session plus all its descendants
+  function countWithChildren(s) {
+    let count = 1;
+    const children = childrenMap.get(s.sessionId);
+    if (children) {
+      for (const c of children) count += countWithChildren(c);
+    }
+    return count;
+  }
+
+  // Render a session item and its nested children (recursive)
+  function appendSessionWithChildren(parent, s, depth) {
+    parent.appendChild(createSessionItem(s, depth));
+    const children = childrenMap.get(s.sessionId);
+    if (!children || children.length === 0) return;
+
+    const isExpanded = childrenExpanded.has(s.sessionId);
+    if (!isExpanded) return;
+
+    for (const child of children) {
+      appendSessionWithChildren(parent, child, depth + 1);
+    }
+  }
+
   function addSection(label, items) {
     if (items.length === 0) return;
+    // Count includes nested children
+    let total = 0;
+    for (const s of items) total += countWithChildren(s);
     const header = document.createElement("li");
     header.className = "session-section-header";
-    header.textContent = `${label} (${items.length})`;
+    header.textContent = `${label} (${total})`;
     dom.sessionList.appendChild(header);
     for (const s of items) {
-      dom.sessionList.appendChild(createSessionItem(s));
+      appendSessionWithChildren(dom.sessionList, s, 0);
     }
   }
 
@@ -226,7 +295,7 @@ async function loadSessions() {
     dom.sessionList.appendChild(header);
     const visible = collapsed ? archived.slice(0, ARCHIVE_VISIBLE) : archived;
     for (const s of visible) {
-      dom.sessionList.appendChild(createSessionItem(s));
+      appendSessionWithChildren(dom.sessionList, s, 0);
     }
     if (collapsed) {
       const more = document.createElement("li");
@@ -241,10 +310,12 @@ async function loadSessions() {
   }
 }
 
-function createSessionItem(s) {
+function createSessionItem(s, depth = 0) {
   const li = document.createElement("li");
-  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED ? " offloaded" : ""}`;
+  const isChild = depth > 0;
+  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED ? " offloaded" : ""}${isChild ? " session-child" : ""}`;
   li.dataset.sessionId = s.sessionId;
+  if (isChild) li.style.paddingLeft = `${12 + depth * 18}px`;
   const heading = s.intentionHeading || s.intentionPreview || null;
   const isPreview = !s.intentionHeading && !!s.intentionPreview;
   const dp = displayPath(s);
@@ -264,10 +335,19 @@ function createSessionItem(s) {
   const pinnedTag = pinned
     ? '<span class="session-origin-tag session-origin-pinned" title="Pinned — won\'t be offloaded">📌</span>'
     : "";
+
+  // Children toggle for sessions that have children
+  const hasChildren = childrenMap.has(s.sessionId);
+  const isExpanded = childrenExpanded.has(s.sessionId);
+  const toggleHtml = hasChildren
+    ? `<span class="session-children-toggle">${isExpanded ? "▾" : "▸"}</span>`
+    : "";
+
   li.innerHTML = `
     <div class="session-dir-indicator" style="${indicatorStyle}"></div>
     <div class="session-item-content">
       <div class="session-project">
+        ${toggleHtml}
         <span class="session-status ${STATUS_CLASSES[s.status] || "dead"}"></span>
         <span class="session-title${isPreview ? " session-preview" : ""}">${escapeHtml(heading || "No intention yet")}</span>
         ${originTag}${staleTag}${pinnedTag}
@@ -275,6 +355,16 @@ function createSessionItem(s) {
       <div class="session-cwd">${escapeHtml(dp)}</div>
     </div>
   `;
+
+  // Toggle children expand/collapse on arrow click
+  if (hasChildren) {
+    const toggle = li.querySelector(".session-children-toggle");
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleChildrenExpanded(s.sessionId);
+    });
+  }
+
   li.addEventListener("click", () => _actions.selectSession(s));
   li.addEventListener("contextmenu", (e) => {
     e.preventDefault();
@@ -501,6 +591,25 @@ function updateTypingPreview() {
   titleSpan.classList.toggle("session-preview", !!preview);
 }
 
+// --- Children expand/collapse API ---
+
+function toggleChildrenExpanded(sessionId) {
+  if (childrenExpanded.has(sessionId)) {
+    childrenExpanded.delete(sessionId);
+  } else {
+    childrenExpanded.add(sessionId);
+  }
+  invalidateSidebar();
+}
+
+function isChildrenExpanded(sessionId) {
+  return childrenExpanded.has(sessionId);
+}
+
+function hasSessionChildren(sessionId) {
+  return childrenMap.has(sessionId);
+}
+
 export {
   loadDirColors,
   getDirColor,
@@ -513,4 +622,7 @@ export {
   removeInlineSnapshot,
   showSnapshotViewer,
   sessionFingerprint,
+  toggleChildrenExpanded,
+  isChildrenExpanded,
+  hasSessionChildren,
 };
