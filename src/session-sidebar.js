@@ -14,6 +14,7 @@ import {
   TAB_SNAPSHOT,
   registerEditorTab,
 } from "./dock-helpers.js";
+import { createOverlayDialog, showConfirmDialog } from "./overlay-dialog.js";
 
 // --- Callbacks into renderer.js (set via initSidebar) ---
 let _actions = {};
@@ -435,11 +436,9 @@ async function archiveWithChildCheck(session) {
 
 // Confirmation dialog for archiving a parent with alive descendants
 function showArchiveChildrenConfirm(session, aliveDescendants) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "offload-menu-overlay";
-    const count = aliveDescendants.length;
-    overlay.innerHTML = `
+  const count = aliveDescendants.length;
+  return showConfirmDialog({
+    html: `
       <div class="snapshot-dialog" style="max-width: 400px;">
         <div class="snapshot-header">
           <span>Archive with children?</span>
@@ -459,36 +458,7 @@ function showArchiveChildrenConfirm(session, aliveDescendants) {
           </div>
         </div>
       </div>
-    `;
-
-    document.body.appendChild(overlay);
-
-    function close(result) {
-      document.removeEventListener("keydown", escHandler, true);
-      overlay.remove();
-      resolve(result);
-    }
-    function escHandler(e) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        close(false);
-      }
-    }
-    document.addEventListener("keydown", escHandler, true);
-
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) close(false);
-    });
-    overlay
-      .querySelector(".snapshot-close")
-      .addEventListener("click", () => close(false));
-    overlay
-      .querySelector('[data-action="cancel"]')
-      .addEventListener("click", () => close(false));
-    overlay
-      .querySelector('[data-action="confirm"]')
-      .addEventListener("click", () => close(true));
+    `,
   });
 }
 
@@ -555,43 +525,18 @@ function showSessionContextMenu(e, session) {
 
 // Show read-only snapshot viewer
 function showSnapshotViewer(session, snapshotText) {
-  const existing = document.getElementById("snapshot-viewer");
-  if (existing) existing.remove();
-
-  const viewer = document.createElement("div");
-  viewer.id = "snapshot-viewer";
-  viewer.className = "offload-menu-overlay";
-  viewer.innerHTML = `
-    <div class="snapshot-dialog">
-      <div class="snapshot-header">
-        <span>${escapeHtml(session.intentionHeading || "Snapshot")}</span>
-        <button class="snapshot-close">\u2715</button>
+  createOverlayDialog({
+    id: "snapshot-viewer",
+    html: `
+      <div class="snapshot-dialog">
+        <div class="snapshot-header">
+          <span>${escapeHtml(session.intentionHeading || "Snapshot")}</span>
+          <button class="snapshot-close">\u2715</button>
+        </div>
+        <pre class="snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
       </div>
-      <pre class="snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
-    </div>
-  `;
-
-  document.body.appendChild(viewer);
-
-  function closeViewer() {
-    document.removeEventListener("keydown", escHandler, true);
-    viewer.remove();
-  }
-  function escHandler(e) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      closeViewer();
-    }
-  }
-  document.addEventListener("keydown", escHandler, true);
-
-  viewer.addEventListener("click", (e) => {
-    if (e.target === viewer) closeViewer();
+    `,
   });
-  viewer
-    .querySelector(".snapshot-close")
-    .addEventListener("click", closeViewer);
 }
 
 // Show snapshot content inline as a dock tab for offloaded/archived sessions
