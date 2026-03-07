@@ -624,7 +624,21 @@ async function getSessionsUncached() {
         }
       }
 
-      if (size != null && now - unchangedSince > STALE_PROCESSING_MS) {
+      const staleTimeout =
+        size != null && now - unchangedSince > STALE_PROCESSING_MS;
+
+      // Pool sessions that were never used (no "user" entries) shouldn't be
+      // marked stale — they're genuinely fresh, just missing their pool-init
+      // idle signal (lost on app restart or hook race). Only mark stale if
+      // the session has real user interaction or isn't a pool session.
+      if (
+        staleTimeout &&
+        (!poolSlot ||
+          (await transcriptContains(
+            jsonlPathCache.get(sessionId),
+            '"type":"user"',
+          )))
+      ) {
         // Always log — stale sessions indicate a hook failure and should never happen
         console.error(
           `[main] Stale processing detected for session ${sessionId} (transcript size unchanged for ${Math.round((now - unchangedSince) / 1000)}s) — treating as idle. Idle signal hook may have failed.`,
