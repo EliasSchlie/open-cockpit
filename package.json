@@ -8,6 +8,7 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "dev:own-pool": "npm run build && electron . --dev --own-pool",
+    "postinstall": "command -v electron-rebuild >/dev/null && electron-rebuild -m . || true",
     "prepare": "git config core.hooksPath .githooks",
     "test": "vitest run",
     "test:watch": "vitest"

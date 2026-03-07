@@ -70,9 +70,13 @@ function startDaemon() {
 
 function handleDaemonMessage(msg) {
   if (msg.id && pendingRequests.has(msg.id)) {
-    const { resolve } = pendingRequests.get(msg.id);
+    const { resolve, reject } = pendingRequests.get(msg.id);
     pendingRequests.delete(msg.id);
-    resolve(msg);
+    if (msg.type === "error") {
+      reject(new Error(msg.error || "Daemon error"));
+    } else {
+      resolve(msg);
+    }
     return;
   }
   if (_onPtyEvent) _onPtyEvent(msg);

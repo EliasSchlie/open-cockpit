@@ -124,13 +124,27 @@ function handleSpawn(socket, msg) {
     Object.assign(cleanEnv, msg.env);
   }
 
-  const proc = pty.spawn(shell, args, {
-    name: "xterm-256color",
-    cols: msg.cols || 80,
-    rows: msg.rows || 24,
-    cwd,
-    env: cleanEnv,
-  });
+  let proc;
+  try {
+    proc = pty.spawn(shell, args, {
+      name: "xterm-256color",
+      cols: msg.cols || 80,
+      rows: msg.rows || 24,
+      cwd,
+      env: cleanEnv,
+    });
+  } catch (err) {
+    const hint = err.message.includes("posix_spawnp")
+      ? " (node-pty ABI mismatch — run: npx electron-rebuild -m .)"
+      : "";
+    console.error(`[pty-daemon] spawn failed: ${err.message}${hint}`);
+    sendTo(socket, {
+      type: "error",
+      id: msg.id,
+      error: `Spawn failed: ${err.message}${hint}`,
+    });
+    return;
+  }
 
   const entry = {
     proc,

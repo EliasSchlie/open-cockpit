@@ -86,10 +86,20 @@ Use the exact commands below. Do not try alternatives like `open -a Electron.app
 `npm start` exits immediately while Electron runs in the background — running it twice stacks instances. Always use this kill-before-launch command:
 
 ```bash
-cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm start > /dev/null 2>&1 &
+cd ~/projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm start > /dev/null 2>&1 &
 ```
 
 Confirm with the user before restarting production — it disrupts all active sessions.
+
+**If the app starts but shows no window**, there are likely stale Electron instances from a previous launch. The `lsof` cwd-matching kill only works if the cwd matches — if the project directory moved, old instances won't be caught. Fix by killing all instances first:
+```bash
+pkill -f "Electron.*open-cockpit" 2>/dev/null
+sleep 0.5
+cd ~/projects/open-cockpit && unset ELECTRON_RUN_AS_NODE && nohup npm start > /dev/null 2>&1 &
+```
+Do NOT kill the daemon or delete the pool — they are unrelated to the window issue.
+
+> **Critical lesson:** Never use ad-hoc `kill` or `pkill` to manage Electron instances — always use the `lsof` cwd-matching one-liner from above. Ad-hoc kills leave orphan processes that cause duplicate windows (one blank/white), duplicate daemons (pool init fails with "Daemon request timeout"), and other hard-to-debug state corruption. If the cwd changed (e.g. project directory moved), use `pkill -f "Electron.*open-cockpit"` as a one-time cleanup, then switch back to the cwd-matching command. After any restart, verify with `pgrep -lf "Electron \."` that only one main process is running.
 
 ### Launch dev instance
 
@@ -130,6 +140,16 @@ Just push your changes — CI handles version bumping and marketplace sync. For 
 
 > ⚠️ **Pool operations in dev mode**: By default, `npm run dev` shares the production pool. If you need to init, destroy, resize, or otherwise modify the pool during development, **always use `npm run dev:own-pool`** to avoid disrupting the production pool.
 
+## Native modules
+
+`node-pty` is a native module that must be compiled for Electron's Node version (not the system Node). After `npm install` or moving the project directory, run:
+
+```bash
+npx electron-rebuild -m .
+```
+
+**Symptom if skipped:** Pool init fails with "Daemon request timeout", debug log shows no spawn activity. The daemon responds to `ping` but silently crashes on `spawn` (`posix_spawnp failed` due to ABI mismatch between system Node and Electron's Node).
+
 ## Git hooks
 
 Git hooks live in `.githooks/` (version-controlled). `core.hooksPath` is set automatically via the `prepare` script in `package.json` (runs on `npm install`).
@@ -149,7 +169,7 @@ Worktrees auto-setup via the `post-checkout` hook — just `git worktree add` an
 `gh pr merge --delete-branch` fails from worktrees. Always merge from the **root worktree** without `--delete-branch`, then clean up:
 
 ```bash
-cd ~/Documents/Projects/open-cockpit
+cd ~/projects/open-cockpit
 gh pr merge <number> --squash
 git worktree remove .wt/<name>
 git branch -d <branch>
