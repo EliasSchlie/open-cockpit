@@ -17,6 +17,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
+SYSTEM_ENTRY_WAIT=4
 IDLE_VERIFY_DELAY=3
 mkdir -p "$SIGNAL_DIR"
 
@@ -83,8 +84,10 @@ case "${1:-}" in
                 trap 'rm -f "$pending"' EXIT
 
                 # Wait for system entries (stop_hook_summary, turn_duration)
-                # to finish writing — they're appended within ~1s of Stop.
-                sleep 2
+                # to finish writing. With async:true, Claude writes these
+                # concurrently (not blocked by the hook), so they can take
+                # up to ~3s to appear. Use SYSTEM_ENTRY_WAIT for margin.
+                sleep "$SYSTEM_ENTRY_WAIT"
 
                 # Abort early if pending was invalidated during system-entry wait
                 [ ! -f "$pending" ] && exit 0
