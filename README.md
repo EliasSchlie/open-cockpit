@@ -92,6 +92,17 @@ claude plugin install open-cockpit@elias-tools
 
 The app checks for both Claude Code and the plugin on first launch and will guide you through setup.
 
+> **Troubleshooting: "Permission denied (publickey)" during install**
+>
+> If `claude plugin install` fails with an SSH error, your git is configured to use SSH for GitHub but you don't have SSH keys set up. Fix by telling git to use HTTPS instead:
+> ```bash
+> git config --global url."https://github.com/".insteadOf git@github.com:
+> ```
+> To revert this later (e.g., after setting up SSH keys):
+> ```bash
+> git config --global --unset url."https://github.com/".insteadOf
+> ```
+
 ### Build from source
 
 ```bash
