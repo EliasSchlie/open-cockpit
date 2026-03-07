@@ -453,6 +453,44 @@ async function getOffloadedSessions() {
       );
     }
   }
+
+  // Cascade: auto-archive offloaded children whose parent is archived.
+  // Without this, sub-agent sessions offloaded before parent death linger in Recent.
+  const archivedIds = new Set(
+    sessions
+      .filter((s) => s.status === STATUS.ARCHIVED)
+      .map((s) => s.sessionId),
+  );
+  if (archivedIds.size > 0) {
+    let sessionGraph;
+    try {
+      sessionGraph = JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
+    } catch {
+      sessionGraph = {};
+    }
+    for (const s of sessions) {
+      if (s.status !== STATUS.OFFLOADED) continue;
+      const entry = sessionGraph[s.sessionId];
+      if (entry?.parentSessionId && archivedIds.has(entry.parentSessionId)) {
+        s.status = STATUS.ARCHIVED;
+        // Persist so this doesn't recompute every time
+        const meta = readOffloadMeta(s.sessionId);
+        if (meta && !meta.archived) {
+          meta.archived = true;
+          meta.archivedAt = meta.archivedAt || new Date().toISOString();
+          try {
+            secureWriteFileSync(
+              path.join(OFFLOADED_DIR, s.sessionId, "meta.json"),
+              JSON.stringify(meta, null, 2),
+            );
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
+    }
+  }
+
   return sessions;
 }
 

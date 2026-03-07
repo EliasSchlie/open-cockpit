@@ -213,6 +213,8 @@ async function loadSessions() {
 
   // Build fingerprint to check if anything changed
   const allItems = [...typing, ...recent, ...processing, ...archived];
+  // Store section-ordered sessions for navigation (must match sidebar DOM order)
+  state.sidebarSessions = allItems;
   const fingerprints = allItems.map(sessionFingerprint).join("\n");
   if (fingerprints === prevSessionFingerprints) {
     // Only update active class (selected session may have changed)

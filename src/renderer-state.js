@@ -47,6 +47,7 @@ export const state = {
   saveStatus: null,
   shellCounter: 0,
   cachedSessions: [],
+  sidebarSessions: [], // section-ordered top-level sessions (matches sidebar DOM)
   currentSessionId: null,
   currentSessionCwd: null,
   saveTimeout: null,

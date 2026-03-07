@@ -450,7 +450,11 @@ function buildVisualOrder({ cMap, childIds }) {
       for (const child of children) addWithChildren(child);
     }
   }
-  for (const s of state.cachedSessions) {
+  // Use sidebar's section-ordered list to match visual DOM order
+  const source = state.sidebarSessions?.length
+    ? state.sidebarSessions
+    : state.cachedSessions;
+  for (const s of source) {
     if (!childIds.has(s.sessionId)) addWithChildren(s);
   }
   return result;
