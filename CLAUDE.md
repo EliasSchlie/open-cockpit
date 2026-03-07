@@ -15,6 +15,11 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/preload.js` — Context bridge (`api` object)
 - `src/shortcuts.js` — Configurable keyboard shortcuts (defaults, overrides, accelerator matching)
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
+- `src/pool-lock.js` — Async mutex for pool.json read-modify-write cycles (`withPoolLock`)
+- `src/session-statuses.js` — Shared status string constants (STATUS enum)
+- `src/parse-origins.js` — Session origin detection from `ps eww` output (pool/sub-claude/ext)
+- `src/secure-fs.js` — Owner-only file helpers (mode 0o600/0o700)
+- `src/terminal-input.js` — Headless terminal emulator for detecting text in Claude's TUI input box
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 - `src/dock-layout.js` — **Dock system**: recursive split tree, drag-and-drop tabs, resize handles
 - `src/dock-helpers.js` — Dock integration utilities (editor container factory, terminal resize, tab registration)
@@ -72,20 +77,34 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/pty-daemon.sock` — PTY daemon Unix socket
 - `~/.open-cockpit/pty-daemon.pid` — PTY daemon PID file
 
-## Dev
+## Launching the app
 
-```bash
-npm run build   # Bundle renderer only (esbuild)
-```
+Use the exact commands below. Do not try alternatives like `open -a Electron.app`, direct `electron .`, or `npx electron .` — these skip the esbuild build step (`npm run build`), so the renderer bundle is stale or missing and the window appears blank. Additionally, Open Cockpit terminals set `ELECTRON_RUN_AS_NODE=1`, which makes Electron run as plain Node.js instead of a GUI app — the commands below unset it.
 
-> ⚠️ All launch commands include `unset ELECTRON_RUN_AS_NODE` — required when launching from an app-managed terminal, where the env var makes Electron run as plain Node.js.
+### Restart production
 
-### Opening the production instance
-
-`npm start` launches the production instance. It exits immediately while Electron runs in the background — **running it twice stacks instances**. Always use this kill-before-launch command:
+`npm start` exits immediately while Electron runs in the background — running it twice stacks instances. Always use this kill-before-launch command:
 
 ```bash
 cd ~/Documents/Projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm start > /dev/null 2>&1 &
+```
+
+Confirm with the user before restarting production — it disrupts all active sessions.
+
+### Launch dev instance
+
+`cd` into your worktree first, then use this kill-before-launch command (safe even on first launch):
+
+```bash
+DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm run dev > /dev/null 2>&1 &
+```
+
+`npm run dev` exits immediately while Electron stays in the background — it will *look* like it died, but it didn't. The daemon PID is excluded so terminals survive restarts.
+
+### Build renderer only
+
+```bash
+npm run build   # esbuild bundle — needed before Cmd+R reload
 ```
 
 ## Releasing
@@ -139,25 +158,14 @@ git pull
 
 ## Managing dev instances (multi-session safe)
 
-Multiple Claude sessions may work on different worktrees simultaneously. Electron processes inherit the `cwd` of the worktree — use `lsof` to identify and kill only yours.
+Multiple Claude sessions may work on different worktrees simultaneously. The launch command in "Launch dev instance" above uses `$(pwd)` to scope which Electron process to kill — always `cd` into your worktree first, or it could kill the production instance.
 
-> ⚠️ **CRITICAL: You MUST `cd` into your worktree/project directory before running the kill/launch command.** The command uses `$(pwd)` to scope which Electron process to kill. Running it from `~` or any other directory risks killing the **production instance** if it was launched from that directory.
-
-**Always use this command to launch** (kills any existing instance first — safe even on first launch):
-```bash
-DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm run dev > /dev/null 2>&1 &
-```
-
-> ⚠️ `npm run dev` exits immediately while Electron stays running in the background.
-> It will *look* like it died — it didn't. Always kill-before-launch to avoid stacking instances.
-> The daemon PID is excluded so terminals survive restarts.
-
-**Kill only YOUR worktree's instance:**
+**Kill only YOUR worktree's instance** (without relaunching):
 ```bash
 DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null
 ```
 
-**NEVER** use `pkill -f electron`, `killall Electron`, or `grep "cwd.*$(pwd)"` (substring match) — these can kill other sessions' instances or the production app. Always use exact `$NF == dir` matching as shown above.
+Do not use `pkill -f electron`, `killall Electron`, or `grep "cwd.*$(pwd)"` (substring match) — these can kill other sessions' instances or the production app. Use exact `$NF == dir` matching.
 
 ## Reloading after changes
 
@@ -165,7 +173,7 @@ DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof 
 - **Main process changes** (`main.js`, `preload.js`): kill and restart your dev instance (see commands above). Terminals survive (daemon keeps them alive).
 - **Daemon changes** (`pty-daemon.js`): kill daemon (`kill $(cat ~/.open-cockpit/pty-daemon.pid)`), then restart app. This kills all terminals.
 
-> ⚠️ **Avoid restarting the production instance** (`npm start`) unless the user explicitly asks. Restarting disrupts all active sessions. For testing, use `npm run dev` instead. If you must restart production, confirm with the user first.
+> For testing, use `npm run dev` instead of restarting production.
 
 ## Further docs
 

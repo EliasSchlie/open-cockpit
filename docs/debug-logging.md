@@ -68,7 +68,7 @@ grep "renderer:pool" ~/.open-cockpit/debug.log
 
 ## Adding new log points
 
-1. **Renderer**: Call `debugLog("tag", "message", ...args)` — the helper is available globally in `renderer.js`
+1. **Renderer**: Call `debugLog("tag", "message", ...args)` — the helper is defined in `renderer-state.js` and available to all renderer modules
 2. **Main**: Call `debugLog("tag", "message", ...args)` — the function is defined at the top of `main.js`
 3. Use descriptive tags: `session`, `pool`, `term`, `editor`, `startup`, `api`, etc.
 4. Include identifiers (session IDs, term IDs, generation counters) for traceability

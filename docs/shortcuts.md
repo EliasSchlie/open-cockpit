@@ -15,11 +15,9 @@ Shortcuts flow through three layers:
 1. **`src/shortcuts.js`**: Add the action ID and default accelerator to `DEFAULT_SHORTCUTS`. If the shortcut needs `before-input-event` handling (arrow keys, Tab, etc.), add its ID to `INPUT_EVENT_ACTIONS`.
 2. **`src/preload.js`**: Add the channel name to the `channels` array (for stale listener cleanup) and expose an `on<Action>` listener in the `contextBridge`.
 3. **`src/main.js`**: Add a menu entry with `accelerator: accel("action-id")` and `click: () => send("channel-name")`. If it's an input-event action, add a mapping in `inputEventChannels`.
-4. **`src/renderer.js`**:
-   - Implement the action function
-   - Add a `COMMANDS` entry with `shortcutAction` (for dynamic display) and `action`
-   - Add the `SHORTCUT_LABELS` entry (for settings UI)
-   - Wire up `window.api.on<Action>(handler)` at the bottom with other listeners
+4. **`src/command-palette.js`**: Add a `COMMANDS` entry with `shortcutAction` (for dynamic display) and `action`.
+5. **`src/pool-ui.js`**: Add the `SHORTCUT_LABELS` entry (for settings UI).
+6. **`src/renderer.js`**: Wire up `window.api.on<Action>(handler)` at the bottom with other listeners.
 
 ### Shortcut configuration
 
@@ -33,7 +31,7 @@ Overrides are stored in `~/.open-cockpit/shortcuts.json`. Only overridden values
 
 ### Command palette
 
-All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `renderer.js` defines entries with `id`, `label`, `shortcutAction` (action ID for dynamic shortcut lookup), and `action` (function). Display strings are generated dynamically from the shortcut config.
+All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `command-palette.js` defines entries with `id`, `label`, `shortcutAction` (action ID for dynamic shortcut lookup), and `action` (function). Display strings are generated dynamically from the shortcut config.
 
 ## Default shortcuts
 
