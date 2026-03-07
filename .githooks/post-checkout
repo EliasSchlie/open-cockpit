@@ -13,7 +13,7 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] && \
   # Only install if node_modules is missing
   if [ ! -d "node_modules" ] && [ -f "package.json" ]; then
     echo "[post-checkout] Worktree detected — running npm install..."
-    npm install --no-fund --no-audit 2>&1 | tail -1
+    npm ci --no-fund --no-audit 2>&1 | tail -1
     echo "[post-checkout] Building renderer..."
     npm run build 2>&1 | tail -1
     echo "[post-checkout] Worktree ready."
