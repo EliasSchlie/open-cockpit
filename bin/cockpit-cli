@@ -577,6 +577,7 @@ case "$CMD" in
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --block) BLOCK=true; shift ;;
+        --help|-h) echo "Usage: cockpit-cli start <prompt> [--block]" >&2; exit 0 ;;
         *) PROMPT="$1"; shift ;;
       esac
     done
