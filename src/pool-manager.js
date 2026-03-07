@@ -9,6 +9,7 @@ const {
 } = require("child_process");
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
+const platform = require("./platform");
 const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 const { createPoolLock } = require("./pool-lock");
 const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
@@ -273,10 +274,7 @@ function detectParentFromPidAncestry(pid) {
   if (!pid) return null;
   let current;
   try {
-    current = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
-      encoding: "utf-8",
-      timeout: 2000,
-    }).trim();
+    current = platform.getParentPidSync(String(pid));
   } catch {
     return null;
   }
@@ -288,10 +286,7 @@ function detectParentFromPidAncestry(pid) {
       // Not a known session — keep walking
     }
     try {
-      current = execFileSync("ps", ["-o", "ppid=", "-p", current], {
-        encoding: "utf-8",
-        timeout: 2000,
-      }).trim();
+      current = platform.getParentPidSync(current);
     } catch {
       break;
     }
@@ -419,21 +414,7 @@ async function saveExternalClearOffload(oldSessionId, pid) {
   // Gather what metadata we can
   let cwd = null;
   if (pid) {
-    try {
-      const lsof = execFileSync(
-        "lsof",
-        ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"],
-        { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
-      );
-      const m = lsof.match(/^n(.+)$/m);
-      if (m) cwd = m[1];
-    } catch (err) {
-      console.error(
-        "[main] lsof failed to resolve cwd for PID",
-        pid,
-        err.message,
-      );
-    }
+    cwd = platform.getCwdSync(pid);
   }
 
   await writeOffloadMeta(oldSessionId, {
@@ -574,23 +555,7 @@ function readOffloadMeta(sessionId) {
 // --- Pool Management ---
 
 function resolveClaudePath() {
-  try {
-    return execFileSync("which", ["claude"], {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    /* `which` fails if claude not in PATH — fall through to candidates */
-  }
-  const candidates = [
-    path.join(os.homedir(), ".claude", "local", "bin", "claude"),
-    "/usr/local/bin/claude",
-    path.join(os.homedir(), ".local", "bin", "claude"),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  throw new Error("Claude binary not found");
+  return platform.resolveClaudePath();
 }
 
 function readPool() {
@@ -1396,7 +1361,7 @@ async function openInCursor(cwd) {
     `${projectName}.code-workspace`,
   );
   if (fs.existsSync(namedWorkspace)) {
-    await execFileAsync("open", ["-a", "Cursor", namedWorkspace]);
+    await platform.openInApp("Cursor", namedWorkspace);
     return;
   }
 
@@ -1405,7 +1370,7 @@ async function openInCursor(cwd) {
     const entries = fs.readdirSync(cwd);
     const localWs = entries.find((e) => e.endsWith(".code-workspace"));
     if (localWs) {
-      await execFileAsync("open", ["-a", "Cursor", path.join(cwd, localWs)]);
+      await platform.openInApp("Cursor", path.join(cwd, localWs));
       return;
     }
   } catch {
@@ -1413,63 +1378,14 @@ async function openInCursor(cwd) {
   }
 
   // Fall back to opening the folder
-  await execFileAsync("open", ["-a", "Cursor", cwd]);
+  await platform.openInApp("Cursor", cwd);
 }
 
 // Run an AppleScript action on the iTerm session matching a PID's TTY.
-// `action` is the AppleScript code to run inside the matched session block (has vars w, t, s).
-// `resultValue` is the string the AppleScript returns on success.
-// Returns { app: "iTerm" } on success, null otherwise.
+// macOS-only — returns null on other platforms.
 async function withITermSessionByPid(pid, action, resultValue) {
-  const EXEC_TIMEOUT = 3000;
-
-  let tty;
-  try {
-    const { stdout } = await execFileAsync(
-      "ps",
-      ["-p", String(pid), "-o", "tty="],
-      {
-        timeout: EXEC_TIMEOUT,
-      },
-    );
-    tty = stdout.trim();
-  } catch {
-    return null;
-  }
-  if (!tty || tty === "??" || !/^ttys?\d+$/.test(tty)) return null;
-
-  try {
-    const { stdout } = await execFileAsync(
-      "osascript",
-      [
-        "-e",
-        `tell application "System Events"
-  if not (exists process "iTerm2") then return "not_running"
-end tell
-tell application "iTerm"
-  repeat with w in windows
-    repeat with t in tabs of w
-      repeat with s in sessions of t
-        if tty of s ends with "${tty}" then
-          ${action}
-          return "${resultValue}"
-        end if
-      end repeat
-    end repeat
-  end repeat
-  return "not_found"
-end tell`,
-      ],
-      { timeout: EXEC_TIMEOUT },
-    );
-    if (stdout.trim() === resultValue) return { app: "iTerm" };
-  } catch (err) {
-    console.error(
-      `[main] iTerm ${resultValue} via osascript failed:`,
-      err.message,
-    );
-  }
-  return null;
+  const tty = await platform.getProcessTty(pid);
+  return platform.withITermSessionByTty(tty, action, resultValue);
 }
 
 // Close the external terminal where a Claude session is running.
@@ -1502,11 +1418,10 @@ async function focusExternalTerminal(pid) {
   if (match) return { focused: true, ...match };
 
   // Try Cursor / VS Code: walk process tree to find terminal app ancestor
-  const EXEC_TIMEOUT = 3000;
   const TERMINAL_APPS = [
-    { match: /\/Cursor(\.app\/|\s|$)/, app: "Cursor", activate: "Cursor" },
+    { match: /\bCursor(\.app)?\b/, app: "Cursor", activate: "Cursor" },
     {
-      match: /\/Code(\.app\/|\s|$)/,
+      match: /\bCode(\.app)?\b/,
       app: "VS Code",
       activate: "Visual Studio Code",
     },
@@ -1514,26 +1429,15 @@ async function focusExternalTerminal(pid) {
   try {
     let checkPid = String(pid);
     for (let i = 0; i < 10; i++) {
-      const { stdout: ppidOut } = await execFileAsync(
-        "ps",
-        ["-p", checkPid, "-o", "ppid="],
-        { timeout: EXEC_TIMEOUT },
-      );
-      const ppid = ppidOut.trim();
+      const ppid = await platform.getParentPid(checkPid);
       if (!ppid || ppid === "0" || ppid === "1") break;
-      const { stdout: pnameOut } = await execFileAsync(
-        "ps",
-        ["-p", ppid, "-o", "comm="],
-        { timeout: EXEC_TIMEOUT },
-      );
-      const pname = pnameOut.trim();
-      for (const { match: m, app, activate } of TERMINAL_APPS) {
-        if (m.test(pname)) {
-          await execFileAsync("osascript", [
-            "-e",
-            `tell application "${activate}" to activate`,
-          ]);
-          return { focused: true, app };
+      const pname = await platform.getProcessName(ppid);
+      if (pname) {
+        for (const { match: m, app, activate } of TERMINAL_APPS) {
+          if (m.test(pname)) {
+            await platform.activateApp(activate);
+            return { focused: true, app };
+          }
         }
       }
       checkPid = ppid;

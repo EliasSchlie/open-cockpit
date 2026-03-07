@@ -21,9 +21,17 @@ function readPool(poolFile) {
  * Write pool.json atomically (write to tmp, then rename).
  */
 function writePool(poolFile, pool) {
-  fs.mkdirSync(path.dirname(poolFile), { recursive: true, mode: 0o700 });
+  const { IS_WINDOWS } = require("./platform");
+  fs.mkdirSync(path.dirname(poolFile), {
+    recursive: true,
+    ...(IS_WINDOWS ? {} : { mode: 0o700 }),
+  });
   const tmp = poolFile + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(pool, null, 2), { mode: 0o600 });
+  fs.writeFileSync(
+    tmp,
+    JSON.stringify(pool, null, 2),
+    IS_WINDOWS ? {} : { mode: 0o600 },
+  );
   fs.renameSync(tmp, poolFile);
 }
 

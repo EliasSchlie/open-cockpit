@@ -47,6 +47,17 @@
         }
       ]
     },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
     "dmg": {
       "title": "Open Cockpit"
     },

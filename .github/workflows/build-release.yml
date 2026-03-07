@@ -1,4 +1,4 @@
-name: Build and release macOS .dmg
+name: Build and release
 
 on:
   push:
@@ -9,36 +9,70 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-mac:
     runs-on: macos-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-
       - run: npm ci
-
       - run: npm run build
-
       - name: Build .dmg with electron-builder (ad-hoc signed)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --mac --publish never
-
-      - name: Upload .dmg artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: open-cockpit-dmg
+          name: open-cockpit-mac
           path: release-builds/*.dmg
 
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build AppImage and .deb
+        run: npx electron-builder --linux --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cockpit-linux
+          path: |
+            release-builds/*.AppImage
+            release-builds/*.deb
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build Windows installer
+        run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cockpit-windows
+          path: release-builds/*.exe
+
+  release:
+    needs: [build-mac, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release-builds/*.dmg
-            release-builds/*.blockmap
-            release-builds/latest-mac.yml
+          files: artifacts/**/*
