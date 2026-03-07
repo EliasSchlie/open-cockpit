@@ -1,6 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "Running tests before push..."
-npm test
+# Skip tests for delete-only pushes (branch cleanup)
+while read local_ref local_oid remote_ref remote_oid; do
+  if [ "$local_oid" != "0000000000000000000000000000000000000000" ]; then
+    echo "Running tests before push..."
+    npm test
+    exit $?
+  fi
+done
+
+echo "Delete-only push — skipping tests."
 
