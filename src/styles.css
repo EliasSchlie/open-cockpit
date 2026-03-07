@@ -832,8 +832,11 @@ body.dock-resizing-v {
   cursor: pointer;
 }
 
-.inline-snapshot-restart:hover {
+.inline-snapshot-restart:hover,
+.inline-snapshot-restart:focus {
   background: var(--accent-dim);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .inline-snapshot-content {

@@ -21,6 +21,7 @@ const {
   INTENTIONS_DIR,
   OFFLOADED_DIR,
   POOL_FILE,
+  SESSION_GRAPH_FILE,
 } = require("./paths");
 
 // --- Init pattern for injected dependencies ---
@@ -737,6 +738,8 @@ async function getSessionsUncached() {
   sessions.push(...dedupedSessions);
 
   // Archive dead sessions (save as archived without snapshot)
+  // Child sessions (sub-agents) are NOT independently archived — they stay
+  // grouped under their parent and only get archived when the parent is archived.
   const poolForArchive = readPool();
   const poolSessionIdsForArchive = new Set();
   if (poolForArchive) {
@@ -744,9 +747,26 @@ async function getSessionsUncached() {
       if (slot.sessionId) poolSessionIdsForArchive.add(slot.sessionId);
     }
   }
+  let sessionGraph;
+  try {
+    sessionGraph = JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
+  } catch {
+    sessionGraph = {};
+  }
+  const sessionIdSet = new Set(sessions.map((s) => s.sessionId));
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (s.status !== STATUS.DEAD) continue;
+
+    // Skip auto-archive for child sessions whose parent exists — they'll be
+    // archived when the parent is archived (depth-first cascade in renderer)
+    const graphEntry = sessionGraph[s.sessionId];
+    if (
+      graphEntry?.parentSessionId &&
+      sessionIdSet.has(graphEntry.parentSessionId)
+    ) {
+      continue;
+    }
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
