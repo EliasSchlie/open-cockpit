@@ -10,7 +10,7 @@ source "$(dirname "$0")/common.sh"
 
 mkdir -p "$SESSION_PIDS_DIR"
 
-# Ensure cockpit-cli is accessible at a stable path
+# Ensure cockpit-cli is accessible at a stable path and on PATH
 OC_BIN_DIR="$OC_DIR/bin"
 PLUGIN_CLI="$(dirname "$0")/../bin/cockpit-cli"
 if [ -f "$PLUGIN_CLI" ]; then
@@ -18,6 +18,12 @@ if [ -f "$PLUGIN_CLI" ]; then
     if [ "$(readlink "$OC_BIN_DIR/cockpit-cli" 2>/dev/null)" != "$target" ]; then
         mkdir -p "$OC_BIN_DIR"
         ln -sf "$target" "$OC_BIN_DIR/cockpit-cli"
+    fi
+    # Also symlink into /usr/local/bin so it's on PATH without shell config changes
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        if [ "$(readlink /usr/local/bin/cockpit-cli 2>/dev/null)" != "$OC_BIN_DIR/cockpit-cli" ]; then
+            ln -sf "$OC_BIN_DIR/cockpit-cli" /usr/local/bin/cockpit-cli 2>/dev/null || true
+        fi
     fi
 fi
 
