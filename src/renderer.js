@@ -485,39 +485,59 @@ function toggleChildren() {
 
 function switchChildSession(direction) {
   if (!state.currentSessionId) return;
-  const current = state.cachedSessions.find(
-    (s) => s.sessionId === state.currentSessionId,
-  );
+  const byId = new Map(state.cachedSessions.map((s) => [s.sessionId, s]));
+  const cMap = new Map();
+  for (const s of state.cachedSessions) {
+    if (s.parentSessionId && byId.has(s.parentSessionId)) {
+      if (!cMap.has(s.parentSessionId)) cMap.set(s.parentSessionId, []);
+      cMap.get(s.parentSessionId).push(s);
+    }
+  }
+  const current = byId.get(state.currentSessionId);
   if (!current) return;
 
-  // Determine parent and siblings
-  const parentId = current.parentSessionId || current.sessionId;
-  const siblings = state.cachedSessions.filter(
-    (s) => s.parentSessionId === parentId,
-  );
-  if (siblings.length === 0) return;
+  const expandAndSelect = (parentId, target) => {
+    if (!isChildrenExpanded(parentId)) toggleChildrenExpanded(parentId);
+    selectSession(target);
+  };
 
-  // Ensure parent is expanded so children are visible
-  if (!isChildrenExpanded(parentId)) {
-    toggleChildrenExpanded(parentId);
-  }
-
-  if (!current.parentSessionId) {
-    // On parent: go to first (down) or last (up) child
-    selectSession(direction > 0 ? siblings[0] : siblings[siblings.length - 1]);
-    return;
-  }
-
-  const idx = siblings.findIndex((s) => s.sessionId === current.sessionId);
-  if (idx === -1) return;
-
-  const nextIdx = idx + direction;
-  if (nextIdx < 0 || nextIdx >= siblings.length) {
-    // Navigate back to parent
-    const parent = state.cachedSessions.find((s) => s.sessionId === parentId);
-    if (parent) selectSession(parent);
+  if (direction > 0) {
+    // Down: if current has children, go deeper into first child
+    const children = cMap.get(current.sessionId);
+    if (children?.length) {
+      expandAndSelect(current.sessionId, children[0]);
+      return;
+    }
+    // Leaf node: walk up ancestors to find next sibling
+    let node = current;
+    while (node.parentSessionId) {
+      const siblings = cMap.get(node.parentSessionId) || [];
+      const idx = siblings.findIndex((s) => s.sessionId === node.sessionId);
+      if (idx !== -1 && idx + 1 < siblings.length) {
+        selectSession(siblings[idx + 1]);
+        return;
+      }
+      node = byId.get(node.parentSessionId);
+      if (!node) return;
+    }
   } else {
-    selectSession(siblings[nextIdx]);
+    // Up: navigate to prev sibling or back to parent
+    if (current.parentSessionId) {
+      const siblings = cMap.get(current.parentSessionId) || [];
+      const idx = siblings.findIndex((s) => s.sessionId === current.sessionId);
+      if (idx > 0) {
+        selectSession(siblings[idx - 1]);
+      } else {
+        const parent = byId.get(current.parentSessionId);
+        if (parent) selectSession(parent);
+      }
+    } else {
+      // On a top-level parent: go to last child
+      const children = cMap.get(current.sessionId);
+      if (children?.length) {
+        expandAndSelect(current.sessionId, children[children.length - 1]);
+      }
+    }
   }
 }
 
@@ -525,7 +545,10 @@ function switchChildSession(direction) {
 
 function jumpToRecentIdle() {
   const idle = state.cachedSessions.find(
-    (s) => s.status === STATUS.IDLE && s.sessionId !== state.currentSessionId,
+    (s) =>
+      s.status === STATUS.IDLE &&
+      s.sessionId !== state.currentSessionId &&
+      s.initiator !== "model",
   );
   if (idle) selectSession(idle);
 }
