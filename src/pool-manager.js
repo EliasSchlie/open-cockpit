@@ -1198,7 +1198,7 @@ async function poolResume(sessionId) {
   // Atomically ensure a fresh slot and claim it for /resume.
   // Unarchive only after the slot is claimed — if withFreshSlot fails,
   // the session stays archived instead of getting stuck in recents.
-  return withFreshSlot(async (pool, slot) => {
+  const result = await withFreshSlot(async (pool, slot) => {
     if (readOffloadMeta(sessionId)?.archived) unarchiveSession(sessionId);
     const oldSlotSessionId = slot.sessionId;
 
@@ -1209,6 +1209,7 @@ async function poolResume(sessionId) {
       throw err; // slot stays fresh (withFreshSlot default)
     }
     slot.status = POOL_STATUS.BUSY;
+    slot.sessionId = null; // Clear so pollForResumedSession doesn't match the old slot session
     writePool(pool);
 
     // Track slot in background (session ID polling after /resume)
@@ -1242,7 +1243,6 @@ async function poolResume(sessionId) {
                 `Failed to re-tag orphaned terminals: ${err.message}`,
               );
             }
-            removeOffloadData(sessionId);
           }
           invalidateSessionsCache();
         },
@@ -1256,6 +1256,13 @@ async function poolResume(sessionId) {
       slotIndex: slot.index,
     };
   });
+
+  // Remove offload data outside the pool lock so fs.rmSync doesn't block
+  // concurrent pool operations. Done after the slot is claimed and /resume sent.
+  removeOffloadData(sessionId);
+  invalidateSessionsCache();
+
+  return result;
 }
 
 function watchIntention(sessionId) {

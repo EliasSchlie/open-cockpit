@@ -282,7 +282,13 @@ stat -f "mtime=%m" <transcript_path>    # compare with signal mtime
 - **Auto-archive**: Dead sessions with an intention heading are auto-archived. Sessions that were never used (no intention, no snapshot) are silently discarded to avoid archive spam.
 - **Manual archive**: Right-click any session → "Archive". Pool sessions are auto-offloaded (snapshot + `/clear`) before archiving.
 - **Sidebar**: Archive section appears below Processing. Archived sessions are dimmed.
-- **Resume**: Click an archived session → "Restart Session" dialog → acquires a fresh pool slot, runs `/resume <uuid>`, moves back to Recent.
+- **Resume**: Click an archived session → "Restart" button or right-click → "Restart". Acquires a fresh pool slot, runs `/resume <claudeSessionId>`, creates a new session with a new ID.
+- **Resume flow** (spans pool-manager.js → renderer.js):
+  1. `poolResume(oldId)`: claims fresh slot inside `withPoolLock`, sends `/resume`, clears `slot.sessionId`, writes pool
+  2. After lock releases: removes offload data immediately (prevents stale "offloaded" entry in sidebar)
+  3. `trackNewSlot` polls in background until Claude's `SessionStart` hook writes the new session ID
+  4. Renderer's `pollForResumedSession` polls pool.json for the slot's new session ID
+  5. Once resolved: renderer updates `state.currentSessionId`, re-tags terminals, reloads intention file + watcher
 - **Unarchive**: Right-click archived session → "Move to Recent" moves it back to offloaded (no restart).
 - **Data**: `archived: true` flag in `~/.open-cockpit/offloaded/<id>/meta.json`.
 
