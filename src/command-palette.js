@@ -30,6 +30,24 @@ export function initCommandPalette(actions) {
       action: () => _actions.switchSession(-1),
     },
     {
+      id: "toggle-children",
+      label: "Toggle Child Sessions",
+      shortcutAction: "toggle-children",
+      action: () => _actions.toggleChildren(),
+    },
+    {
+      id: "next-child-session",
+      label: "Next Child Session",
+      shortcutAction: "next-child-session",
+      action: () => _actions.switchChildSession(1),
+    },
+    {
+      id: "prev-child-session",
+      label: "Previous Child Session",
+      shortcutAction: "prev-child-session",
+      action: () => _actions.switchChildSession(-1),
+    },
+    {
       id: "new-session",
       label: "New Claude Session",
       shortcutAction: "new-session",

@@ -25,6 +25,9 @@ import {
   updateTypingState,
   showInlineSnapshot,
   removeInlineSnapshot,
+  toggleChildrenExpanded,
+  isChildrenExpanded,
+  hasSessionChildren,
 } from "./session-sidebar.js";
 import {
   initTerminals,
@@ -444,6 +447,65 @@ function switchSession(direction) {
   selectSession(navigable[nextIndex]);
 }
 
+// --- Child session navigation ---
+
+function toggleChildren() {
+  if (!state.currentSessionId) return;
+  const current = state.cachedSessions.find(
+    (s) => s.sessionId === state.currentSessionId,
+  );
+  if (!current) return;
+
+  // If current session has children, toggle its expand/collapse
+  if (hasSessionChildren(current.sessionId)) {
+    toggleChildrenExpanded(current.sessionId);
+    return;
+  }
+
+  // If current session is a child, toggle its parent's children
+  if (current.parentSessionId && hasSessionChildren(current.parentSessionId)) {
+    toggleChildrenExpanded(current.parentSessionId);
+  }
+}
+
+function switchChildSession(direction) {
+  if (!state.currentSessionId) return;
+  const current = state.cachedSessions.find(
+    (s) => s.sessionId === state.currentSessionId,
+  );
+  if (!current) return;
+
+  // Determine parent and siblings
+  const parentId = current.parentSessionId || current.sessionId;
+  const siblings = state.cachedSessions.filter(
+    (s) => s.parentSessionId === parentId,
+  );
+  if (siblings.length === 0) return;
+
+  // Ensure parent is expanded so children are visible
+  if (!isChildrenExpanded(parentId)) {
+    toggleChildrenExpanded(parentId);
+  }
+
+  if (!current.parentSessionId) {
+    // On parent: go to first (down) or last (up) child
+    selectSession(direction > 0 ? siblings[0] : siblings[siblings.length - 1]);
+    return;
+  }
+
+  const idx = siblings.findIndex((s) => s.sessionId === current.sessionId);
+  if (idx === -1) return;
+
+  const nextIdx = idx + direction;
+  if (nextIdx < 0 || nextIdx >= siblings.length) {
+    // Navigate back to parent
+    const parent = state.cachedSessions.find((s) => s.sessionId === parentId);
+    if (parent) selectSession(parent);
+  } else {
+    selectSession(siblings[nextIdx]);
+  }
+}
+
 // --- Jump to most recent idle session ---
 
 function jumpToRecentIdle() {
@@ -643,6 +705,8 @@ initCommandPalette({
   loadSessions,
   showPoolSettings,
   showShortcutSettings,
+  toggleChildren,
+  switchChildSession,
 });
 
 // Editor doc change callback
@@ -745,6 +809,9 @@ window.api.onSwitchTerminalTab((index) => {
 window.api.onNewSession(() => dom.newSessionBtn.click());
 window.api.onNextSession(() => switchSession(1));
 window.api.onPrevSession(() => switchSession(-1));
+window.api.onToggleChildren(toggleChildren);
+window.api.onNextChildSession(() => switchChildSession(1));
+window.api.onPrevChildSession(() => switchChildSession(-1));
 window.api.onToggleSidebar(toggleSidebar);
 window.api.onFocusEditor(focusEditor);
 window.api.onFocusTerminal(() => {

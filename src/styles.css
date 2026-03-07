@@ -289,6 +289,27 @@ body {
   background: rgba(255, 255, 0, 0.1);
 }
 
+/* Child session nesting */
+.session-child {
+  opacity: 0.8;
+}
+
+.session-child:hover {
+  opacity: 1;
+}
+
+.session-children-toggle {
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  padding: 2px;
+}
+
+.session-children-toggle:hover {
+  color: var(--text);
+}
+
 .session-cwd {
   font-size: 11px;
   color: var(--text-dim);

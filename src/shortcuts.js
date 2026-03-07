@@ -39,6 +39,10 @@ const DEFAULT_SHORTCUTS = {
   "focus-prev-pane": "CmdOrCtrl+Alt+[",
   "split-right": "",
   "split-down": "",
+  // Child session navigation
+  "toggle-children": "Alt+Right",
+  "next-child-session": "Alt+Shift+Down",
+  "prev-child-session": "Alt+Shift+Up",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",
@@ -51,6 +55,9 @@ const INPUT_EVENT_ACTIONS = new Set([
   "next-session",
   "prev-session",
   "cycle-pane",
+  "toggle-children",
+  "next-child-session",
+  "prev-child-session",
 ]);
 
 let userOverrides = {};

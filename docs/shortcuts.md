@@ -56,6 +56,8 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+/` | Command Palette |
 | `Cmd+,` | Pool Settings |
 | `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
+| `Alt+Right` | Toggle Child Sessions (expand/collapse) |
+| `Alt+Shift+Down` / `Up` | Next / Previous Child Session |
 | *(unbound)* | Toggle Pane Focus (editor ↔ terminal) |
 | *(unbound)* | Split Right |
 | *(unbound)* | Split Down |

@@ -99,6 +99,9 @@ function createWindow() {
     "next-session": "next-session",
     "prev-session": "prev-session",
     "cycle-pane": "cycle-pane",
+    "toggle-children": "toggle-children",
+    "next-child-session": "next-child-session",
+    "prev-child-session": "prev-child-session",
   };
 
   mainWindow.webContents.on("before-input-event", (event, input) => {
