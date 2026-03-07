@@ -433,13 +433,25 @@ function scheduleSave() {
 
 function switchSession(direction) {
   // Navigate between active sessions (idle + processing + typing) + archived
+  // Skip child sessions whose parent (or any ancestor) is collapsed
+  const byId = new Map(state.cachedSessions.map((s) => [s.sessionId, s]));
+  const isVisible = (s) => {
+    let cur = s;
+    while (cur.parentSessionId) {
+      if (!isChildrenExpanded(cur.parentSessionId)) return false;
+      cur = byId.get(cur.parentSessionId);
+      if (!cur) break;
+    }
+    return true;
+  };
   const navigable = state.cachedSessions.filter(
     (s) =>
-      (s.alive &&
+      ((s.alive &&
         (s.status === STATUS.IDLE ||
           s.status === STATUS.PROCESSING ||
           s.status === STATUS.TYPING)) ||
-      s.status === STATUS.ARCHIVED,
+        s.status === STATUS.ARCHIVED) &&
+      isVisible(s),
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
