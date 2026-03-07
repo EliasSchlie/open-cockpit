@@ -49,17 +49,41 @@ The app has three layers:
 
 A **Claude Code plugin** (`hooks/`) runs inside each Claude session to report status back to the app — mapping PIDs to session UUIDs, detecting idle/processing state, and syncing intention file changes. ([docs](docs/hooks.md))
 
-## Setup
+## Install
+
+### Download
+
+Download the latest `.dmg` from [GitHub Releases](https://github.com/EliasSchlie/open-cockpit/releases):
+- **Apple Silicon** (M1/M2/M3/M4): `Open Cockpit-x.x.x-arm64.dmg`
+- **Intel**: `Open Cockpit-x.x.x.dmg`
+
+### First launch (unsigned app)
+
+The app is not code-signed. macOS will block it on first open. To fix:
 
 ```bash
-npm install
-npm start
+xattr -cr /Applications/Open\ Cockpit.app
 ```
+
+Or: right-click the app → **Open** (instead of double-clicking).
 
 ### Plugin
 
+Install the Claude Code plugin for session tracking:
+
 ```bash
 claude plugin install open-cockpit@elias-tools
+```
+
+The app checks for both Claude Code and the plugin on first launch and will guide you through setup.
+
+### Build from source
+
+```bash
+git clone https://github.com/EliasSchlie/open-cockpit.git
+cd open-cockpit
+npm install
+npm start
 ```
 
 ## Further documentation
