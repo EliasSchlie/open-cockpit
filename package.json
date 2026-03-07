@@ -1,17 +1,57 @@
 {
   "name": "open-cockpit",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Session cockpit for Claude Code",
+  "author": "Elias Schlie",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EliasSchlie/open-cockpit"
+  },
   "main": "src/main.js",
   "scripts": {
     "build": "esbuild src/renderer.js --bundle --outfile=dist/renderer.js --platform=browser --format=iife",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "dev:own-pool": "npm run build && electron . --dev --own-pool",
-    "postinstall": "command -v electron-rebuild >/dev/null && electron-rebuild -m . || true",
+    "postinstall": "electron-builder install-app-deps",
     "prepare": "git config core.hooksPath .githooks",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "directories": {
+      "output": "release-builds"
+    },
+    "appId": "com.elias.open-cockpit",
+    "productName": "Open Cockpit",
+    "asar": false,
+    "files": [
+      "src/**/*",
+      "dist/**/*",
+      "bin/**/*",
+      "hooks/**/*",
+      "skills/**/*",
+      ".claude-plugin/**/*"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null
+    },
+    "dmg": {
+      "title": "Open Cockpit"
+    },
+    "npmRebuild": true
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.2",
@@ -24,11 +64,12 @@
     "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
+    "electron-updater": "^6.8.3",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-rebuild": "^3.2.9",
+    "electron-builder": "^26.8.1",
     "esbuild": "^0.27.3",
     "vitest": "^4.0.18"
   }

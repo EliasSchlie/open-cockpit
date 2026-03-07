@@ -142,10 +142,10 @@ Just push your changes — CI handles version bumping and marketplace sync. For 
 
 ## Native modules
 
-`node-pty` is a native module that must be compiled for Electron's Node version (not the system Node). After `npm install` or moving the project directory, run:
+`node-pty` is a native module that must be compiled for Electron's Node version (not the system Node). This happens automatically via `postinstall` (`electron-builder install-app-deps`). If it fails or you need to rebuild manually:
 
 ```bash
-npx electron-rebuild -m .
+npx electron-builder install-app-deps
 ```
 
 **Symptom if skipped:** Pool init fails with "Daemon request timeout", debug log shows no spawn activity. The daemon responds to `ping` but silently crashes on `spawn` (`posix_spawnp failed` due to ABI mismatch between system Node and Electron's Node).
