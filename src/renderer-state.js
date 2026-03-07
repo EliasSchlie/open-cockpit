@@ -60,6 +60,24 @@ export const state = {
 export const sessionTerminals = new Map();
 export const CLEANUP_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
+// --- User activity tracking (for bell suppression) ---
+let lastActivityTs = Date.now();
+
+export function trackActivity() {
+  lastActivityTs = Date.now();
+}
+
+export function isUserActive(thresholdMs = 20_000) {
+  return Date.now() - lastActivityTs <= thresholdMs;
+}
+
+for (const evt of ["pointerdown", "keydown", "wheel", "scroll"]) {
+  document.addEventListener(evt, trackActivity, {
+    passive: true,
+    capture: true,
+  });
+}
+
 // --- Notification helpers ---
 
 export function showNotification(msg) {
