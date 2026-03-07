@@ -232,12 +232,9 @@ export async function spawnTerminal(cwd, cmd, args, targetLeafId) {
   // Register with dock
   dockRegisterTerminal(entry);
   if (state.dock) {
-    // Add to target leaf or next to Claude tab
-    const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
-    const leaf =
-      targetLeafId ||
-      (tuiTab && state.dock.getTabLeafId(tuiTab)) ||
-      state.dock.getFirstLeafId();
+    // Add to target leaf, or next to editor (intention pane), or first leaf
+    const editorLeaf = state.dock.getTabLeafId(TAB_EDITOR);
+    const leaf = targetLeafId || editorLeaf || state.dock.getFirstLeafId();
     state.dock.addTab(entry.dockTabId, leaf);
   }
 
