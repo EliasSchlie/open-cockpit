@@ -54,29 +54,50 @@ export function registerEditorTab(dock, editorContainer) {
   });
 }
 
-// Terminal resize via dock-resize + window resize events (replaces per-terminal ResizeObservers)
+// Terminal resize: ResizeObserver catches actual container size changes (sidebar
+// toggle, window resize, split drag); dock-resize event catches DOM reattachment
+// where container size is unchanged (tab switch, session restore).
 export function setupTerminalResize(entry) {
   let pending = false;
-  const handler = () => {
+  let prevCols = entry.term.cols;
+  let prevRows = entry.term.rows;
+
+  const doFit = () => {
     if (pending) return;
     pending = true;
     requestAnimationFrame(() => {
       pending = false;
-      if (entry.container.offsetParent) {
-        entry.fitAddon.fit();
-        window.api.ptyResize(entry.termId, entry.term.cols, entry.term.rows);
+      if (!entry.container.offsetParent) return;
+      entry.fitAddon.fit();
+      const { cols, rows } = entry.term;
+      if (cols !== prevCols || rows !== prevRows) {
+        prevCols = cols;
+        prevRows = rows;
+        window.api.ptyResize(entry.termId, cols, rows);
+      } else {
+        // Dimensions unchanged — force repaint for DOM reattachment cases
+        // where the canvas renderer is stale. Skipped when dimensions changed
+        // because fit() already triggers a full re-render via terminal.resize().
+        entry.term.refresh(0, rows - 1);
       }
     });
   };
-  window.addEventListener("dock-resize", handler);
-  window.addEventListener("resize", handler);
-  entry._resizeHandler = handler;
+
+  const ro = new ResizeObserver(doFit);
+  ro.observe(entry.container);
+  window.addEventListener("dock-resize", doFit);
+
+  entry._resizeObserver = ro;
+  entry._resizeHandler = doFit;
 }
 
 export function teardownTerminalResize(entry) {
+  if (entry._resizeObserver) {
+    entry._resizeObserver.disconnect();
+    entry._resizeObserver = null;
+  }
   if (entry._resizeHandler) {
     window.removeEventListener("dock-resize", entry._resizeHandler);
-    window.removeEventListener("resize", entry._resizeHandler);
     entry._resizeHandler = null;
   }
 }

@@ -353,10 +353,6 @@ export function restoreSessionTerminals(sessionId) {
   initDockLayout(state.terminals, cached.dockLayout);
   for (const entry of state.terminals) setupTerminalResize(entry);
 
-  // initDockLayout dispatches dock-resize before listeners are registered —
-  // fire again so restored terminals adapt to the current container size
-  window.dispatchEvent(new Event("dock-resize"));
-
   return true;
 }
 
