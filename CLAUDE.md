@@ -30,6 +30,8 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/terminal-manager.js` — Terminal creation, attach, switch, close, caching, reconnect, PTY IPC
 - `src/pool-ui.js` — Pool settings panel, slot terminal popup, shortcut settings
 - `src/command-palette.js` — COMMANDS registry, pane navigation, palette UI
+- `src/session-stats.js` — On-demand JSONL parsing, token/cost stats, sub-agent aggregation
+- `src/stats-ui.js` — Session Info overlay dialog (⌘I)
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
 - `bin/cockpit-cli` — CLI for observing and interacting with agents. High-level commands (`ls`, `screen`, `watch`, `log`, `prompt`, `key`, `type`) + session commands (`start`, `followup`, `wait`, `pin`, `stop`) + pool management ([docs/api.md](docs/api.md))
 - `skills/cockpit-sessions/` — Skill docs for Claude Code (SKILL.md + sub-skills)

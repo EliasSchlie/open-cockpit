@@ -35,6 +35,7 @@ const channels = [
   "archive-current-session",
   "open-in-cursor",
   "open-pool-settings",
+  "session-info",
   "toggle-bell",
   "pool-slots-recovered",
 ];
@@ -114,6 +115,13 @@ contextBridge.exposeInMainWorld("api", {
 
   // App info
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+
+  // Session stats (on-demand)
+  getSessionStats: (sessionId) =>
+    ipcRenderer.invoke("get-session-stats", sessionId),
+  getAllSessionStats: () => ipcRenderer.invoke("get-all-session-stats"),
+  onOpenSessionInfo: (callback) =>
+    ipcRenderer.on("session-info", () => callback()),
 
   // Dialog state — suppresses global shortcuts while a modal is open
   setDialogOpen: (open) => ipcRenderer.send("dialog-open", open),

@@ -55,6 +55,7 @@ import {
   cycleTabInFocusedLeaf,
 } from "./terminal-manager.js";
 import { initPoolUi, showSettings, updatePoolHealthBadge } from "./pool-ui.js";
+import { openSessionInfo } from "./stats-ui.js";
 import {
   initCommandPalette,
   toggleCommandPalette,
@@ -759,6 +760,7 @@ initCommandPalette({
   showSettings,
   toggleChildren,
   switchChildSession,
+  openSessionInfo,
 });
 
 // Editor doc change callback
@@ -873,6 +875,7 @@ window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });
 window.api.onOpenPoolSettings(() => showSettings());
+window.api.onOpenSessionInfo(() => openSessionInfo());
 window.api.onToggleBell(toggleBellMuted);
 
 // Bell toggle button
