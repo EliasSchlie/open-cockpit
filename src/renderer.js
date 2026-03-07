@@ -328,9 +328,13 @@ async function resumeOffloadedSession(session) {
     // Clean up any renderer-side cached terminals for the old session
     // (e.g. from startup reconnect). The daemon terminals were re-tagged
     // to the new sessionId by main.js, so we just dispose the stale UI.
+    // Skip terminals currently active in the dock — they were attached
+    // during this resume and will be re-cached under the new session ID.
+    const activeTermIds = new Set(state.terminals.map((t) => t.termId));
     const oldCached = sessionTerminals.get(oldSessionId);
     if (oldCached) {
       for (const entry of oldCached.terminals) {
+        if (activeTermIds.has(entry.termId)) continue;
         window.api.ptyDetach(entry.termId).catch(() => {});
         disposeTerminalEntry(entry, state.dock);
       }
