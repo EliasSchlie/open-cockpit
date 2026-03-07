@@ -25,7 +25,7 @@ const {
   resolveSlot: resolveSlotInPool,
   findOffloadTarget,
 } = require("./pool");
-const { STATUS, POOL_STATUS } = require("./session-statuses");
+const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 const {
   daemonSend,
   daemonSendSafe,
@@ -261,7 +261,7 @@ function recordSessionRelation(sessionId, parentSessionId, initiator) {
   const graph = readSessionGraph();
   graph[sessionId] = {
     parentSessionId: parentSessionId || null,
-    initiator: initiator || "user",
+    initiator: initiator || INITIATOR.USER,
     createdAt: new Date().toISOString(),
   };
   writeSessionGraph(graph);
@@ -1173,6 +1173,7 @@ async function withFreshSlot(claimFn) {
     const pool = readPool();
     if (!pool) throw new Error("Pool not initialized");
     const sessions = await getSessions();
+    enrichSessionsWithGraphData(sessions);
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
     return findOffloadTarget(pool, sessionMap);
   });

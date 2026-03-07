@@ -6,7 +6,7 @@ const {
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
 } = require("./pool");
-const { STATUS, POOL_STATUS } = require("./session-statuses");
+const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 const { IDLE_SIGNALS_DIR } = require("./paths");
 const { secureWriteFileSync } = require("./secure-fs");
 const {
@@ -278,7 +278,7 @@ function buildApiHandlers() {
     recordSessionRelation(
       result.sessionId,
       msg.parentSessionId || null,
-      msg.parentSessionId ? "model" : "user",
+      msg.parentSessionId ? INITIATOR.MODEL : INITIATOR.USER,
     );
     return result;
   };

@@ -11,7 +11,7 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS } from "./session-statuses.js";
+import { STATUS, INITIATOR } from "./session-statuses.js";
 import {
   createDefaultLayout,
   TAB_EDITOR,
@@ -227,7 +227,7 @@ async function loadSessions() {
   prevSessionFingerprints = fingerprints;
 
   // Bell when a session transitions to idle (finished processing).
-  // Skip child sessions (initiator === "model") — they shouldn't ring.
+  // Skip child sessions (model-initiated) — they shouldn't ring.
   // Suppress for the currently-viewed session if the window is focused
   // and the user has been active in the last 20 seconds.
   if (oldStatuses.size > 0) {
@@ -235,7 +235,7 @@ async function loadSessions() {
     for (const s of sessions) {
       if (
         s.status === STATUS.IDLE &&
-        s.initiator !== "model" &&
+        s.initiator !== INITIATOR.MODEL &&
         oldStatuses.has(s.sessionId) &&
         oldStatuses.get(s.sessionId) !== STATUS.IDLE
       ) {
