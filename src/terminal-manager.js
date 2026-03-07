@@ -232,9 +232,9 @@ export async function spawnTerminal(cwd, cmd, args, targetLeafId) {
   // Register with dock
   dockRegisterTerminal(entry);
   if (state.dock) {
-    // Add to target leaf, or next to editor (intention pane), or first leaf
-    const editorLeaf = state.dock.getTabLeafId(TAB_EDITOR);
-    const leaf = targetLeafId || editorLeaf || state.dock.getFirstLeafId();
+    // Add to target leaf, or focused leaf, or first leaf
+    const focusedLeaf = getFocusedLeafId();
+    const leaf = targetLeafId || focusedLeaf || state.dock.getFirstLeafId();
     state.dock.addTab(entry.dockTabId, leaf);
   }
 
@@ -309,13 +309,17 @@ export function switchToTerminal(index) {
 }
 
 // Cycle to the next/prev tab within the focused pane.
+function getFocusedLeafId() {
+  if (!state.dock) return null;
+  const focusedTabId = getFocusedTabId(state.dock, dom.dockContainer);
+  if (!focusedTabId) return null;
+  return state.dock.getTabLeafId(focusedTabId);
+}
+
 // When at the boundary, crosses to the adjacent pane.
 // direction: +1 for next, -1 for previous.
 export function cycleTabInFocusedLeaf(direction) {
-  if (!state.dock) return;
-  const focusedTabId = getFocusedTabId(state.dock, dom.dockContainer);
-  if (!focusedTabId) return;
-  const leafId = state.dock.getTabLeafId(focusedTabId);
+  const leafId = getFocusedLeafId();
   if (!leafId) return;
 
   const info = state.dock.getLeafTabInfo(leafId);
