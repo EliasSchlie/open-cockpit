@@ -424,29 +424,51 @@ function scheduleSave() {
   }, 500);
 }
 
+// --- Session tree helpers (shared by navigation functions) ---
+
+function buildSessionMaps() {
+  const byId = new Map(state.cachedSessions.map((s) => [s.sessionId, s]));
+  const cMap = new Map();
+  const childIds = new Set();
+  for (const s of state.cachedSessions) {
+    if (s.parentSessionId && byId.has(s.parentSessionId)) {
+      childIds.add(s.sessionId);
+      if (!cMap.has(s.parentSessionId)) cMap.set(s.parentSessionId, []);
+      cMap.get(s.parentSessionId).push(s);
+    }
+  }
+  return { byId, cMap, childIds };
+}
+
+// Build flat list matching visual sidebar order (parents with children grouped)
+function buildVisualOrder({ cMap, childIds }) {
+  const result = [];
+  function addWithChildren(s) {
+    result.push(s);
+    const children = cMap.get(s.sessionId);
+    if (children && isChildrenExpanded(s.sessionId)) {
+      for (const child of children) addWithChildren(child);
+    }
+  }
+  for (const s of state.cachedSessions) {
+    if (!childIds.has(s.sessionId)) addWithChildren(s);
+  }
+  return result;
+}
+
 // --- Session switching ---
 
 function switchSession(direction) {
-  // Navigate between active sessions (idle + processing + typing) + archived
-  // Skip child sessions whose parent (or any ancestor) is collapsed
-  const byId = new Map(state.cachedSessions.map((s) => [s.sessionId, s]));
-  const isVisible = (s) => {
-    let cur = s;
-    while (cur.parentSessionId) {
-      if (!isChildrenExpanded(cur.parentSessionId)) return false;
-      cur = byId.get(cur.parentSessionId);
-      if (!cur) break;
-    }
-    return true;
-  };
-  const navigable = state.cachedSessions.filter(
+  // Navigate between visible sessions in visual (tree) order
+  const maps = buildSessionMaps();
+  const ordered = buildVisualOrder(maps);
+  const navigable = ordered.filter(
     (s) =>
-      ((s.alive &&
+      (s.alive &&
         (s.status === STATUS.IDLE ||
           s.status === STATUS.PROCESSING ||
           s.status === STATUS.TYPING)) ||
-        s.status === STATUS.ARCHIVED) &&
-      isVisible(s),
+      s.status === STATUS.ARCHIVED,
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
@@ -485,14 +507,7 @@ function toggleChildren() {
 
 function switchChildSession(direction) {
   if (!state.currentSessionId) return;
-  const byId = new Map(state.cachedSessions.map((s) => [s.sessionId, s]));
-  const cMap = new Map();
-  for (const s of state.cachedSessions) {
-    if (s.parentSessionId && byId.has(s.parentSessionId)) {
-      if (!cMap.has(s.parentSessionId)) cMap.set(s.parentSessionId, []);
-      cMap.get(s.parentSessionId).push(s);
-    }
-  }
+  const { byId, cMap } = buildSessionMaps();
   const current = byId.get(state.currentSessionId);
   if (!current) return;
 
