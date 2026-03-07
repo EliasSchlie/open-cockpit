@@ -111,15 +111,22 @@ export function teardownTerminalResize(entry) {
   }
 }
 
-// Determine the "focused" tab — which dock tab contains the active element
+// Determine the "focused" tab — which dock tab contains the active element.
+// Falls back to the last focused leaf if activeElement isn't in any leaf
+// (e.g. after a tab close when focus drops to <body>).
 export function getFocusedTabId(dock, container) {
   if (!dock) return null;
   const leafEls = container.querySelectorAll(".dock-leaf");
   for (const leafEl of leafEls) {
     if (leafEl.contains(document.activeElement)) {
       const leafId = leafEl.dataset.leafId;
+      dock.setFocusedLeaf(leafId);
       return dock.getActiveTabInLeaf(leafId);
     }
+  }
+  // Fallback: last focused leaf (focus lost after tab close, etc.)
+  if (dock.lastFocusedLeafId) {
+    return dock.getActiveTabInLeaf(dock.lastFocusedLeafId);
   }
   return null;
 }
@@ -132,13 +139,10 @@ export function disposeTerminalEntry(entry, dock) {
   entry.container.remove();
 }
 
-// Focus the first terminal in a given leaf
-export function focusLeafContent(dock, leafId, terminals) {
+// Focus the active tab in a given leaf. Returns true if a tab was activated.
+export function focusLeafContent(dock, leafId) {
   const activeTabId = dock.getActiveTabInLeaf(leafId);
-  if (!activeTabId) return;
-  if (activeTabId === TAB_EDITOR) return; // caller handles editor focus
-  const entry = terminals.find((t) => t.dockTabId === activeTabId);
-  if (entry) {
-    dock.activateTab(activeTabId); // fires onTabActivate which focuses the terminal
-  }
+  if (!activeTabId) return false;
+  dock.activateTab(activeTabId); // fires onTabActivate which focuses the content
+  return true;
 }
