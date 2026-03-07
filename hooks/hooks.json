@@ -24,7 +24,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/idle-signal.sh write stop"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/idle-signal.sh write stop",
+            "async": true
           }
         ]
       }
