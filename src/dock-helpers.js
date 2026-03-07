@@ -111,15 +111,22 @@ export function teardownTerminalResize(entry) {
   }
 }
 
-// Determine the "focused" tab — which dock tab contains the active element
+// Determine the "focused" tab — which dock tab contains the active element.
+// Falls back to the last focused leaf if activeElement isn't in any leaf
+// (e.g. after a tab close when focus drops to <body>).
 export function getFocusedTabId(dock, container) {
   if (!dock) return null;
   const leafEls = container.querySelectorAll(".dock-leaf");
   for (const leafEl of leafEls) {
     if (leafEl.contains(document.activeElement)) {
       const leafId = leafEl.dataset.leafId;
+      dock.lastFocusedLeafId = leafId;
       return dock.getActiveTabInLeaf(leafId);
     }
+  }
+  // Fallback: last focused leaf (focus lost after tab close, etc.)
+  if (dock.lastFocusedLeafId) {
+    return dock.getActiveTabInLeaf(dock.lastFocusedLeafId);
   }
   return null;
 }

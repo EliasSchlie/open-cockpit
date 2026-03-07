@@ -77,15 +77,13 @@ export function findTerminalEntry(termId) {
   return pendingTerminals.get(termId) || null;
 }
 
-// Derive active terminal index from dock state (no separate state to desync)
+// Derive active terminal index from the focused (or last-focused) leaf
 export function getActiveTermIndex() {
   if (!state.dock || state.terminals.length === 0) return -1;
-  // Check all leaves for a terminal tab that is active
-  for (let i = 0; i < state.terminals.length; i++) {
-    const tabId = state.terminals[i].dockTabId;
-    if (!tabId) continue;
-    const leafId = state.dock.getTabLeafId(tabId);
-    if (leafId && state.dock.getActiveTabInLeaf(leafId) === tabId) return i;
+  const focusedTabId = getFocusedTabId(state.dock, dom.dockContainer);
+  if (focusedTabId) {
+    const idx = state.terminals.findIndex((t) => t.dockTabId === focusedTabId);
+    if (idx !== -1) return idx;
   }
   return -1;
 }
@@ -359,6 +357,13 @@ export async function closeTerminal(index) {
 
   const entry = state.terminals[index];
   if (entry.isPoolTui) return; // Can't close the main Claude terminal
+
+  // Remember which leaf this tab is in before removing it — after unregisterTab
+  // the tab is gone from the tree, so we can't look it up anymore.
+  const closedLeafId = state.dock
+    ? state.dock.getTabLeafId(entry.dockTabId)
+    : null;
+
   await window.api.ptyDetach(entry.termId).catch(() => {});
   await window.api.ptyKill(entry.termId);
   disposeTerminalEntry(entry, state.dock);
@@ -368,8 +373,17 @@ export async function closeTerminal(index) {
     dom.sessionView.classList.add("hidden");
     dom.emptyState.classList.remove("hidden");
   } else {
-    // Focus the remaining active terminal (or first terminal)
-    focusTerminal();
+    // Focus the tab that's now active in the same leaf (dock already adjusted
+    // activeTab index). Falls back to focusTerminal() if the leaf collapsed.
+    let focused = false;
+    if (state.dock && closedLeafId) {
+      const activeTabId = state.dock.getActiveTabInLeaf(closedLeafId);
+      if (activeTabId) {
+        state.dock.activateTab(activeTabId);
+        focused = true;
+      }
+    }
+    if (!focused) focusTerminal();
   }
 
   syncSessionCache();

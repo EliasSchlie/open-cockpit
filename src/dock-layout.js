@@ -27,6 +27,7 @@ export class DockLayout {
     this.tabs = new Map(); // tabId → { id, type, label, closable, contentEl }
     this.callbacks = callbacks;
     this._dragTabId = null;
+    this.lastFocusedLeafId = null;
   }
 
   // --- Public API ---
@@ -61,6 +62,7 @@ export class DockLayout {
     if (!leaf) return;
     if (!leaf.tabs.includes(tabId)) leaf.tabs.push(tabId);
     leaf.activeTab = leaf.tabs.indexOf(tabId);
+    this.lastFocusedLeafId = leaf.id;
     this._patchLeaf(leaf);
   }
 
@@ -80,6 +82,7 @@ export class DockLayout {
       }
     });
     if (!targetLeaf) return;
+    this.lastFocusedLeafId = targetLeaf.id;
 
     // In-place update — avoid full DOM rebuild
     const leafEl = this.container.querySelector(
@@ -320,6 +323,9 @@ export class DockLayout {
     }
 
     this._cleanup();
+    // Track the leaf where the tab landed
+    const landedLeafId = this.getTabLeafId(tabId);
+    if (landedLeafId) this.lastFocusedLeafId = landedLeafId;
     this._render();
     if (this.callbacks.onLayoutChange) this.callbacks.onLayoutChange();
   }
@@ -408,6 +414,7 @@ export class DockLayout {
       // Click → activate
       tab.addEventListener("click", () => {
         node.activeTab = i;
+        this.lastFocusedLeafId = node.id;
         this._showActiveContent(node, leafEl);
         this._updateTabActive(tabList, i);
         window.dispatchEvent(new Event("dock-resize"));
