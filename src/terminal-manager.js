@@ -309,13 +309,45 @@ export function switchToTerminal(index) {
 }
 
 // Cycle to the next/prev tab within the focused pane.
+// When at the boundary, crosses to the adjacent pane.
 // direction: +1 for next, -1 for previous.
 export function cycleTabInFocusedLeaf(direction) {
   if (!state.dock) return;
   const focusedTabId = getFocusedTabId(state.dock, dom.dockContainer);
   if (!focusedTabId) return;
   const leafId = state.dock.getTabLeafId(focusedTabId);
-  if (leafId) state.dock.cycleTabInLeaf(leafId, direction);
+  if (!leafId) return;
+
+  const info = state.dock.getLeafTabInfo(leafId);
+  if (!info) return;
+
+  // Check if we're at the boundary of this leaf
+  const atEnd = direction > 0 && info.activeTab >= info.tabs.length - 1;
+  const atStart = direction < 0 && info.activeTab <= 0;
+
+  if (atEnd || atStart) {
+    // Jump to adjacent pane
+    const leafIds = state.dock.getLeafIds();
+    if (leafIds.length < 2) {
+      // Only one pane — wrap within it
+      state.dock.cycleTabInLeaf(leafId, direction);
+      return;
+    }
+    const idx = leafIds.indexOf(leafId);
+    const nextLeafIdx = (idx + direction + leafIds.length) % leafIds.length;
+    const nextLeafId = leafIds[nextLeafIdx];
+    // Activate the first or last tab in the target leaf depending on direction
+    const nextInfo = state.dock.getLeafTabInfo(nextLeafId);
+    if (nextInfo && nextInfo.tabs.length > 0) {
+      const targetTab =
+        direction > 0
+          ? nextInfo.tabs[0]
+          : nextInfo.tabs[nextInfo.tabs.length - 1];
+      state.dock.activateTab(targetTab);
+    }
+  } else {
+    state.dock.cycleTabInLeaf(leafId, direction);
+  }
 }
 
 export async function closeTerminal(index) {

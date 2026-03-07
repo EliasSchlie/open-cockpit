@@ -40,7 +40,7 @@ const DEFAULT_SHORTCUTS = {
   "split-right": "",
   "split-down": "",
   // Child session navigation
-  "toggle-children": "Alt+Right",
+  "toggle-children": "Alt+Shift+Right",
   "next-child-session": "Alt+Shift+Down",
   "prev-child-session": "Alt+Shift+Up",
   // Bell
@@ -57,6 +57,8 @@ const INPUT_EVENT_ACTIONS = new Set([
   "next-session",
   "prev-session",
   "cycle-pane",
+  "focus-next-pane",
+  "focus-prev-pane",
   "toggle-children",
   "next-child-session",
   "prev-child-session",
@@ -154,9 +156,33 @@ const INPUT_KEY_MAP = {
   arrowright: "right",
 };
 
+// Map from KeyboardEvent.code to Electron accelerator key name.
+// On macOS, Option mangles key values (e.g. Option+] → '), so we fall back
+// to code when the key doesn't match (only for non-letter/non-arrow keys).
+const CODE_TO_KEY = {
+  bracketleft: "[",
+  bracketright: "]",
+  backslash: "\\",
+  semicolon: ";",
+  quote: "'",
+  comma: ",",
+  period: ".",
+  slash: "/",
+  minus: "-",
+  equal: "=",
+  backquote: "`",
+};
+
 function matchesParsed(input, parsed) {
-  const inputKey =
+  let inputKey =
     INPUT_KEY_MAP[input.key.toLowerCase()] || input.key.toLowerCase();
+
+  // Fall back to code-based key when Alt mangles the key value
+  if (inputKey !== parsed.key && input.code) {
+    const codeKey = CODE_TO_KEY[input.code.toLowerCase()];
+    if (codeKey) inputKey = codeKey;
+  }
+
   if (inputKey !== parsed.key) return false;
 
   const wantsMeta = parsed.meta;

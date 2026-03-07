@@ -112,8 +112,15 @@ contextBridge.exposeInMainWorld("api", {
   listSetupScripts: () => ipcRenderer.invoke("list-setup-scripts"),
   readSetupScript: (name) => ipcRenderer.invoke("read-setup-script", name),
 
+  // App info
+  getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+
+  // Dialog state — suppresses global shortcuts while a modal is open
+  setDialogOpen: (open) => ipcRenderer.send("dialog-open", open),
+
   // Shortcut settings
   getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
+  getDefaultShortcuts: () => ipcRenderer.invoke("get-default-shortcuts"),
   getDefaultShortcut: (actionId) =>
     ipcRenderer.invoke("get-default-shortcut", actionId),
   setShortcut: (actionId, accelerator) =>
