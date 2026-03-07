@@ -667,6 +667,9 @@ function trackNewSlot(
   if (!skipTrustPrompt) acceptTrustPrompt(slot.termId);
   return pollForSessionId(slot.pid, timeout, excludeId)
     .then(async (sessionId) => {
+      // Clear stale terminal input cache when slot gets a new session
+      const { terminalHasInputCache } = getSessionDiscovery();
+      terminalHasInputCache.delete(slot.termId);
       await withPoolLock(() => {
         const p = readPool();
         if (!p) return;
@@ -882,6 +885,8 @@ async function reconcilePool() {
           if (slot.sessionId) {
             await saveExternalClearOffload(slot.sessionId, slot.pid);
           }
+          // Clear stale terminal input cache for this slot (prevents ghost TYPING)
+          terminalHasInputCache.delete(slot.termId);
           slot.sessionId = sessionId;
           slot.status = POOL_STATUS.FRESH;
           createFreshIdleSignal(slot.pid, sessionId);
