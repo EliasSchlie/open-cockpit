@@ -207,11 +207,13 @@ Do not use `pkill -f electron`, `killall Electron`, or `grep "cwd.*$(pwd)"` (sub
 ## Session graph (parent-child tracking)
 
 Sessions track who started them and parent-child relationships in `~/.open-cockpit/session-graph.json`:
-- **initiator**: `"user"` (human via UI/terminal) or `"model"` (Claude via `cockpit-cli start`)
+- **initiator**: `"user"` (human via UI/terminal) or `"model"` (Claude via `cockpit-cli start` or Agent tool)
 - **parentSessionId**: the session that spawned this one (null for top-level)
-- CLI auto-detects parent by walking PPID chain → `~/.open-cockpit/session-pids/`
+- **Auto-detection**: `enrichSessionsWithGraphData()` walks PPID chain for sessions without graph entries, auto-detects parent from `session-pids/` mappings, and persists the relationship. Works for all sub-agent types (Agent tool, cockpit-cli, external).
+- CLI also detects parent by walking PPID chain → `~/.open-cockpit/session-pids/`
 - API: `pool-start` accepts optional `parentSessionId`; `get-session-graph` returns the full graph
 - `get-sessions` response enriched with `parentSessionId` and `initiator` fields
+- **Child session archiving**: Dead child sessions are NOT independently auto-archived — they stay under their parent and only get archived when the parent is archived (depth-first cascade)
 
 ## Session pinning
 
