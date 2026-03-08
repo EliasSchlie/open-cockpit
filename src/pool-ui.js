@@ -3,7 +3,7 @@ import {
   STATUS_CLASSES,
   escapeHtml,
 } from "./renderer-state.js";
-import { STATUS, POOL_STATUS } from "./session-statuses.js";
+import { STATUS, POOL_STATUS, UPDATE_STATUS } from "./session-statuses.js";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   createTerminal,
@@ -760,23 +760,23 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
 
 function updateStatusText(state) {
   switch (state.status) {
-    case "idle":
+    case UPDATE_STATUS.IDLE:
       return "Not checked yet";
-    case "checking":
+    case UPDATE_STATUS.CHECKING:
       return "Checking for updates…";
-    case "up-to-date":
+    case UPDATE_STATUS.UP_TO_DATE:
       return "Up to date";
-    case "available":
+    case UPDATE_STATUS.AVAILABLE:
       return `Version ${state.version} available`;
-    case "downloading": {
+    case UPDATE_STATUS.DOWNLOADING: {
       const pct = state.progress
         ? `${Math.round(state.progress.percent)}%`
         : "…";
       return `Downloading update… ${pct}`;
     }
-    case "downloaded":
+    case UPDATE_STATUS.DOWNLOADED:
       return `Version ${state.version} ready to install`;
-    case "error":
+    case UPDATE_STATUS.ERROR:
       return `Error: ${state.error || "Unknown error"}`;
     default:
       return state.status;
@@ -785,17 +785,17 @@ function updateStatusText(state) {
 
 function updateActionButtonHtml(state) {
   switch (state.status) {
-    case "idle":
-    case "up-to-date":
-    case "error":
+    case UPDATE_STATUS.IDLE:
+    case UPDATE_STATUS.UP_TO_DATE:
+    case UPDATE_STATUS.ERROR:
       return '<button class="offload-menu-btn update-check-btn">Check for Updates</button>';
-    case "checking":
+    case UPDATE_STATUS.CHECKING:
       return '<button class="offload-menu-btn update-check-btn" disabled>Checking…</button>';
-    case "available":
+    case UPDATE_STATUS.AVAILABLE:
       return `<button class="offload-menu-btn offload-menu-load update-download-btn">Download v${escapeHtml(state.version)}</button>`;
-    case "downloading":
+    case UPDATE_STATUS.DOWNLOADING:
       return '<button class="offload-menu-btn update-download-btn" disabled>Downloading…</button>';
-    case "downloaded":
+    case UPDATE_STATUS.DOWNLOADED:
       return `<button class="offload-menu-btn offload-menu-load update-install-btn">Restart &amp; Update</button>`;
     default:
       return '<button class="offload-menu-btn update-check-btn">Check for Updates</button>';
@@ -815,7 +815,7 @@ function renderUpdatesTab(version, updateState) {
           <span class="settings-info-label">Status</span>
           <span class="settings-info-value update-status-text">${updateStatusText(updateState)}</span>
         </div>
-        <div class="update-progress-bar" style="display:${updateState.status === "downloading" ? "block" : "none"}">
+        <div class="update-progress-bar" style="display:${updateState.status === UPDATE_STATUS.DOWNLOADING ? "block" : "none"}">
           <div class="update-progress-fill" style="width:${updateState.progress ? Math.round(updateState.progress.percent) : 0}%"></div>
         </div>
         <div class="update-actions">
@@ -832,6 +832,8 @@ function wireUpdatesTab(overlay) {
   );
   if (!panel) return () => {};
 
+  let lastRenderedStatus = null;
+
   function updateUI(state) {
     const statusText = panel.querySelector(".update-status-text");
     if (statusText) statusText.textContent = updateStatusText(state);
@@ -840,14 +842,18 @@ function wireUpdatesTab(overlay) {
     const progressFill = panel.querySelector(".update-progress-fill");
     if (progressBar && progressFill) {
       progressBar.style.display =
-        state.status === "downloading" ? "block" : "none";
+        state.status === UPDATE_STATUS.DOWNLOADING ? "block" : "none";
       progressFill.style.width = `${state.progress ? Math.round(state.progress.percent) : 0}%`;
     }
 
-    const actionsEl = panel.querySelector(".update-actions");
-    if (actionsEl) {
-      actionsEl.innerHTML = updateActionButtonHtml(state);
-      wireActionButtons();
+    // Only re-render buttons when the status phase changes (not on every progress tick)
+    if (state.status !== lastRenderedStatus) {
+      lastRenderedStatus = state.status;
+      const actionsEl = panel.querySelector(".update-actions");
+      if (actionsEl) {
+        actionsEl.innerHTML = updateActionButtonHtml(state);
+        wireActionButtons();
+      }
     }
   }
 
@@ -901,13 +907,16 @@ function wireUpdatesTab(overlay) {
   wireActionButtons();
 
   // Listen for live status updates from main process
-  const handler = (state) => updateUI(state);
+  const handler = (state) => {
+    // Guard: ignore events after overlay is destroyed
+    if (!document.getElementById("unified-settings")) return;
+    updateUI(state);
+  };
   window.api.onUpdateStatusChanged(handler);
 
-  // Return cleanup function
+  // Return cleanup — remove the IPC listener to prevent accumulation
   return () => {
-    // No removeListener available via context bridge — cleanup is best-effort.
-    // The overlay DOM is destroyed on close, so handlers become no-ops.
+    window.api.offUpdateStatusChanged(handler);
   };
 }
 

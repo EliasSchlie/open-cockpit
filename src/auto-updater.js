@@ -1,26 +1,59 @@
 const { autoUpdater } = require("electron-updater");
 const { IS_DEV } = require("./paths");
+const { UPDATE_STATUS } = require("./session-statuses");
 
 const UPDATE_CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+const PROGRESS_THROTTLE_MS = 250;
 
 let _debugLog = () => {};
 let _intervalId = null;
 let _send = () => {};
+let _lastProgressEmit = 0;
+let _progressTimer = null;
 
-// Exposed state for renderer queries
 let _state = {
-  status: "idle", // idle | checking | available | downloading | downloaded | error | up-to-date
+  status: UPDATE_STATUS.IDLE,
   version: null,
-  progress: null, // { percent, transferred, total }
+  progress: null,
   error: null,
 };
 
+function _setState(overrides) {
+  _state = {
+    status: UPDATE_STATUS.IDLE,
+    version: null,
+    progress: null,
+    error: null,
+    ...overrides,
+  };
+}
+
 function getState() {
-  return { ..._state };
+  return {
+    ..._state,
+    progress: _state.progress ? { ..._state.progress } : null,
+  };
 }
 
 function _emit() {
-  _send("update-status-changed", _state);
+  _send("update-status-changed", getState());
+}
+
+function _emitThrottled() {
+  const now = Date.now();
+  if (now - _lastProgressEmit >= PROGRESS_THROTTLE_MS) {
+    _lastProgressEmit = now;
+    _emit();
+  } else if (!_progressTimer) {
+    _progressTimer = setTimeout(
+      () => {
+        _progressTimer = null;
+        _lastProgressEmit = Date.now();
+        _emit();
+      },
+      PROGRESS_THROTTLE_MS - (now - _lastProgressEmit),
+    );
+  }
 }
 
 function init({ debugLog, send }) {
@@ -43,65 +76,48 @@ function init({ debugLog, send }) {
 
   autoUpdater.on("checking-for-update", () => {
     _debugLog("auto-updater", "checking for update");
-    _state = { status: "checking", version: null, progress: null, error: null };
+    _setState({ status: UPDATE_STATUS.CHECKING });
     _emit();
   });
 
   autoUpdater.on("update-available", (info) => {
     _debugLog("auto-updater", `update available: v${info.version}`);
-    _state = {
-      status: "available",
-      version: info.version,
-      progress: null,
-      error: null,
-    };
+    _setState({ status: UPDATE_STATUS.AVAILABLE, version: info.version });
     _emit();
   });
 
   autoUpdater.on("update-not-available", () => {
     _debugLog("auto-updater", "up to date");
-    _state = {
-      status: "up-to-date",
-      version: null,
-      progress: null,
-      error: null,
-    };
+    _setState({ status: UPDATE_STATUS.UP_TO_DATE });
     _emit();
   });
 
   autoUpdater.on("download-progress", (progress) => {
-    _state = {
-      status: "downloading",
+    _setState({
+      status: UPDATE_STATUS.DOWNLOADING,
       version: _state.version,
       progress: {
         percent: progress.percent,
         transferred: progress.transferred,
         total: progress.total,
       },
-      error: null,
-    };
-    _emit();
+    });
+    _emitThrottled();
   });
 
   autoUpdater.on("update-downloaded", (info) => {
     _debugLog("auto-updater", `update downloaded: v${info.version}`);
-    _state = {
-      status: "downloaded",
-      version: info.version,
-      progress: null,
-      error: null,
-    };
+    _setState({ status: UPDATE_STATUS.DOWNLOADED, version: info.version });
     _emit();
   });
 
   autoUpdater.on("error", (err) => {
     _debugLog("auto-updater", `error: ${err.message}`);
-    _state = {
-      status: "error",
+    _setState({
+      status: UPDATE_STATUS.ERROR,
       version: _state.version,
-      progress: null,
       error: err.message,
-    };
+    });
     _emit();
   });
 
@@ -120,12 +136,7 @@ function init({ debugLog, send }) {
 
 function checkForUpdates() {
   if (IS_DEV) {
-    _state = {
-      status: "up-to-date",
-      version: null,
-      progress: null,
-      error: null,
-    };
+    _setState({ status: UPDATE_STATUS.UP_TO_DATE });
     _emit();
     return Promise.resolve();
   }
@@ -152,6 +163,10 @@ function destroy() {
   if (_intervalId !== null) {
     clearInterval(_intervalId);
     _intervalId = null;
+  }
+  if (_progressTimer) {
+    clearTimeout(_progressTimer);
+    _progressTimer = null;
   }
 }
 
