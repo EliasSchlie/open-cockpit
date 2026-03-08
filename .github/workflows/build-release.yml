@@ -19,14 +19,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build .dmg with electron-builder (ad-hoc signed)
+      - name: Build and publish macOS (ad-hoc signed)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --mac --publish never
-      - uses: actions/upload-artifact@v4
-        with:
-          name: open-cockpit-mac
-          path: release-builds/*.dmg
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --publish always
 
   build-linux:
     runs-on: ubuntu-latest
@@ -38,14 +35,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build AppImage and .deb
-        run: npx electron-builder --linux --publish never
-      - uses: actions/upload-artifact@v4
-        with:
-          name: open-cockpit-linux
-          path: |
-            release-builds/*.AppImage
-            release-builds/*.deb
+      - name: Build and publish Linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --publish always
 
   build-windows:
     runs-on: windows-latest
@@ -57,22 +50,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build Windows installer
-        run: npx electron-builder --win --publish never
-      - uses: actions/upload-artifact@v4
-        with:
-          name: open-cockpit-windows
-          path: release-builds/*.exe
-
-  release:
-    needs: [build-mac, build-linux, build-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/*
+      - name: Build and publish Windows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always
