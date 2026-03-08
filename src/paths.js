@@ -17,6 +17,10 @@ const POOL_FILE = path.join(
   OPEN_COCKPIT_DIR,
   OWN_POOL ? "pool-dev.json" : "pool.json",
 );
+const POOL_SETTINGS_FILE = path.join(
+  OPEN_COCKPIT_DIR,
+  OWN_POOL ? "pool-settings-dev.json" : "pool-settings.json",
+);
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const SESSION_GRAPH_FILE = path.join(OPEN_COCKPIT_DIR, "session-graph.json");
 const API_SOCKET = path.join(
@@ -42,6 +46,7 @@ module.exports = {
   IDLE_SIGNALS_DIR,
   OFFLOADED_DIR,
   POOL_FILE,
+  POOL_SETTINGS_FILE,
   SETUP_SCRIPTS_DIR,
   SESSION_GRAPH_FILE,
   API_SOCKET,

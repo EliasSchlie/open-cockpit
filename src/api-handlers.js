@@ -41,6 +41,8 @@ const {
   getPoolHealth,
   poolDestroy,
   poolClean,
+  getPoolFlags,
+  setPoolFlags,
   poolResume,
   withFreshSlot,
   readIntention,
@@ -199,6 +201,11 @@ const sharedHandlers = {
   "pool-read": () => readPool(),
   "pool-destroy": async () => poolDestroy(),
   "pool-clean": async () => poolClean(),
+  "pool-get-flags": () => getPoolFlags(),
+  "pool-set-flags": ({ flags }) => {
+    setPoolFlags(flags);
+    return flags;
+  },
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
   "archive-session": async ({ sessionId }) => archiveSession(sessionId),
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
@@ -243,6 +250,8 @@ const ipcArgMap = {
   "pool-read": () => ({}),
   "pool-destroy": () => ({}),
   "pool-clean": () => ({}),
+  "pool-get-flags": () => ({}),
+  "pool-set-flags": (flags) => ({ flags }),
   "pool-resume": (sessionId) => ({ sessionId }),
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
@@ -264,6 +273,8 @@ const apiResponseMap = {
   "pool-read": (pool) => ({ type: "pool", pool }),
   "pool-destroy": () => ({ type: "ok" }),
   "pool-clean": (cleaned) => ({ type: "cleaned", count: cleaned }),
+  "pool-get-flags": (flags) => ({ type: "flags", flags }),
+  "pool-set-flags": (flags) => ({ type: "flags", flags }),
   "pool-resume": (result) => result, // poolResume already returns { type: "resumed", ... }
   "archive-session": () => ({ type: "ok" }),
   "unarchive-session": () => ({ type: "ok" }),

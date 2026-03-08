@@ -35,6 +35,7 @@ const {
 } = require("./daemon-client");
 const {
   POOL_FILE,
+  POOL_SETTINGS_FILE,
   IDLE_SIGNALS_DIR,
   SESSION_PIDS_DIR,
   OFFLOADED_DIR,
@@ -595,14 +596,89 @@ function getCachedClaudePath() {
   return _cachedClaudePath;
 }
 
+// --- Pool settings (persistent flags for spawned sessions) ---
+
+const DEFAULT_POOL_FLAGS = "--dangerously-skip-permissions";
+
+function readPoolSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(POOL_SETTINGS_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writePoolSettings(settings) {
+  secureWriteFileSync(POOL_SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
+
+function getPoolFlags() {
+  const settings = readPoolSettings();
+  return settings.flags !== undefined ? settings.flags : DEFAULT_POOL_FLAGS;
+}
+
+function setPoolFlags(flags) {
+  if (typeof flags !== "string") throw new Error("flags must be a string");
+  const settings = readPoolSettings();
+  settings.flags = flags;
+  writePoolSettings(settings);
+}
+
+// Parse a flags string into an array of arguments.
+// Handles quoted strings and backslash escapes.
+function parseFlags(flagStr) {
+  if (!flagStr || !flagStr.trim()) return [];
+  const args = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (const ch of flagStr) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if ((ch === " " || ch === "\t") && !inSingle && !inDouble) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current) args.push(current);
+  return args;
+}
+
+// Parse and cache pool flags once for a batch of spawns.
+function getPoolArgs() {
+  return parseFlags(getPoolFlags());
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
-async function spawnPoolSlot(index) {
+// Pass pre-parsed args from getPoolArgs() to avoid redundant disk reads.
+async function spawnPoolSlot(index, args) {
+  if (!args) args = getPoolArgs();
   const claudePath = getCachedClaudePath();
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
     cmd: claudePath,
-    args: ["--dangerously-skip-permissions"],
+    args,
     env: { OPEN_COCKPIT_POOL: "1" },
   });
   return createSlot(index, resp.termId, resp.pid);
@@ -630,8 +706,9 @@ async function poolInit(size) {
     };
 
     // Spawn each slot as a Claude session in a daemon terminal (parallel)
+    const args = getPoolArgs();
     p.slots = await Promise.all(
-      Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
+      Array.from({ length: size }, (_, i) => spawnPoolSlot(i, args)),
     );
 
     writePool(p);
@@ -750,9 +827,10 @@ async function poolResize(newSize) {
 
     if (newSize > currentSize) {
       // Grow: spawn new slots in parallel
+      const args = getPoolArgs();
       const newSlots = await Promise.all(
         Array.from({ length: newSize - currentSize }, (_, j) =>
-          spawnPoolSlot(currentSize + j),
+          spawnPoolSlot(currentSize + j, args),
         ),
       );
       pool.slots.push(...newSlots);
@@ -841,6 +919,7 @@ async function reconcilePool() {
     const { terminalHasInputCache } = getSessionDiscovery();
     let changed = false;
     const recovered = [];
+    const spawnArgs = getPoolArgs();
     let daemonPtys;
     try {
       const resp = await daemonRequest({ type: "list" });
@@ -873,7 +952,7 @@ async function reconcilePool() {
             "main",
             `Auto-recovering ${reason} slot ${slot.index} (termId=${slot.termId} pid=${slot.pid})`,
           );
-          const newSlot = await spawnPoolSlot(slot.index);
+          const newSlot = await spawnPoolSlot(slot.index, spawnArgs);
           slot.termId = newSlot.termId;
           slot.pid = newSlot.pid;
           slot.status = POOL_STATUS.STARTING;
@@ -1502,6 +1581,9 @@ module.exports = {
   writeIntention,
   lastWrittenContent,
   poolClean,
+  getPoolFlags,
+  setPoolFlags,
+  parseFlags,
   withFreshSlot,
   poolResume,
   watchIntention,
