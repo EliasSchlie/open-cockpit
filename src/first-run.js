@@ -6,6 +6,9 @@ const { dialog, shell } = require("electron");
 const { secureMkdirSync } = require("./secure-fs");
 const { OPEN_COCKPIT_DIR } = require("./paths");
 const { resolveClaudePath } = require("./pool-manager");
+const { PLUGIN_VERSION } = require("./session-statuses");
+
+const PLUGIN_KEY = "open-cockpit@elias-tools";
 
 const INSTALLED_PLUGINS_FILE = path.join(
   os.homedir(),
@@ -14,26 +17,96 @@ const INSTALLED_PLUGINS_FILE = path.join(
   "installed_plugins.json",
 );
 
-function isPluginInstalled() {
+const DISMISSED_VERSION_FILE = path.join(
+  OPEN_COCKPIT_DIR,
+  "dismissed-plugin-version",
+);
+
+// --- Cached plugin version with file watching ---
+let cachedPluginVersion = null;
+let watchStarted = false;
+
+function refreshPluginVersion() {
   try {
-    const plugins = JSON.parse(
-      fs.readFileSync(INSTALLED_PLUGINS_FILE, "utf-8"),
-    );
-    return plugins.some(
-      (p) =>
-        p.name === "open-cockpit" ||
-        (p.package && p.package.includes("open-cockpit")),
-    );
+    const data = JSON.parse(fs.readFileSync(INSTALLED_PLUGINS_FILE, "utf-8"));
+    const entries = data?.plugins?.[PLUGIN_KEY];
+    if (!Array.isArray(entries) || entries.length === 0) {
+      cachedPluginVersion = null;
+      return;
+    }
+    let best = entries[0];
+    for (const e of entries) {
+      if (e.lastUpdated > best.lastUpdated) best = e;
+    }
+    cachedPluginVersion = best.version || null;
   } catch {
-    return false;
+    cachedPluginVersion = null;
   }
 }
 
+function startPluginVersionWatch() {
+  if (watchStarted) return;
+  watchStarted = true;
+  refreshPluginVersion();
+  try {
+    fs.watchFile(INSTALLED_PLUGINS_FILE, { interval: 10000 }, () => {
+      refreshPluginVersion();
+    });
+  } catch {
+    // Non-critical — worst case the cache stays stale until restart
+  }
+}
+
+function stopPluginVersionWatch() {
+  if (!watchStarted) return;
+  try {
+    fs.unwatchFile(INSTALLED_PLUGINS_FILE);
+  } catch {
+    // ignore
+  }
+  watchStarted = false;
+}
+
+function getInstalledPluginVersion() {
+  if (!watchStarted) refreshPluginVersion();
+  return cachedPluginVersion;
+}
+
+function isPluginInstalled() {
+  if (!watchStarted) refreshPluginVersion();
+  return cachedPluginVersion !== null;
+}
+
+// --- Seen version persistence (suppress repeat toast for same mismatch) ---
+
+function getSeenPluginVersion() {
+  try {
+    return fs.readFileSync(DISMISSED_VERSION_FILE, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function markPluginVersionSeen(version) {
+  try {
+    fs.writeFileSync(DISMISSED_VERSION_FILE, version, "utf-8");
+  } catch {
+    // Non-critical
+  }
+}
+
+function isPluginVersionMismatch(pluginVersion, appVersion) {
+  return (
+    pluginVersion &&
+    pluginVersion !== PLUGIN_VERSION.NOT_INSTALLED &&
+    appVersion !== PLUGIN_VERSION.UNKNOWN &&
+    pluginVersion !== appVersion
+  );
+}
+
 async function checkFirstRun() {
-  // Ensure ~/.open-cockpit/ exists
   secureMkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
-  // Check for claude CLI
   let claudePath;
   try {
     claudePath = resolveClaudePath();
@@ -61,7 +134,6 @@ async function checkFirstRun() {
     return;
   }
 
-  // Check for plugin installation
   if (!isPluginInstalled()) {
     const { response } = await dialog.showMessageBox({
       type: "question",
@@ -75,14 +147,11 @@ async function checkFirstRun() {
     });
     if (response === 0) {
       try {
-        execFileSync(
-          claudePath,
-          ["plugin", "install", "open-cockpit@elias-tools"],
-          {
-            encoding: "utf-8",
-            timeout: 30000,
-          },
-        );
+        execFileSync(claudePath, ["plugin", "install", PLUGIN_KEY], {
+          encoding: "utf-8",
+          timeout: 30000,
+        });
+        refreshPluginVersion();
       } catch (err) {
         await dialog.showMessageBox({
           type: "warning",
@@ -96,4 +165,12 @@ async function checkFirstRun() {
   }
 }
 
-module.exports = { checkFirstRun };
+module.exports = {
+  checkFirstRun,
+  getInstalledPluginVersion,
+  getSeenPluginVersion,
+  markPluginVersionSeen,
+  isPluginVersionMismatch,
+  startPluginVersionWatch,
+  stopPluginVersionWatch,
+};

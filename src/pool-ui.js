@@ -241,6 +241,7 @@ async function showSettings(initialTab = "general") {
     shortcuts,
     defaults,
     version,
+    pluginVersion,
     poolFlags,
     updateState,
     minFresh,
@@ -249,6 +250,7 @@ async function showSettings(initialTab = "general") {
     window.api.getShortcuts(),
     window.api.getDefaultShortcuts(),
     window.api.getAppVersion(),
+    window.api.getPluginVersion(),
     window.api.poolGetFlags(),
     window.api.getUpdateState(),
     window.api.poolGetMinFresh(),
@@ -276,7 +278,7 @@ async function showSettings(initialTab = "general") {
             ).join("")}
           </div>
           <div class="settings-content">
-            ${renderGeneralTab(version, updateState)}
+            ${renderGeneralTab(version, pluginVersion, updateState)}
             ${renderShortcutsTab(shortcuts, defaults)}
             ${renderPoolTab(health, poolFlags, minFresh)}
           </div>
@@ -554,14 +556,22 @@ async function showSettings(initialTab = "general") {
 }
 
 // --- General tab ---
-function renderGeneralTab(version, updateState) {
+function renderGeneralTab(version, pluginVersion, updateState) {
+  const pluginMismatch = window.api.isPluginVersionMismatch(
+    pluginVersion,
+    version,
+  );
   return `
     <div class="settings-tab-panel" data-tab="general">
       <div class="settings-section">
         <div class="settings-section-title">About</div>
         <div class="settings-info-row">
-          <span class="settings-info-label">Version</span>
+          <span class="settings-info-label">App Version</span>
           <span class="settings-info-value">${escapeHtml(version)}</span>
+        </div>
+        <div class="settings-info-row">
+          <span class="settings-info-label">Plugin Version</span>
+          <span class="settings-info-value${pluginMismatch ? " plugin-version-mismatch" : ""}">${escapeHtml(pluginVersion)}${pluginMismatch ? " ⚠" : ""}</span>
         </div>
         <div class="settings-info-row">
           <span class="settings-info-label">App</span>

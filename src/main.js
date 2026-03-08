@@ -32,7 +32,15 @@ const poolManager = require("./pool-manager");
 const apiHandlersModule = require("./api-handlers");
 const sessionStats = require("./session-stats");
 const autoUpdater = require("./auto-updater");
-const { checkFirstRun } = require("./first-run");
+const {
+  checkFirstRun,
+  getInstalledPluginVersion,
+  getSeenPluginVersion,
+  markPluginVersionSeen,
+  startPluginVersionWatch,
+  stopPluginVersionWatch,
+} = require("./first-run");
+const { PLUGIN_VERSION } = require("./session-statuses");
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -361,6 +369,23 @@ let ownsApiSocket = false;
 
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
+
+  // Read app version once from plugin.json
+  let cachedAppVersion;
+  try {
+    const pluginJson = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
+        "utf-8",
+      ),
+    );
+    cachedAppVersion = pluginJson.version || PLUGIN_VERSION.UNKNOWN;
+  } catch {
+    cachedAppVersion = PLUGIN_VERSION.UNKNOWN;
+  }
+
+  // Start watching installed_plugins.json for version changes
+  startPluginVersionWatch();
 
   // First-run checks: claude binary, plugin, ~/.open-cockpit/ directory
   await checkFirstRun();
@@ -718,20 +743,16 @@ app.whenReady().then(async () => {
     dialogOpen = open;
   });
 
-  // App version (read once from plugin.json — version never changes at runtime)
-  let cachedAppVersion;
-  try {
-    const pluginJson = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
-        "utf-8",
-      ),
-    );
-    cachedAppVersion = pluginJson.version || "unknown";
-  } catch {
-    cachedAppVersion = "unknown";
-  }
+  // App + plugin version
   ipcMain.handle("get-app-version", () => cachedAppVersion);
+  ipcMain.handle(
+    "get-plugin-version",
+    () => getInstalledPluginVersion() || PLUGIN_VERSION.NOT_INSTALLED,
+  );
+  ipcMain.handle("get-seen-plugin-version", () => getSeenPluginVersion());
+  ipcMain.handle("mark-plugin-version-seen", (_e, version) =>
+    markPluginVersionSeen(version),
+  );
 
   // Session stats (on-demand only)
   ipcMain.handle("get-session-stats", (_e, sessionId) =>
@@ -786,6 +807,7 @@ app.on("before-quit", (e) => {
     return;
   }
   autoUpdater.destroy();
+  stopPluginVersionWatch();
   closeDebugLog();
   daemonClient.destroySocket();
   for (const entry of pendingPolls) entry.cancel();

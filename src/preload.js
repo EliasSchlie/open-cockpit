@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require("electron");
+const { PLUGIN_VERSION } = require("./session-statuses");
 
 // Remove stale listeners from previous renderer loads (Cmd+R)
 const channels = [
@@ -134,6 +135,15 @@ contextBridge.exposeInMainWorld("api", {
 
   // App info
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+  getPluginVersion: () => ipcRenderer.invoke("get-plugin-version"),
+  getSeenPluginVersion: () => ipcRenderer.invoke("get-seen-plugin-version"),
+  markPluginVersionSeen: (version) =>
+    ipcRenderer.invoke("mark-plugin-version-seen", version),
+  isPluginVersionMismatch: (pluginVersion, appVersion) =>
+    pluginVersion &&
+    pluginVersion !== PLUGIN_VERSION.NOT_INSTALLED &&
+    appVersion !== PLUGIN_VERSION.UNKNOWN &&
+    pluginVersion !== appVersion,
 
   // Auto-updater
   checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
