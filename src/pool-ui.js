@@ -564,18 +564,14 @@ function renderGeneralTab(version, pluginVersion, updateState) {
   return `
     <div class="settings-tab-panel" data-tab="general">
       <div class="settings-section">
-        <div class="settings-section-title">About</div>
+        <div class="settings-section-title">Open Cockpit</div>
         <div class="settings-info-row">
-          <span class="settings-info-label">App Version</span>
+          <span class="settings-info-label">App</span>
           <span class="settings-info-value">${escapeHtml(version)}</span>
         </div>
         <div class="settings-info-row">
-          <span class="settings-info-label">Plugin Version</span>
+          <span class="settings-info-label">Plugin</span>
           <span class="settings-info-value${pluginMismatch ? " plugin-version-mismatch" : ""}">${escapeHtml(pluginVersion)}${pluginMismatch ? " ⚠" : ""}</span>
-        </div>
-        <div class="settings-info-row">
-          <span class="settings-info-label">App</span>
-          <span class="settings-info-value">Open Cockpit</span>
         </div>
       </div>
       <div class="settings-section">

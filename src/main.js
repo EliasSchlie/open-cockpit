@@ -374,11 +374,9 @@ let ownsApiSocket = false;
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
 
-  // Read app version once from plugin.json
-  const pluginJson = readJsonSync(
-    path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
-  );
-  const cachedAppVersion = pluginJson?.version || PLUGIN_VERSION.UNKNOWN;
+  // App version from package.json (Electron app version)
+  const pkgJson = readJsonSync(path.join(__dirname, "..", "package.json"));
+  const cachedAppVersion = pkgJson?.version || PLUGIN_VERSION.UNKNOWN;
 
   // Start watching installed_plugins.json for version changes
   startPluginVersionWatch();
