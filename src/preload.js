@@ -129,6 +129,10 @@ contextBridge.exposeInMainWorld("api", {
   // App info
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   getPluginVersion: () => ipcRenderer.invoke("get-plugin-version"),
+  getDismissedPluginVersion: () =>
+    ipcRenderer.invoke("get-dismissed-plugin-version"),
+  dismissPluginVersion: (version) =>
+    ipcRenderer.invoke("dismiss-plugin-version", version),
 
   // Auto-updater
   checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),

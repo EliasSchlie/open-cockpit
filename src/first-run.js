@@ -16,38 +16,87 @@ const INSTALLED_PLUGINS_FILE = path.join(
   "installed_plugins.json",
 );
 
-/** Read the installed_plugins.json entries for our plugin (or null). */
-function readPluginEntries() {
+const DISMISSED_VERSION_FILE = path.join(
+  OPEN_COCKPIT_DIR,
+  "dismissed-plugin-version",
+);
+
+// --- Cached plugin version with file watching ---
+let cachedPluginVersion = null;
+let watchStarted = false;
+
+function refreshPluginVersion() {
   try {
     const data = JSON.parse(fs.readFileSync(INSTALLED_PLUGINS_FILE, "utf-8"));
     const entries = data?.plugins?.[PLUGIN_KEY];
-    return Array.isArray(entries) && entries.length > 0 ? entries : null;
+    if (!Array.isArray(entries) || entries.length === 0) {
+      cachedPluginVersion = null;
+      return;
+    }
+    let best = entries[0];
+    for (const e of entries) {
+      if (e.lastUpdated > best.lastUpdated) best = e;
+    }
+    cachedPluginVersion = best.version || null;
+  } catch {
+    cachedPluginVersion = null;
+  }
+}
+
+function startPluginVersionWatch() {
+  if (watchStarted) return;
+  watchStarted = true;
+  refreshPluginVersion();
+  try {
+    fs.watchFile(INSTALLED_PLUGINS_FILE, { interval: 10000 }, () => {
+      refreshPluginVersion();
+    });
+  } catch {
+    // Non-critical — worst case the cache stays stale until restart
+  }
+}
+
+function stopPluginVersionWatch() {
+  if (!watchStarted) return;
+  try {
+    fs.unwatchFile(INSTALLED_PLUGINS_FILE);
+  } catch {
+    // ignore
+  }
+  watchStarted = false;
+}
+
+function getInstalledPluginVersion() {
+  if (!watchStarted) refreshPluginVersion();
+  return cachedPluginVersion;
+}
+
+function isPluginInstalled() {
+  if (!watchStarted) refreshPluginVersion();
+  return cachedPluginVersion !== null;
+}
+
+// --- Dismissed version persistence ---
+
+function getDismissedVersion() {
+  try {
+    return fs.readFileSync(DISMISSED_VERSION_FILE, "utf-8").trim();
   } catch {
     return null;
   }
 }
 
-function isPluginInstalled() {
-  return readPluginEntries() !== null;
-}
-
-/** Return the installed plugin version string (latest entry), or null. */
-function getInstalledPluginVersion() {
-  const entries = readPluginEntries();
-  if (!entries) return null;
-  // Pick the most recently updated entry
-  let best = entries[0];
-  for (const e of entries) {
-    if (e.lastUpdated > best.lastUpdated) best = e;
+function setDismissedVersion(version) {
+  try {
+    fs.writeFileSync(DISMISSED_VERSION_FILE, version, "utf-8");
+  } catch {
+    // Non-critical
   }
-  return best.version || null;
 }
 
-async function checkFirstRun(appVersion) {
-  // Ensure ~/.open-cockpit/ exists
+async function checkFirstRun() {
   secureMkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
-  // Check for claude CLI
   let claudePath;
   try {
     claudePath = resolveClaudePath();
@@ -75,7 +124,6 @@ async function checkFirstRun(appVersion) {
     return;
   }
 
-  // Check for plugin installation
   if (!isPluginInstalled()) {
     const { response } = await dialog.showMessageBox({
       type: "question",
@@ -93,6 +141,7 @@ async function checkFirstRun(appVersion) {
           encoding: "utf-8",
           timeout: 30000,
         });
+        refreshPluginVersion();
       } catch (err) {
         await dialog.showMessageBox({
           type: "warning",
@@ -103,22 +152,14 @@ async function checkFirstRun(appVersion) {
         });
       }
     }
-    return;
-  }
-
-  // Plugin is installed — check if version is outdated
-  const installedVersion = getInstalledPluginVersion();
-  if (appVersion && installedVersion && installedVersion !== appVersion) {
-    const { response } = await dialog.showMessageBox({
-      type: "warning",
-      title: "Plugin Version Mismatch",
-      message: `Installed plugin version (${installedVersion}) differs from app version (${appVersion}).`,
-      detail:
-        "The plugin may update automatically within a few minutes. If you have an active pool, you should destroy and re-initialize it after the plugin updates to pick up new hooks.",
-      buttons: ["OK"],
-    });
-    // Just informational — no action needed from user beyond acknowledgment
   }
 }
 
-module.exports = { checkFirstRun, getInstalledPluginVersion };
+module.exports = {
+  checkFirstRun,
+  getInstalledPluginVersion,
+  getDismissedVersion,
+  setDismissedVersion,
+  startPluginVersionWatch,
+  stopPluginVersionWatch,
+};

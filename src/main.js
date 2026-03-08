@@ -30,7 +30,14 @@ const poolManager = require("./pool-manager");
 const apiHandlersModule = require("./api-handlers");
 const sessionStats = require("./session-stats");
 const autoUpdater = require("./auto-updater");
-const { checkFirstRun, getInstalledPluginVersion } = require("./first-run");
+const {
+  checkFirstRun,
+  getInstalledPluginVersion,
+  getDismissedVersion,
+  setDismissedVersion,
+  startPluginVersionWatch,
+  stopPluginVersionWatch,
+} = require("./first-run");
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -360,7 +367,7 @@ let ownsApiSocket = false;
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
 
-  // Read app version early (needed for first-run plugin version check)
+  // Read app version once from plugin.json
   let cachedAppVersion;
   try {
     const pluginJson = JSON.parse(
@@ -374,8 +381,11 @@ app.whenReady().then(async () => {
     cachedAppVersion = "unknown";
   }
 
+  // Start watching installed_plugins.json for version changes
+  startPluginVersionWatch();
+
   // First-run checks: claude binary, plugin, ~/.open-cockpit/ directory
-  await checkFirstRun(cachedAppVersion);
+  await checkFirstRun();
 
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
@@ -661,11 +671,15 @@ app.whenReady().then(async () => {
     dialogOpen = open;
   });
 
-  // App version (read early, before checkFirstRun)
+  // App + plugin version
   ipcMain.handle("get-app-version", () => cachedAppVersion);
   ipcMain.handle(
     "get-plugin-version",
     () => getInstalledPluginVersion() || "not installed",
+  );
+  ipcMain.handle("get-dismissed-plugin-version", () => getDismissedVersion());
+  ipcMain.handle("dismiss-plugin-version", (_e, version) =>
+    setDismissedVersion(version),
   );
 
   // Session stats (on-demand only)
@@ -721,6 +735,7 @@ app.on("before-quit", (e) => {
     return;
   }
   autoUpdater.destroy();
+  stopPluginVersionWatch();
   closeDebugLog();
   daemonClient.destroySocket();
   for (const entry of pendingPolls) entry.cancel();
