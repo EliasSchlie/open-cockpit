@@ -218,16 +218,17 @@ function resolveSlot(pool, msg) {
 /**
  * Find an idle slot to offload so a fresh slot becomes available.
  * Returns offload info { sessionId, termId, pid, cwd, gitRoot } or null
- * if a fresh slot already exists. Throws if no fresh or idle slots.
+ * if enough fresh slots already exist. Throws if no fresh or idle slots.
+ * @param {number} [minFresh=1] — minimum number of fresh slots to maintain
  */
-function findOffloadTarget(pool, sessionMap) {
-  const hasFresh = pool.slots.some((s) => {
+function findOffloadTarget(pool, sessionMap, minFresh = 1) {
+  const freshCount = pool.slots.filter((s) => {
     // Typing slots don't count as fresh — they're protected
     if (s.status === POOL_STATUS.FRESH) return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
     return session && session.status === STATUS.FRESH;
-  });
-  if (hasFresh) return null;
+  }).length;
+  if (freshCount >= minFresh) return null;
 
   const idleSlots = pool.slots.filter((s) => {
     if (isSlotPinned(s)) return false;

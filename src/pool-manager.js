@@ -632,6 +632,22 @@ function setPoolFlags(flags) {
   writePoolSettings(settings);
 }
 
+const DEFAULT_MIN_FRESH_SLOTS = 1;
+
+function getMinFreshSlots() {
+  const settings = readPoolSettings();
+  const val = settings.minFreshSlots;
+  return typeof val === "number" && val >= 0 ? val : DEFAULT_MIN_FRESH_SLOTS;
+}
+
+function setMinFreshSlots(n) {
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0)
+    throw new Error("minFreshSlots must be a non-negative number");
+  const settings = readPoolSettings();
+  settings.minFreshSlots = n;
+  writePoolSettings(settings);
+}
+
 // Parse a flags string into an array of arguments.
 // Handles quoted strings and backslash escapes.
 function parseFlags(flagStr) {
@@ -1057,34 +1073,54 @@ function killOrphanedTerminals(sessionId) {
     });
 }
 
-// Pre-warm the pool by offloading an idle session when no fresh slots exist.
-// Runs after reconcilePool on the same 30s interval.
-async function preWarmPool() {
+// Check if an idle session should be offloaded to maintain fresh slot availability.
+// Returns offload target info or null. Acquires pool lock for the check.
+async function checkOffloadNeeded(minFresh = 1) {
   const { getSessions } = getSessionDiscovery();
-  // Phase 1: check if offload is needed (inside lock)
-  const target = await withPoolLock(async () => {
+  return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) return null;
     const sessions = await getSessions();
     enrichSessionsWithGraphData(sessions);
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    try {
-      return findOffloadTarget(pool, sessionMap);
-    } catch {
-      return null; // No idle slots available — nothing to pre-warm
-    }
+    return findOffloadTarget(pool, sessionMap, minFresh);
   });
-  if (!target) return;
-  _debugLog("main", `Pre-warming pool: offloading session ${target.sessionId}`);
-  // Phase 2: offload outside lock
-  try {
-    await offloadSession(target.sessionId, target.termId, null, {
-      cwd: target.cwd,
-      gitRoot: target.gitRoot,
-      pid: target.pid,
-    });
-  } catch (err) {
-    _debugLog("main", `Pre-warm offload failed: ${err.message}`);
+}
+
+// Offload the given target (returned by checkOffloadNeeded).
+async function executeOffload(target) {
+  await offloadSession(target.sessionId, target.termId, null, {
+    cwd: target.cwd,
+    gitRoot: target.gitRoot,
+    pid: target.pid,
+  });
+}
+
+// Pre-warm the pool by offloading idle sessions to maintain minFreshSlots.
+// Runs after reconcilePool on the same 30s interval.
+async function preWarmPool() {
+  const minFresh = getMinFreshSlots();
+  if (minFresh === 0) return;
+
+  // May need to offload multiple sessions to reach minFresh
+  for (let i = 0; i < minFresh; i++) {
+    let target;
+    try {
+      target = await checkOffloadNeeded(minFresh);
+    } catch {
+      return; // No idle slots available
+    }
+    if (!target) return; // Enough fresh slots
+    _debugLog(
+      "main",
+      `Pre-warming pool: offloading session ${target.sessionId}`,
+    );
+    try {
+      await executeOffload(target);
+    } catch (err) {
+      _debugLog("main", `Pre-warm offload failed: ${err.message}`);
+      return;
+    }
   }
 }
 
@@ -1310,22 +1346,11 @@ async function poolClean() {
 async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
   // Phase 1: check if offload is needed (inside lock)
-  const needsOffload = await withPoolLock(async () => {
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const sessions = await getSessions();
-    enrichSessionsWithGraphData(sessions);
-    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    return findOffloadTarget(pool, sessionMap);
-  });
+  const needsOffload = await checkOffloadNeeded();
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
   if (needsOffload) {
-    await offloadSession(needsOffload.sessionId, needsOffload.termId, null, {
-      cwd: needsOffload.cwd,
-      gitRoot: needsOffload.gitRoot,
-      pid: needsOffload.pid,
-    });
+    await executeOffload(needsOffload);
     await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
   }
 
@@ -1627,6 +1652,8 @@ module.exports = {
   poolClean,
   getPoolFlags,
   setPoolFlags,
+  getMinFreshSlots,
+  setMinFreshSlots,
   parseFlags,
   withFreshSlot,
   poolResume,

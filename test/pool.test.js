@@ -996,6 +996,39 @@ describe("typing session protection", () => {
     expect(result.map((s) => s.index)).toEqual([1, 3, 2, 0]);
   });
 
+  it("findOffloadTarget with minFresh=2 offloads when only 1 fresh slot", () => {
+    const pool = createPool(3);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "fresh", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+      { ...createSlot(2, "t3", 300), status: "idle", sessionId: "s3" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "fresh" }],
+      ["s2", { sessionId: "s2", status: "idle", idleTs: 100 }],
+      ["s3", { sessionId: "s3", status: "idle", idleTs: 200 }],
+    ]);
+    // With minFresh=1, no offload needed (1 fresh exists)
+    expect(findOffloadTarget(pool, sessionMap, 1)).toBeNull();
+    // With minFresh=2, should offload an idle session
+    const target = findOffloadTarget(pool, sessionMap, 2);
+    expect(target).not.toBeNull();
+    expect(target.sessionId).toBe("s2"); // LRU idle
+  });
+
+  it("findOffloadTarget with minFresh=0 never triggers offload", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "idle",
+      sessionId: "s1",
+    });
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "idle", idleTs: 100 }],
+    ]);
+    expect(findOffloadTarget(pool, sessionMap, 0)).toBeNull();
+  });
+
   it("computePoolHealth shows starting for typing slot without session", () => {
     const pool = createPool(1);
     pool.slots.push({

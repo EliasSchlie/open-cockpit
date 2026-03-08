@@ -43,6 +43,8 @@ const {
   poolClean,
   getPoolFlags,
   setPoolFlags,
+  getMinFreshSlots,
+  setMinFreshSlots,
   poolResume,
   withFreshSlot,
   readIntention,
@@ -206,6 +208,11 @@ const sharedHandlers = {
     setPoolFlags(flags);
     return flags;
   },
+  "pool-get-min-fresh": () => getMinFreshSlots(),
+  "pool-set-min-fresh": ({ minFreshSlots }) => {
+    setMinFreshSlots(minFreshSlots);
+    return minFreshSlots;
+  },
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
   "archive-session": async ({ sessionId }) => archiveSession(sessionId),
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
@@ -252,6 +259,8 @@ const ipcArgMap = {
   "pool-clean": () => ({}),
   "pool-get-flags": () => ({}),
   "pool-set-flags": (flags) => ({ flags }),
+  "pool-get-min-fresh": () => ({}),
+  "pool-set-min-fresh": (minFreshSlots) => ({ minFreshSlots }),
   "pool-resume": (sessionId) => ({ sessionId }),
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
@@ -275,6 +284,8 @@ const apiResponseMap = {
   "pool-clean": (cleaned) => ({ type: "cleaned", count: cleaned }),
   "pool-get-flags": (flags) => ({ type: "flags", flags }),
   "pool-set-flags": (flags) => ({ type: "flags", flags }),
+  "pool-get-min-fresh": (n) => ({ type: "min-fresh", minFreshSlots: n }),
+  "pool-set-min-fresh": (n) => ({ type: "min-fresh", minFreshSlots: n }),
   "pool-resume": (result) => result, // poolResume already returns { type: "resumed", ... }
   "archive-session": () => ({ type: "ok" }),
   "unarchive-session": () => ({ type: "ok" }),

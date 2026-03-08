@@ -92,6 +92,8 @@ contextBridge.exposeInMainWorld("api", {
   poolClean: () => ipcRenderer.invoke("pool-clean"),
   poolGetFlags: () => ipcRenderer.invoke("pool-get-flags"),
   poolSetFlags: (flags) => ipcRenderer.invoke("pool-set-flags", flags),
+  poolGetMinFresh: () => ipcRenderer.invoke("pool-get-min-fresh"),
+  poolSetMinFresh: (n) => ipcRenderer.invoke("pool-set-min-fresh", n),
   poolResume: (sessionId) => ipcRenderer.invoke("pool-resume", sessionId),
 
   // Custom sessions
