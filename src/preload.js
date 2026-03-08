@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 const { PLUGIN_VERSION } = require("./session-statuses");
 
+// Maps original callbacks to their wrapped IPC handlers for proper removal
+const listenerRegistry = new WeakMap();
+
 // Remove stale listeners from previous renderer loads (Cmd+R)
 const channels = [
   "intention-changed",
@@ -153,16 +156,13 @@ contextBridge.exposeInMainWorld("api", {
   onUpdateStatusChanged: (callback) => {
     const wrapped = (_e, state) => callback(state);
     ipcRenderer.on("update-status-changed", wrapped);
-    // Store wrapped ref on the callback for removal
-    callback._wrappedUpdateHandler = wrapped;
+    listenerRegistry.set(callback, wrapped);
   },
   offUpdateStatusChanged: (callback) => {
-    if (callback._wrappedUpdateHandler) {
-      ipcRenderer.removeListener(
-        "update-status-changed",
-        callback._wrappedUpdateHandler,
-      );
-      delete callback._wrappedUpdateHandler;
+    const wrapped = listenerRegistry.get(callback);
+    if (wrapped) {
+      ipcRenderer.removeListener("update-status-changed", wrapped);
+      listenerRegistry.delete(callback);
     }
   },
 
