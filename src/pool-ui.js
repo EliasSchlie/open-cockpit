@@ -237,15 +237,15 @@ async function showSettings(initialTab = "general") {
   stopPoolSettingsPolling();
 
   // Fetch data for all sections
-  const [health, shortcuts, defaults, version, updateState] = await Promise.all(
-    [
+  const [health, shortcuts, defaults, version, poolFlags, updateState] =
+    await Promise.all([
       window.api.poolHealth(),
       window.api.getShortcuts(),
       window.api.getDefaultShortcuts(),
       window.api.getAppVersion(),
+      window.api.poolGetFlags(),
       window.api.getUpdateState(),
-    ],
-  );
+    ]);
 
   let keyHandler = null;
   let cleanupRecordingFn = null;
@@ -271,7 +271,7 @@ async function showSettings(initialTab = "general") {
           <div class="settings-content">
             ${renderGeneralTab(version)}
             ${renderShortcutsTab(shortcuts, defaults)}
-            ${renderPoolTab(health)}
+            ${renderPoolTab(health, poolFlags)}
             ${renderUpdatesTab(version, updateState)}
           </div>
         </div>
@@ -935,9 +935,18 @@ function wireUpdatesTab(overlay) {
 }
 
 // --- Pool tab ---
-function renderPoolTab(health) {
+function renderPoolTab(health, flags) {
   const slotsHtml = renderPoolSlotsHtml(health);
   const countsHtml = renderPoolCountsHtml(health);
+  const escapedFlags = escapeHtml(flags || "");
+
+  const flagsHtml = `
+    <label class="pool-flags-label">
+      Session flags:
+      <input type="text" class="pool-flags-input" value="${escapedFlags}"
+        placeholder="--dangerously-skip-permissions"
+        spellcheck="false">
+    </label>`;
 
   return `
     <div class="settings-tab-panel" data-tab="pool">
@@ -952,6 +961,7 @@ function renderPoolTab(health) {
               Pool size:
               <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
             </label>
+            ${flagsHtml}
             <button class="offload-menu-btn pool-resize-btn">Resize</button>
             <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
             <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
@@ -965,6 +975,7 @@ function renderPoolTab(health) {
               Pool size:
               <input type="number" class="pool-size-input" value="10" min="1" max="20">
             </label>
+            ${flagsHtml}
             <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
           </div>
         `
@@ -1013,6 +1024,31 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         (s) => s.index === clickedSlotIndex,
       );
       if (slot) openSlotTerminalPopup(slot);
+    });
+  }
+
+  // Flags input — save on blur or Enter
+  const flagsInput = overlay.querySelector(".pool-flags-input");
+  if (flagsInput) {
+    let flagsSaveTimeout = null;
+    const saveFlags = () => {
+      clearTimeout(flagsSaveTimeout);
+      window.api.poolSetFlags(flagsInput.value);
+    };
+    flagsInput.addEventListener("blur", saveFlags);
+    flagsInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveFlags();
+        showNotification("Session flags saved");
+      }
+      // Stop propagation so keyboard nav doesn't interfere with typing
+      e.stopPropagation();
+    });
+    // Also auto-save after typing stops
+    flagsInput.addEventListener("input", () => {
+      clearTimeout(flagsSaveTimeout);
+      flagsSaveTimeout = setTimeout(saveFlags, 1000);
     });
   }
 

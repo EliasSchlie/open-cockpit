@@ -262,12 +262,17 @@ export async function attachPoolTerminal(poolTermId) {
     fitAddon,
     container,
     isPoolTui: true,
+    // Skip daemon replay — the buffer was generated at 80×24 (daemon default)
+    // and xterm.js reflow to the actual window size garbles TUI cursor
+    // positioning. Instead, the initial ptyResize triggers SIGWINCH which makes
+    // Claude redraw at the correct dimensions.
+    skipReplay: true,
     dockTabId: null,
     _resizeHandler: null,
   };
   state.terminals.push(entry);
 
-  // Register before attach so replay/data can find this terminal
+  // Register before attach so data events can find this terminal
   pendingTerminals.set(poolTermId, entry);
   try {
     await window.api.ptyAttach(poolTermId);

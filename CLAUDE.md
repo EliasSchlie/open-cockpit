@@ -17,6 +17,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/pool-lock.js` — Async mutex for pool.json read-modify-write cycles (`withPoolLock`)
 - `src/session-statuses.js` — Shared status string constants (STATUS enum)
+- `src/platform.js` — Cross-platform abstraction (process introspection, CWD detection, shell config, macOS-only features no-op elsewhere)
 - `src/parse-origins.js` — Session origin detection from `ps eww` output (pool/sub-claude/ext)
 - `src/secure-fs.js` — Owner-only file helpers (mode 0o600/0o700)
 - `src/terminal-input.js` — Headless terminal emulator for detecting text in Claude's TUI input box
@@ -69,6 +70,7 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
 - `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings, pinnedUntil)
+- `~/.open-cockpit/pool-settings.json` — Pool settings (session flags). Defaults to `--dangerously-skip-permissions`
 - `~/.open-cockpit/session-graph.json` — Parent-child session relationships (initiator: "user"|"model")
 - `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived session data (meta.json, snapshot.log)
 - `~/.open-cockpit/shortcuts.json` — User keyboard shortcut overrides (only non-default values)
@@ -229,10 +231,22 @@ Pool slots can be pinned to prevent LRU offloading:
 
 Sessions in the sidebar display an origin tag:
 - **pool** (green) — spawned by the pool manager (`OPEN_COCKPIT_POOL=1` env var)
+- **custom** (cyan) — standalone sessions spawned via Cmd+Shift+N (`OPEN_COCKPIT_CUSTOM=1` env var)
 - **sub-claude** (purple) — spawned by sub-claude (`SUB_CLAUDE=1` env var)
 - **ext** (gray) — external sessions (no known env markers)
 
 Detection uses `ps eww <PID>` to read process environment. Results are cached by PID.
+
+## Custom sessions
+
+Standalone Claude sessions spawned via `Cmd+Shift+N`. Unlike pool sessions, custom sessions:
+- Are **not part of the pool** — they don't occupy pool slots or get offloaded/recycled
+- Run on the PTY daemon (like pool sessions) but are tracked independently
+- Show a **custom** (cyan) origin tag in the sidebar
+- Are **fully killed** on archive (PTY terminated), not just cleared
+- Support custom working directory and extra CLI flags (e.g. `--model sonnet`)
+
+The dialog prompts for a working directory (default: `~`) and optional flags. The session spawns Claude with `--dangerously-skip-permissions` plus any extra flags.
 
 ## Setup scripts
 

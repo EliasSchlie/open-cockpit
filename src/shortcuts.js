@@ -43,6 +43,8 @@ const DEFAULT_SHORTCUTS = {
   "toggle-children": "Alt+Shift+Right",
   "next-child-session": "Alt+Shift+Down",
   "prev-child-session": "Alt+Shift+Up",
+  // Custom session
+  "new-custom-session": "CmdOrCtrl+Shift+N",
   // Bell
   "toggle-bell": "CmdOrCtrl+Shift+B",
   // Session info

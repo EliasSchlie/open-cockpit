@@ -15,6 +15,7 @@ const channels = [
   "prev-terminal-tab",
   "switch-terminal-tab",
   "new-session",
+  "new-custom-session",
   "next-session",
   "prev-session",
   "toggle-children",
@@ -89,7 +90,13 @@ contextBridge.exposeInMainWorld("api", {
   poolRead: () => ipcRenderer.invoke("pool-read"),
   poolDestroy: () => ipcRenderer.invoke("pool-destroy"),
   poolClean: () => ipcRenderer.invoke("pool-clean"),
+  poolGetFlags: () => ipcRenderer.invoke("pool-get-flags"),
+  poolSetFlags: (flags) => ipcRenderer.invoke("pool-set-flags", flags),
   poolResume: (sessionId) => ipcRenderer.invoke("pool-resume", sessionId),
+
+  // Custom sessions
+  spawnCustomSession: (cwd, flags) =>
+    ipcRenderer.invoke("spawn-custom-session", cwd, flags),
 
   // Terminal (forwarded to PTY daemon via main process)
   ptySpawn: (opts) => ipcRenderer.invoke("pty-spawn", opts),
@@ -109,6 +116,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("pty-replay", (_e, termId, data) => callback(termId, data)),
   onPtyExit: (callback) =>
     ipcRenderer.on("pty-exit", (_e, termId) => callback(termId)),
+  reportTerminalDims: (cols, rows) =>
+    ipcRenderer.send("report-terminal-dims", cols, rows),
 
   // Setup scripts
   listSetupScripts: () => ipcRenderer.invoke("list-setup-scripts"),
@@ -179,6 +188,8 @@ contextBridge.exposeInMainWorld("api", {
 
   // Navigation actions
   onNewSession: (callback) => ipcRenderer.on("new-session", () => callback()),
+  onNewCustomSession: (callback) =>
+    ipcRenderer.on("new-custom-session", () => callback()),
   onNextSession: (callback) => ipcRenderer.on("next-session", () => callback()),
   onPrevSession: (callback) => ipcRenderer.on("prev-session", () => callback()),
   onToggleChildren: (callback) =>

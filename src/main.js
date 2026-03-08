@@ -171,6 +171,11 @@ function buildMenu() {
           click: () => send("new-session"),
         },
         {
+          label: "New Custom Session",
+          accelerator: accel("new-custom-session"),
+          click: () => send("new-custom-session"),
+        },
+        {
           label: "New Terminal Tab",
           accelerator: accel("new-terminal-tab"),
           click: () => send("new-terminal-tab"),
@@ -478,6 +483,12 @@ app.whenReady().then(async () => {
   // Debug logging IPC (renderer -> main)
   ipcMain.on("debug-log", (_e, tag, args) => {
     debugLog(tag, ...args);
+  });
+
+  // Terminal dimensions: renderer reports actual cols/rows so pool spawns
+  // can use them instead of the 80×24 daemon default.
+  ipcMain.on("report-terminal-dims", (_e, cols, rows) => {
+    poolManager.setTerminalDims(cols, rows);
   });
 
   // --- Register shared IPC handlers ---

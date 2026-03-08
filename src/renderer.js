@@ -17,6 +17,7 @@ import {
   disposeTerminalEntry,
 } from "./dock-helpers.js";
 import { createEditor, setOnDocChange } from "./editor.js";
+import { createOverlayDialog } from "./overlay-dialog.js";
 import {
   initSidebar,
   loadDirColors,
@@ -144,41 +145,56 @@ async function selectSession(session) {
     // No cached terminals — set up fresh dock + terminals
     initDockLayout();
 
+    // Resolve the daemon terminal ID for pool/custom sessions
+    let daemonTermId = null;
     if (session.origin === "pool") {
-      // Pool session: attach to the pool slot's existing Claude TUI
       const pool = await window.api.poolRead();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at poolRead`);
         return;
       }
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
-      if (slot) {
-        try {
-          await attachPoolTerminal(slot.termId);
-          if (gen !== state.sessionGeneration) {
-            debugLog("session", `race abort gen=${gen} at poolAttach`);
-            destroySessionTerminals(session.sessionId);
-            return;
-          }
-        } catch {
-          debugLog(
-            "session",
-            `pool attach failed for slot ${slot.termId}, falling back to shell`,
-          );
-          await spawnTerminal(session.cwd);
-          if (gen !== state.sessionGeneration) {
-            debugLog("session", `race abort gen=${gen} at spawnFallback`);
-            destroySessionTerminals(session.sessionId);
-            return;
-          }
-        }
-      } else {
-        await spawnTerminal(session.cwd);
+      daemonTermId = slot?.termId || null;
+    } else if (session.origin === "custom") {
+      const allPtys = await window.api.ptyList();
+      if (gen !== state.sessionGeneration) {
+        debugLog("session", `race abort gen=${gen} at customPtyList`);
+        return;
+      }
+      const pty = allPtys.find(
+        (p) => p.sessionId === session.sessionId && !p.exited,
+      );
+      daemonTermId = pty?.termId || null;
+    }
+
+    if (daemonTermId) {
+      // Attach to existing daemon terminal (pool or custom)
+      try {
+        await attachPoolTerminal(daemonTermId);
         if (gen !== state.sessionGeneration) {
-          debugLog("session", `race abort gen=${gen} at noSlotSpawn`);
+          debugLog("session", `race abort gen=${gen} at daemonAttach`);
           destroySessionTerminals(session.sessionId);
           return;
         }
+      } catch {
+        debugLog(
+          "session",
+          `attach failed for ${daemonTermId}, falling back to shell`,
+        );
+        await spawnTerminal(session.cwd);
+        if (gen !== state.sessionGeneration) {
+          debugLog("session", `race abort gen=${gen} at attachFallback`);
+          destroySessionTerminals(session.sessionId);
+          return;
+        }
+      }
+    } else if (session.origin === "pool" || session.origin === "custom") {
+      // Daemon session but no terminal found — fallback to shell
+      await spawnTerminal(session.cwd);
+      if (gen !== state.sessionGeneration) {
+        debugLog("session", `race abort gen=${gen} at noTermSpawn`);
+        destroySessionTerminals(session.sessionId);
+        return;
       }
     } else {
       // External session: spawn a fresh shell
@@ -609,8 +625,16 @@ async function archiveCurrentSession() {
     selectSession(idle);
   }
 
-  // Close external terminal if this is an ext/sub-claude session
-  if (session.origin !== "pool" && session.alive && session.pid) {
+  if (session.origin === "custom" && session.alive) {
+    // Custom session: kill the daemon PTY (fully kill, not offload)
+    const allPtys = await window.api.ptyList();
+    const pty = allPtys.find(
+      (p) => p.sessionId === session.sessionId && !p.exited,
+    );
+    if (pty) window.api.ptyKill(pty.termId).catch(() => {});
+    destroySessionTerminals(session.sessionId);
+  } else if (session.origin !== "pool" && session.alive && session.pid) {
+    // External/sub-claude session: close external terminal
     window.api.closeExternalTerminal(session.pid).catch(() => {});
   }
 
@@ -744,6 +768,7 @@ initPoolUi({
 initCommandPalette({
   switchSession,
   spawnTerminal,
+  spawnCustomSession,
   getActiveTermIndex,
   closeTerminal,
   switchToTerminal,
@@ -823,6 +848,132 @@ dom.newSessionBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Custom session dialog ---
+
+function showCustomSessionDialog() {
+  return new Promise((resolve) => {
+    let resolved = false;
+    function finish(result) {
+      if (resolved) return;
+      resolved = true;
+      window.api.setDialogOpen(false);
+      close();
+      resolve(result);
+    }
+
+    const { overlay, close } = createOverlayDialog({
+      id: "custom-session-dialog",
+      escapeClose: false,
+      closeSelector: null,
+      onClose: () => {
+        if (!resolved) {
+          resolved = true;
+          window.api.setDialogOpen(false);
+          resolve(null);
+        }
+      },
+      onKeydown(e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(null);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          const cwdInput = overlay.querySelector("#custom-session-cwd");
+          const flagsInput = overlay.querySelector("#custom-session-flags");
+          finish({
+            cwd: cwdInput.value.trim() || "~",
+            flags: flagsInput.value.trim(),
+          });
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          e.stopPropagation();
+          const cwdInput = overlay.querySelector("#custom-session-cwd");
+          const flagsInput = overlay.querySelector("#custom-session-flags");
+          if (document.activeElement === cwdInput) flagsInput.focus();
+          else cwdInput.focus();
+        }
+      },
+      html: `
+        <div class="custom-session-dialog">
+          <div class="setup-script-title">New Custom Session</div>
+          <div class="setup-script-subtitle">Spawn a standalone Claude session</div>
+          <div class="field-group">
+            <label>Working directory</label>
+            <input type="text" id="custom-session-cwd" placeholder="~" value="~" />
+          </div>
+          <div class="field-group">
+            <label>Extra flags (optional)</label>
+            <input type="text" id="custom-session-flags" placeholder="e.g. --model sonnet" />
+          </div>
+          <div class="dialog-buttons">
+            <button class="btn-cancel">Cancel</button>
+            <button class="btn-spawn">Spawn</button>
+          </div>
+        </div>
+      `,
+    });
+
+    window.api.setDialogOpen(true);
+
+    const cwdInput = overlay.querySelector("#custom-session-cwd");
+    const cancelBtn = overlay.querySelector(".btn-cancel");
+    const spawnBtn = overlay.querySelector(".btn-spawn");
+
+    cwdInput.focus();
+    cwdInput.select();
+
+    cancelBtn.addEventListener("click", () => finish(null));
+    spawnBtn.addEventListener("click", () => {
+      const cwd = overlay.querySelector("#custom-session-cwd");
+      const flags = overlay.querySelector("#custom-session-flags");
+      finish({
+        cwd: cwd.value.trim() || "~",
+        flags: flags.value.trim(),
+      });
+    });
+  });
+}
+
+let customSessionInProgress = false;
+async function spawnCustomSession() {
+  if (customSessionInProgress) return;
+  customSessionInProgress = true;
+  try {
+    const result = await showCustomSessionDialog();
+    if (!result) return;
+
+    const { cwd, flags } = result;
+    showNotification("Spawning custom session…");
+
+    const { termId, pid } = await window.api.spawnCustomSession(cwd, flags);
+
+    // Wait for the session to register (plugin hook writes session-pids/<PID>)
+    const sessionId = await window.api.ptyWaitSession(pid);
+    if (!sessionId) {
+      showNotification("Custom session failed to register");
+      return;
+    }
+
+    // Tag the daemon terminal with the session ID
+    await window.api.ptySetSession(termId, sessionId);
+
+    // Refresh session list and select the new session
+    await loadSessions();
+    const newSession = state.cachedSessions.find(
+      (s) => s.sessionId === sessionId,
+    );
+    if (newSession) {
+      await selectSession(newSession);
+    }
+  } catch (err) {
+    showNotification(`Custom session failed: ${err.message}`);
+  } finally {
+    customSessionInProgress = false;
+  }
+}
+
 // --- IPC event handlers ---
 
 // Menu keyboard shortcuts — terminal tabs
@@ -850,6 +1001,7 @@ window.api.onSwitchTerminalTab((index) => {
 
 // Navigation shortcuts
 window.api.onNewSession(() => dom.newSessionBtn.click());
+window.api.onNewCustomSession(spawnCustomSession);
 window.api.onNextSession(() => switchSession(1));
 window.api.onPrevSession(() => switchSession(-1));
 window.api.onToggleChildren(toggleChildren);

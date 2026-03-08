@@ -288,6 +288,11 @@ body {
   background: var(--border);
 }
 
+.session-origin-custom {
+  color: #00ccff;
+  background: rgba(0, 204, 255, 0.1);
+}
+
 .session-origin-stale {
   color: var(--yellow);
   background: rgba(255, 255, 0, 0.1);
@@ -901,6 +906,70 @@ body.dock-resizing-v {
   background: var(--accent-dim);
 }
 
+/* Custom session dialog */
+.custom-session-dialog {
+  width: 400px;
+  background: #161616;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  padding: 16px;
+}
+
+.custom-session-dialog label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.custom-session-dialog input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.custom-session-dialog input:focus {
+  border-color: #00ccff;
+}
+
+.custom-session-dialog .field-group {
+  margin-bottom: 12px;
+}
+
+.custom-session-dialog .dialog-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.custom-session-dialog .dialog-buttons button {
+  padding: 6px 16px;
+  font-size: 13px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.custom-session-dialog .btn-cancel {
+  background: var(--border);
+}
+
+.custom-session-dialog .btn-spawn {
+  background: #00ccff;
+  color: #000;
+  font-weight: 600;
+}
+
 /* Unified settings dialog */
 .settings-dialog {
   width: 640px;
@@ -1128,6 +1197,32 @@ body.dock-resizing-v {
 }
 
 .pool-size-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pool-flags-label {
+  font-size: 13px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.pool-flags-input {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.pool-flags-input:focus {
   outline: none;
   border-color: var(--accent);
 }
