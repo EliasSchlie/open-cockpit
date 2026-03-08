@@ -203,9 +203,10 @@ function renderResults(query) {
     const isOffloadedOrArchived =
       s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED;
     const tagText = isOffloadedOrArchived ? s.status : s.origin || "ext";
+    const safeOrigin = (s.origin || "ext").replace(/[^a-z0-9-]/gi, "-");
     const tagClass = isOffloadedOrArchived
       ? `status-${statusClass}`
-      : `origin-${escapeHtml(s.origin || "ext")}`;
+      : `origin-${safeOrigin}`;
 
     item.innerHTML = `
       <div class="session-search-main">
