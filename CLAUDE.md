@@ -124,16 +124,49 @@ npm run build   # esbuild bundle — needed before Cmd+R reload
 
 ## Releasing
 
-**Automatic (CI):** Every push to `main` triggers `.github/workflows/auto-release.yml`:
+Two independent pipelines: **plugin** (hooks/skills, automatic) and **app** (Electron binary, manual).
+
+### Plugin releases (automatic)
+
+Every push to `main` triggers `.github/workflows/auto-release.yml`:
 1. Bumps patch version in `.claude-plugin/plugin.json`
 2. Commits with `[skip ci]` to prevent loops
 3. Clones `EliasSchlie/claude-plugins`, updates marketplace version, pushes
 
 Just push your changes — CI handles version bumping and marketplace sync. For major/minor bumps, manually update `plugin.json` before pushing; CI increments from your number.
 
-**Requires:** `APP_ID` and `APP_PRIVATE_KEY` secrets on the repo (from the "Plugin Release Bot" GitHub App, installed on `open-cockpit` + `claude-plugins`).
+**Requires:** `APP_ID` and `APP_PRIVATE_KEY` secrets (from the "Plugin Release Bot" GitHub App).
 
 **Manual fallback:** `./release.sh` still works for local releases if CI is unavailable.
+
+### App releases (manual tag push)
+
+Only needed for Electron-side changes (UI, main process, daemon). Hook/skill changes don't need a new binary.
+
+1. Bump version: `npm version X.Y.Z --no-git-tag-version`
+2. Commit: `git add package.json package-lock.json && git commit -m "chore: bump version to X.Y.Z"`
+3. Push to main: `git pull && git push`
+4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`
+5. Wait for CI: `.github/workflows/build-release.yml` builds all 3 platforms (~5 min)
+6. Publish the draft: `gh release edit vX.Y.Z --draft=false --latest`
+
+electron-builder creates a **draft** release. You must publish it manually (step 6) — this is intentional as a review gate.
+
+**What CI does:** Builds DMG+ZIP (macOS, code signed + Apple notarized), AppImage+deb (Linux), exe (Windows). Uploads binaries + `latest-*.yml` files (required for in-app auto-updater).
+
+**Secrets required:**
+- `MAC_CERTIFICATE` — base64-encoded .p12 (Developer ID Application certificate)
+- `MAC_CERTIFICATE_PASSWORD` — .p12 export password
+- `APPLE_ID` — Apple Developer account email
+- `APPLE_APP_SPECIFIC_PASSWORD` — from [account.apple.com](https://account.apple.com) → App-Specific Passwords
+- Team ID `Q2U8K9N3BL` is hardcoded in the workflow
+
+**If a build fails:** fix the issue, then re-tag:
+```bash
+git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z
+gh release delete vX.Y.Z --yes 2>/dev/null
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
 
 ## Dev vs production
 
