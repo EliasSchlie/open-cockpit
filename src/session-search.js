@@ -1,6 +1,6 @@
 // Session search: fuzzy search overlay for quickly jumping to sessions
 import { state, dom, STATUS_CLASSES, escapeHtml } from "./renderer-state.js";
-import { STATUS } from "./session-statuses.js";
+import { STATUS, ORIGIN } from "./session-statuses.js";
 import { createPickerOverlay } from "./picker-overlay.js";
 
 // Hoisted regex for word boundary detection in fuzzy scoring
@@ -159,8 +159,8 @@ function renderResults(query) {
     // Show origin for live sessions, status label for offloaded/archived
     const isOffloadedOrArchived =
       s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED;
-    const tagText = isOffloadedOrArchived ? s.status : s.origin || "ext";
-    const safeOrigin = (s.origin || "ext").replace(/[^a-z0-9-]/gi, "-");
+    const tagText = isOffloadedOrArchived ? s.status : s.origin || ORIGIN.EXT;
+    const safeOrigin = (s.origin || ORIGIN.EXT).replace(/[^a-z0-9-]/gi, "-");
     const tagClass = isOffloadedOrArchived
       ? `status-${statusClass}`
       : `origin-${safeOrigin}`;

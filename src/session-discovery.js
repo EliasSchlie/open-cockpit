@@ -15,7 +15,7 @@ const {
   checkTerminalInputs,
 } = require("./terminal-input");
 const { readPool: readPoolFile, isSlotUncommitted } = require("./pool");
-const { STATUS, POOL_STATUS } = require("./session-statuses");
+const { STATUS, POOL_STATUS, ORIGIN } = require("./session-statuses");
 const {
   secureMkdirSync,
   secureWriteFileSync,
@@ -293,15 +293,15 @@ async function batchDetectOrigins(pids) {
       } else {
         // Windows/unavailable: default to ext
         for (const pid of uncached) {
-          originCache.set(pid, "ext");
-          results.set(pid, "ext");
+          originCache.set(pid, ORIGIN.EXT);
+          results.set(pid, ORIGIN.EXT);
         }
       }
     } catch (err) {
       console.error("[main] Failed to detect session origins:", err.message);
       for (const pid of uncached) {
-        originCache.set(pid, "ext");
-        results.set(pid, "ext");
+        originCache.set(pid, ORIGIN.EXT);
+        results.set(pid, ORIGIN.EXT);
       }
     }
   }
@@ -851,8 +851,8 @@ async function getSessionsUncached() {
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
       const origin = poolSlotMap.has(s.sessionId)
-        ? "pool"
-        : originCache.get(String(s.pid)) || "ext";
+        ? ORIGIN.POOL
+        : originCache.get(String(s.pid)) || ORIGIN.EXT;
 
       secureMkdirSync(offloadDir, { recursive: true });
       const meta = {
@@ -903,11 +903,11 @@ async function getSessionsUncached() {
   const originMap = await batchDetectOrigins(needOriginPids);
   for (const s of sessions) {
     if (poolSlotMap.has(s.sessionId)) {
-      s.origin = "pool";
+      s.origin = ORIGIN.POOL;
     } else if (s.alive) {
-      s.origin = originMap.get(String(s.pid)) || "ext";
+      s.origin = originMap.get(String(s.pid)) || ORIGIN.EXT;
     } else {
-      s.origin = "ext";
+      s.origin = ORIGIN.EXT;
     }
   }
 
@@ -932,7 +932,7 @@ async function getSessionsUncached() {
   // the same UUID), remove the stale offload data from disk.
   for (const offloaded of await getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
-      if (!offloaded.origin) offloaded.origin = "pool";
+      if (!offloaded.origin) offloaded.origin = ORIGIN.POOL;
       sessions.push(offloaded);
     } else if (!offloaded.archived) {
       // Live session supersedes non-archived offload data — clean up

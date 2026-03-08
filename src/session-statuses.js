@@ -3,6 +3,13 @@
  * Import these instead of using raw string literals to catch typos at reference time.
  */
 
+const ORIGIN = {
+  POOL: "pool",
+  CUSTOM: "custom",
+  SUB_CLAUDE: "sub-claude",
+  EXT: "ext",
+};
+
 const STATUS = {
   FRESH: "fresh",
   TYPING: "typing",
@@ -66,6 +73,7 @@ module.exports = {
   STATUS,
   POOL_STATUS,
   INITIATOR,
+  ORIGIN,
   UPDATE_STATUS,
   PLUGIN_VERSION,
   sessionToPoolStatus,
