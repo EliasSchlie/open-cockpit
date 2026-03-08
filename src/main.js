@@ -374,11 +374,9 @@ let ownsApiSocket = false;
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
 
-  // Read app version once from plugin.json
-  const pluginJson = readJsonSync(
-    path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
-  );
-  const cachedAppVersion = pluginJson?.version || PLUGIN_VERSION.UNKNOWN;
+  // Read app version from package.json (plugin.json has the plugin version)
+  const packageJson = readJsonSync(path.join(__dirname, "..", "package.json"));
+  const cachedAppVersion = packageJson?.version || PLUGIN_VERSION.UNKNOWN;
 
   // Start watching installed_plugins.json for version changes
   startPluginVersionWatch();
