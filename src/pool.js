@@ -5,16 +5,13 @@
 const path = require("path");
 const fs = require("fs");
 const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
+const { readJsonSync } = require("./secure-fs");
 
 /**
  * Read pool.json from disk. Returns parsed object or null on failure.
  */
 function readPool(poolFile) {
-  try {
-    return JSON.parse(fs.readFileSync(poolFile, "utf-8"));
-  } catch {
-    return null;
-  }
+  return readJsonSync(poolFile);
 }
 
 /**

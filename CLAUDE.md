@@ -19,7 +19,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/session-statuses.js` — Shared status string constants (STATUS enum)
 - `src/platform.js` — Cross-platform abstraction (process introspection, CWD detection, shell config, macOS-only features no-op elsewhere)
 - `src/parse-origins.js` — Session origin detection from `ps eww` output (pool/sub-claude/ext)
-- `src/secure-fs.js` — Owner-only file helpers (mode 0o600/0o700)
+- `src/secure-fs.js` — File helpers: owner-only write (mode 0o600/0o700), `readJsonSync(path, fallback)`
 - `src/terminal-input.js` — Headless terminal emulator for detecting text in Claude's TUI input box
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 - `src/dock-layout.js` — **Dock system**: recursive split tree, drag-and-drop tabs, resize handles

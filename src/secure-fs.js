@@ -14,4 +14,15 @@ function secureWriteFileSync(filePath, data, opts) {
   });
 }
 
-module.exports = { secureMkdirSync, secureWriteFileSync };
+/**
+ * Read and parse a JSON file, returning `fallback` on any error (ENOENT, parse failure).
+ */
+function readJsonSync(filePath, fallback = null) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return fallback;
+  }
+}
+
+module.exports = { secureMkdirSync, secureWriteFileSync, readJsonSync };

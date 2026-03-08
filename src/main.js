@@ -12,7 +12,11 @@ const {
   INPUT_EVENT_ACTIONS,
 } = require("./shortcuts");
 const { createApiServer } = require("./api-server");
-const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
+const {
+  secureMkdirSync,
+  secureWriteFileSync,
+  readJsonSync,
+} = require("./secure-fs");
 const {
   IS_DEV,
   OWN_POOL,
@@ -371,18 +375,10 @@ app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
 
   // Read app version once from plugin.json
-  let cachedAppVersion;
-  try {
-    const pluginJson = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
-        "utf-8",
-      ),
-    );
-    cachedAppVersion = pluginJson.version || PLUGIN_VERSION.UNKNOWN;
-  } catch {
-    cachedAppVersion = PLUGIN_VERSION.UNKNOWN;
-  }
+  const pluginJson = readJsonSync(
+    path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
+  );
+  const cachedAppVersion = pluginJson?.version || PLUGIN_VERSION.UNKNOWN;
 
   // Start watching installed_plugins.json for version changes
   startPluginVersionWatch();
@@ -580,14 +576,7 @@ app.whenReady().then(async () => {
   }
 
   // --- IPC-only handlers (no API equivalent) ---
-  ipcMain.handle("get-dir-colors", () => {
-    try {
-      return JSON.parse(fs.readFileSync(COLORS_FILE, "utf-8"));
-    } catch {
-      /* ENOENT expected — colors.json is optional */
-      return {};
-    }
-  });
+  ipcMain.handle("get-dir-colors", () => readJsonSync(COLORS_FILE, {}));
   ipcMain.handle("watch-intention", (_e, sessionId) => {
     poolManager.validateSessionId(sessionId);
     return poolManager.watchIntention(sessionId);
@@ -670,14 +659,9 @@ app.whenReady().then(async () => {
       /* best-effort — layout save failure is non-fatal */
     }
   });
-  ipcMain.handle("load-layout", (_e, sessionId) => {
-    try {
-      const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
-      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    } catch {
-      return null;
-    }
-  });
+  ipcMain.handle("load-layout", (_e, sessionId) =>
+    readJsonSync(path.join(LAYOUTS_DIR, `${sessionId}.json`)),
+  );
   ipcMain.handle("delete-layout", (_e, sessionId) => {
     try {
       fs.unlinkSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));

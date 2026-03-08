@@ -3,7 +3,7 @@ const path = require("path");
 const os = require("os");
 const { execFileSync } = require("child_process");
 const { dialog, shell } = require("electron");
-const { secureMkdirSync } = require("./secure-fs");
+const { secureMkdirSync, readJsonSync } = require("./secure-fs");
 const { OPEN_COCKPIT_DIR } = require("./paths");
 const { resolveClaudePath } = require("./pool-manager");
 const { PLUGIN_VERSION } = require("./session-statuses");
@@ -27,21 +27,17 @@ let cachedPluginVersion = null;
 let watchStarted = false;
 
 function refreshPluginVersion() {
-  try {
-    const data = JSON.parse(fs.readFileSync(INSTALLED_PLUGINS_FILE, "utf-8"));
-    const entries = data?.plugins?.[PLUGIN_KEY];
-    if (!Array.isArray(entries) || entries.length === 0) {
-      cachedPluginVersion = null;
-      return;
-    }
-    let best = entries[0];
-    for (const e of entries) {
-      if (e.lastUpdated > best.lastUpdated) best = e;
-    }
-    cachedPluginVersion = best.version || null;
-  } catch {
+  const data = readJsonSync(INSTALLED_PLUGINS_FILE);
+  const entries = data?.plugins?.[PLUGIN_KEY];
+  if (!Array.isArray(entries) || entries.length === 0) {
     cachedPluginVersion = null;
+    return;
   }
+  let best = entries[0];
+  for (const e of entries) {
+    if (e.lastUpdated > best.lastUpdated) best = e;
+  }
+  cachedPluginVersion = best.version || null;
 }
 
 function startPluginVersionWatch() {
