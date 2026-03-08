@@ -804,13 +804,7 @@ async function getSessionsUncached() {
   // Archive dead sessions (save as archived without snapshot)
   // Child sessions (sub-agents) are NOT independently archived — they stay
   // grouped under their parent and only get archived when the parent is archived.
-  const poolForArchive = readPool();
-  const poolSessionIdsForArchive = new Set();
-  if (poolForArchive) {
-    for (const slot of poolForArchive.slots) {
-      if (slot.sessionId) poolSessionIdsForArchive.add(slot.sessionId);
-    }
-  }
+  // Reuse poolSlotMap from the readPool() call above (no writes in between).
   const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
   const sessionIdSet = new Set(sessions.map((s) => s.sessionId));
   for (let i = sessions.length - 1; i >= 0; i--) {
@@ -856,7 +850,7 @@ async function getSessionsUncached() {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
-      const origin = poolSessionIdsForArchive.has(s.sessionId)
+      const origin = poolSlotMap.has(s.sessionId)
         ? "pool"
         : originCache.get(String(s.pid)) || "ext";
 
@@ -901,19 +895,14 @@ async function getSessionsUncached() {
   }
 
   // Tag sessions with origin: pool, sub-claude, or ext
-  const poolSessionIds = new Set();
-  if (pool) {
-    for (const slot of pool.slots) {
-      if (slot.sessionId) poolSessionIds.add(slot.sessionId);
-    }
-  }
+  // Reuse poolSlotMap (same pool data, no writes in between).
   // Batch detect origins for all alive non-pool sessions in one ps call
   const needOriginPids = sessions
-    .filter((s) => s.alive && !poolSessionIds.has(s.sessionId))
+    .filter((s) => s.alive && !poolSlotMap.has(s.sessionId))
     .map((s) => s.pid);
   const originMap = await batchDetectOrigins(needOriginPids);
   for (const s of sessions) {
-    if (poolSessionIds.has(s.sessionId)) {
+    if (poolSlotMap.has(s.sessionId)) {
       s.origin = "pool";
     } else if (s.alive) {
       s.origin = originMap.get(String(s.pid)) || "ext";
