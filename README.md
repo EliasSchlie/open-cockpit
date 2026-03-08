@@ -90,6 +90,8 @@ The app is ad-hoc signed but not notarized. macOS will show "damaged" or "can't 
    ```
 3. Open the app normally
 
+The `xattr -cr` must be run on the `.app` in `/Applications`, not just the DMG — macOS re-adds quarantine when you copy.
+
 ### Platform notes
 
 - **macOS**: full feature set including iTerm2 integration and Cursor/VS Code app activation
