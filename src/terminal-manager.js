@@ -136,6 +136,49 @@ export function dockRegisterTerminal(entry) {
   registerTerminalTab(state.dock, entry, label);
 }
 
+// Remove references to unregistered tabs from a layout tree.
+// Returns the pruned layout, or null if the entire tree is empty.
+function sanitizeLayout(layout, registeredTabs) {
+  if (!layout) return null;
+  if (layout.type === "leaf") {
+    const validTabs = layout.tabs.filter((id) => registeredTabs.has(id));
+    if (validTabs.length === 0) return null;
+    return {
+      ...layout,
+      tabs: validTabs,
+      activeTab: Math.min(layout.activeTab, validTabs.length - 1),
+    };
+  }
+  // split node
+  const children = layout.children
+    .map((c) => sanitizeLayout(c, registeredTabs))
+    .filter(Boolean);
+  if (children.length === 0) return null;
+  if (children.length === 1) return children[0];
+  const sizes = children.map(
+    (_, i) => layout.sizes[i] ?? 100 / children.length,
+  );
+  // Renormalize sizes if children were removed
+  if (children.length !== layout.children.length) {
+    const total = sizes.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < sizes.length; i++) sizes[i] = (sizes[i] / total) * 100;
+  }
+  return { ...layout, children, sizes };
+}
+
+export { sanitizeLayout };
+
+// Apply a saved layout (sanitized) or fall back to the default two-pane split.
+export function applyLayoutOrDefault(savedLayout) {
+  const sanitized = savedLayout && sanitizeLayout(savedLayout, state.dock.tabs);
+  if (sanitized) {
+    state.dock.setLayout(sanitized);
+  } else {
+    const termTabIds = state.terminals.map((t) => t.dockTabId);
+    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  }
+}
+
 // Initialize dock with optional existing terminals and saved layout.
 // If no terminals/layout provided, caller adds tabs and sets layout after.
 export function initDockLayout(existingTerminals, savedLayout) {
@@ -146,29 +189,48 @@ export function initDockLayout(existingTerminals, savedLayout) {
     for (const t of existingTerminals) dockRegisterTerminal(t);
   }
   registerEditorTab(state.dock, state.editorContainer);
-  if (savedLayout) {
-    state.dock.setLayout(savedLayout);
-  } else if (existingTerminals && existingTerminals.length > 0) {
-    const termTabIds = existingTerminals.map((t) => t.dockTabId);
-    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  if (savedLayout || (existingTerminals && existingTerminals.length > 0)) {
+    applyLayoutOrDefault(savedLayout);
   }
+}
+
+// Debounced layout persistence — avoids excessive disk writes during resize drags
+let _layoutSaveTimer = null;
+let _pendingLayout = null;
+let _pendingSessionId = null;
+
+function scheduleLayoutSave(sessionId, layout) {
+  _pendingLayout = layout;
+  _pendingSessionId = sessionId;
+  clearTimeout(_layoutSaveTimer);
+  _layoutSaveTimer = setTimeout(() => {
+    _layoutSaveTimer = null;
+    _pendingLayout = null;
+    _pendingSessionId = null;
+    window.api.saveLayout(sessionId, layout);
+  }, 500);
 }
 
 // Sync current terminals into the session cache (renderer + main process)
 export function syncSessionCache() {
   if (!state.currentSessionId) return;
+  const layout = state.dock ? state.dock.getLayout() : null;
   if (state.terminals.length === 0) {
     sessionTerminals.delete(state.currentSessionId);
   } else {
     sessionTerminals.set(state.currentSessionId, {
       terminals: [...state.terminals],
-      dockLayout: state.dock ? state.dock.getLayout() : null,
+      dockLayout: layout,
       lastAccessed: Date.now(),
     });
     // Keep main process metadata in sync
     for (const t of state.terminals) {
       window.api.ptySetSession(t.termId, state.currentSessionId);
     }
+  }
+  // Persist layout to disk (debounced, fire-and-forget)
+  if (layout) {
+    scheduleLayoutSave(state.currentSessionId, layout);
   }
 }
 
@@ -401,10 +463,23 @@ export async function closeTerminal(index) {
   syncSessionCache();
 }
 
+// Flush any pending debounced layout save immediately
+export function flushLayoutSave() {
+  if (!_layoutSaveTimer) return; // nothing pending
+  clearTimeout(_layoutSaveTimer);
+  _layoutSaveTimer = null;
+  if (_pendingSessionId && _pendingLayout) {
+    window.api.saveLayout(_pendingSessionId, _pendingLayout);
+  }
+  _pendingLayout = null;
+  _pendingSessionId = null;
+}
+
 // Hide current session's terminals (preserve them in cache)
 export function hideCurrentTerminals() {
   _actions.removeInlineSnapshot();
   if (state.currentSessionId && state.terminals.length > 0) {
+    flushLayoutSave();
     syncSessionCache();
     for (const entry of state.terminals) teardownTerminalResize(entry);
   }
@@ -579,8 +654,10 @@ export async function reconnectAllPtys() {
     for (const p of sessionPtys) {
       entries.push(await reconnectTerminal(p));
     }
+    const savedLayout = await window.api.loadLayout(sid);
     sessionTerminals.set(sid, {
       terminals: entries,
+      dockLayout: savedLayout || null,
       lastAccessed: Date.now(),
     });
   }
@@ -609,8 +686,8 @@ export async function reconnectAllPtys() {
     _actions.createEditor(content);
     await window.api.watchIntention(lastActive.sessionId);
 
-    // Set up dock with restored terminals
-    initDockLayout(state.terminals);
+    // Set up dock with restored terminals (including saved layout)
+    initDockLayout(state.terminals, cached.dockLayout);
   }
 }
 

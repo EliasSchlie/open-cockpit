@@ -12,7 +12,7 @@ const {
   INPUT_EVENT_ACTIONS,
 } = require("./shortcuts");
 const { createApiServer } = require("./api-server");
-const { secureMkdirSync } = require("./secure-fs");
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 const {
   IS_DEV,
   OWN_POOL,
@@ -20,6 +20,7 @@ const {
   SESSION_PIDS_DIR,
   IDLE_SIGNALS_DIR,
   SETUP_SCRIPTS_DIR,
+  LAYOUTS_DIR,
   API_SOCKET,
   DEBUG_LOG_FILE,
   DEBUG_LOG_MAX_SIZE,
@@ -407,6 +408,51 @@ app.whenReady().then(async () => {
     console.error("[main] Idle signal cleanup failed:", err.message);
   }
 
+  // Clean up stale layout files (archived >7 days or session gone entirely)
+  const LAYOUT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+  function cleanupStaleLayouts() {
+    let files;
+    try {
+      files = fs.readdirSync(LAYOUTS_DIR);
+    } catch {
+      return; // ENOENT — no layouts dir yet
+    }
+    // Build set of active session IDs from PID files (once, not per layout file)
+    const activeSessionIds = new Set();
+    try {
+      for (const f of fs.readdirSync(SESSION_PIDS_DIR)) {
+        try {
+          activeSessionIds.add(
+            fs.readFileSync(path.join(SESSION_PIDS_DIR, f), "utf-8").trim(),
+          );
+        } catch {
+          /* skip unreadable PID files */
+        }
+      }
+    } catch {
+      /* ENOENT — no session-pids dir */
+    }
+    const now = Date.now();
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const sessionId = file.slice(0, -5);
+      const filePath = path.join(LAYOUTS_DIR, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (now - stat.mtimeMs < LAYOUT_GRACE_MS) continue;
+        if (activeSessionIds.has(sessionId)) continue;
+        fs.unlinkSync(filePath);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+  try {
+    cleanupStaleLayouts();
+  } catch {
+    /* non-fatal */
+  }
+
   // Reconcile pool state with surviving daemon terminals (startup + periodic)
   try {
     await poolManager.reconcilePool();
@@ -590,6 +636,32 @@ app.whenReady().then(async () => {
       return null;
     }
   });
+  // --- Layout persistence ---
+  ipcMain.handle("save-layout", (_e, sessionId, layout) => {
+    try {
+      secureMkdirSync(LAYOUTS_DIR);
+      const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
+      secureWriteFileSync(filePath, JSON.stringify(layout));
+    } catch {
+      /* best-effort — layout save failure is non-fatal */
+    }
+  });
+  ipcMain.handle("load-layout", (_e, sessionId) => {
+    try {
+      const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
+      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      return null;
+    }
+  });
+  ipcMain.handle("delete-layout", (_e, sessionId) => {
+    try {
+      fs.unlinkSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));
+    } catch {
+      /* ENOENT expected */
+    }
+  });
+
   ipcMain.handle("pty-wait-session", (_e, pid) => {
     return new Promise((resolve) => {
       let attempts = 0;
