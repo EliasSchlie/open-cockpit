@@ -88,6 +88,8 @@ contextBridge.exposeInMainWorld("api", {
   poolRead: () => ipcRenderer.invoke("pool-read"),
   poolDestroy: () => ipcRenderer.invoke("pool-destroy"),
   poolClean: () => ipcRenderer.invoke("pool-clean"),
+  poolGetFlags: () => ipcRenderer.invoke("pool-get-flags"),
+  poolSetFlags: (flags) => ipcRenderer.invoke("pool-set-flags", flags),
   poolResume: (sessionId) => ipcRenderer.invoke("pool-resume", sessionId),
 
   // Terminal (forwarded to PTY daemon via main process)

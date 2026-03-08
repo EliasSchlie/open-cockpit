@@ -35,6 +35,7 @@ const {
 } = require("./daemon-client");
 const {
   POOL_FILE,
+  POOL_SETTINGS_FILE,
   IDLE_SIGNALS_DIR,
   SESSION_PIDS_DIR,
   OFFLOADED_DIR,
@@ -595,14 +596,83 @@ function getCachedClaudePath() {
   return _cachedClaudePath;
 }
 
+// --- Pool settings (persistent flags for spawned sessions) ---
+
+const DEFAULT_POOL_FLAGS = "--dangerously-skip-permissions";
+
+function readPoolSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(POOL_SETTINGS_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writePoolSettings(settings) {
+  secureWriteFileSync(POOL_SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
+
+function getPoolFlags() {
+  const settings = readPoolSettings();
+  return settings.flags !== undefined ? settings.flags : DEFAULT_POOL_FLAGS;
+}
+
+function setPoolFlags(flags) {
+  const settings = readPoolSettings();
+  settings.flags = flags;
+  writePoolSettings(settings);
+}
+
+// Parse a flags string into an array of arguments.
+// Handles quoted strings and backslash escapes.
+function parseFlags(flagStr) {
+  if (!flagStr || !flagStr.trim()) return [];
+  const args = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (const ch of flagStr) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if ((ch === " " || ch === "\t") && !inSingle && !inDouble) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current) args.push(current);
+  return args;
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
   const claudePath = getCachedClaudePath();
+  const flags = getPoolFlags();
+  const args = parseFlags(flags);
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
     cmd: claudePath,
-    args: ["--dangerously-skip-permissions"],
+    args,
     env: { OPEN_COCKPIT_POOL: "1" },
   });
   return createSlot(index, resp.termId, resp.pid);
@@ -1502,6 +1572,8 @@ module.exports = {
   writeIntention,
   lastWrittenContent,
   poolClean,
+  getPoolFlags,
+  setPoolFlags,
   withFreshSlot,
   poolResume,
   watchIntention,
