@@ -1232,6 +1232,9 @@ body.dock-resizing-v {
   font-family: "SF Mono", Menlo, monospace;
   color: var(--text);
 }
+.settings-info-value.plugin-version-mismatch {
+  color: #f5a623;
+}
 
 /* --- Updates tab --- */
 

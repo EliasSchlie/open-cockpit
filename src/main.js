@@ -30,7 +30,7 @@ const poolManager = require("./pool-manager");
 const apiHandlersModule = require("./api-handlers");
 const sessionStats = require("./session-stats");
 const autoUpdater = require("./auto-updater");
-const { checkFirstRun } = require("./first-run");
+const { checkFirstRun, getInstalledPluginVersion } = require("./first-run");
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -360,8 +360,22 @@ let ownsApiSocket = false;
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
 
+  // Read app version early (needed for first-run plugin version check)
+  let cachedAppVersion;
+  try {
+    const pluginJson = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
+        "utf-8",
+      ),
+    );
+    cachedAppVersion = pluginJson.version || "unknown";
+  } catch {
+    cachedAppVersion = "unknown";
+  }
+
   // First-run checks: claude binary, plugin, ~/.open-cockpit/ directory
-  await checkFirstRun();
+  await checkFirstRun(cachedAppVersion);
 
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
@@ -647,20 +661,12 @@ app.whenReady().then(async () => {
     dialogOpen = open;
   });
 
-  // App version (read once from plugin.json — version never changes at runtime)
-  let cachedAppVersion;
-  try {
-    const pluginJson = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
-        "utf-8",
-      ),
-    );
-    cachedAppVersion = pluginJson.version || "unknown";
-  } catch {
-    cachedAppVersion = "unknown";
-  }
+  // App version (read early, before checkFirstRun)
   ipcMain.handle("get-app-version", () => cachedAppVersion);
+  ipcMain.handle(
+    "get-plugin-version",
+    () => getInstalledPluginVersion() || "not installed",
+  );
 
   // Session stats (on-demand only)
   ipcMain.handle("get-session-stats", (_e, sessionId) =>

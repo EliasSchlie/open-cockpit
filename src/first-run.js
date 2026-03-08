@@ -7,6 +7,8 @@ const { secureMkdirSync } = require("./secure-fs");
 const { OPEN_COCKPIT_DIR } = require("./paths");
 const { resolveClaudePath } = require("./pool-manager");
 
+const PLUGIN_KEY = "open-cockpit@elias-tools";
+
 const INSTALLED_PLUGINS_FILE = path.join(
   os.homedir(),
   ".claude",
@@ -14,22 +16,34 @@ const INSTALLED_PLUGINS_FILE = path.join(
   "installed_plugins.json",
 );
 
-function isPluginInstalled() {
+/** Read the installed_plugins.json entries for our plugin (or null). */
+function readPluginEntries() {
   try {
-    const plugins = JSON.parse(
-      fs.readFileSync(INSTALLED_PLUGINS_FILE, "utf-8"),
-    );
-    return plugins.some(
-      (p) =>
-        p.name === "open-cockpit" ||
-        (p.package && p.package.includes("open-cockpit")),
-    );
+    const data = JSON.parse(fs.readFileSync(INSTALLED_PLUGINS_FILE, "utf-8"));
+    const entries = data?.plugins?.[PLUGIN_KEY];
+    return Array.isArray(entries) && entries.length > 0 ? entries : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-async function checkFirstRun() {
+function isPluginInstalled() {
+  return readPluginEntries() !== null;
+}
+
+/** Return the installed plugin version string (latest entry), or null. */
+function getInstalledPluginVersion() {
+  const entries = readPluginEntries();
+  if (!entries) return null;
+  // Pick the most recently updated entry
+  let best = entries[0];
+  for (const e of entries) {
+    if (e.lastUpdated > best.lastUpdated) best = e;
+  }
+  return best.version || null;
+}
+
+async function checkFirstRun(appVersion) {
   // Ensure ~/.open-cockpit/ exists
   secureMkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
@@ -75,14 +89,10 @@ async function checkFirstRun() {
     });
     if (response === 0) {
       try {
-        execFileSync(
-          claudePath,
-          ["plugin", "install", "open-cockpit@elias-tools"],
-          {
-            encoding: "utf-8",
-            timeout: 30000,
-          },
-        );
+        execFileSync(claudePath, ["plugin", "install", PLUGIN_KEY], {
+          encoding: "utf-8",
+          timeout: 30000,
+        });
       } catch (err) {
         await dialog.showMessageBox({
           type: "warning",
@@ -93,7 +103,22 @@ async function checkFirstRun() {
         });
       }
     }
+    return;
+  }
+
+  // Plugin is installed — check if version is outdated
+  const installedVersion = getInstalledPluginVersion();
+  if (appVersion && installedVersion && installedVersion !== appVersion) {
+    const { response } = await dialog.showMessageBox({
+      type: "warning",
+      title: "Plugin Version Mismatch",
+      message: `Installed plugin version (${installedVersion}) differs from app version (${appVersion}).`,
+      detail:
+        "The plugin may update automatically within a few minutes. If you have an active pool, you should destroy and re-initialize it after the plugin updates to pick up new hooks.",
+      buttons: ["OK"],
+    });
+    // Just informational — no action needed from user beyond acknowledgment
   }
 }
 
-module.exports = { checkFirstRun };
+module.exports = { checkFirstRun, getInstalledPluginVersion };
