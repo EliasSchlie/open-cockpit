@@ -54,6 +54,12 @@ export function initCommandPalette(actions) {
       action: () => dom.newSessionBtn.click(),
     },
     {
+      id: "new-custom-session",
+      label: "New Custom Session",
+      shortcutAction: "new-custom-session",
+      action: () => _actions.spawnCustomSession(),
+    },
+    {
       id: "new-terminal",
       label: "New Terminal Tab",
       shortcutAction: "new-terminal-tab",

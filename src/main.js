@@ -171,6 +171,11 @@ function buildMenu() {
           click: () => send("new-session"),
         },
         {
+          label: "New Custom Session",
+          accelerator: accel("new-custom-session"),
+          click: () => send("new-custom-session"),
+        },
+        {
           label: "New Terminal Tab",
           accelerator: accel("new-terminal-tab"),
           click: () => send("new-terminal-tab"),

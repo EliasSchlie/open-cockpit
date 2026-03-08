@@ -45,6 +45,8 @@ const {
   withFreshSlot,
   readIntention,
   writeIntention,
+  resolveClaudePath,
+  acceptTrustPrompt,
 } = require("./pool-manager");
 
 let _getMainWindow = () => null;
@@ -200,6 +202,30 @@ const sharedHandlers = {
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
   "archive-session": async ({ sessionId }) => archiveSession(sessionId),
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
+  "spawn-custom-session": async ({ cwd, flags }) => {
+    const claudePath = resolveClaudePath();
+    const args = ["--dangerously-skip-permissions"];
+    if (flags) {
+      // Split flags string into args (simple space-split, respects quotes)
+      const extraArgs = flags.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+      args.push(...extraArgs.map((a) => a.replace(/^["']|["']$/g, "")));
+    }
+    // Expand ~ to home directory
+    let resolvedCwd = cwd || "~";
+    if (resolvedCwd.startsWith("~")) {
+      resolvedCwd = path.join(os.homedir(), resolvedCwd.slice(1));
+    }
+    const resp = await daemonRequest({
+      type: "spawn",
+      cwd: resolvedCwd,
+      cmd: claudePath,
+      args,
+      env: { OPEN_COCKPIT_CUSTOM: "1" },
+    });
+    // Accept trust prompt in background (non-blocking)
+    acceptTrustPrompt(resp.termId);
+    return { termId: resp.termId, pid: resp.pid };
+  },
 };
 
 // IPC arg mappers: convert positional ipcMain.handle args -> params object
@@ -220,6 +246,7 @@ const ipcArgMap = {
   "pool-resume": (sessionId) => ({ sessionId }),
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
+  "spawn-custom-session": (cwd, flags) => ({ cwd, flags }),
 };
 
 // API response wrappers: transform raw handler results into API protocol
@@ -240,6 +267,7 @@ const apiResponseMap = {
   "pool-resume": (result) => result, // poolResume already returns { type: "resumed", ... }
   "archive-session": () => ({ type: "ok" }),
   "unarchive-session": () => ({ type: "ok" }),
+  "spawn-custom-session": (result) => ({ type: "spawned", ...result }),
 };
 
 // Build the complete API handler map (shared + API-only)
