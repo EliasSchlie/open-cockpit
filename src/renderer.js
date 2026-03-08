@@ -51,6 +51,7 @@ import {
   dockRegisterTerminal,
   cycleTabInFocusedLeaf,
   applyLayoutOrDefault,
+  discoverExtraTerminals,
 } from "./terminal-manager.js";
 import { initPoolUi, showSettings, updatePoolHealthBadge } from "./pool-ui.js";
 import { openSessionInfo } from "./stats-ui.js";
@@ -188,6 +189,18 @@ async function selectSession(session) {
           destroySessionTerminals(session.sessionId);
           return;
         }
+      }
+
+      // Discover and attach any extra shell terminals (e.g. opened via API)
+      try {
+        await discoverExtraTerminals(session.sessionId, daemonTermId);
+        if (gen !== state.sessionGeneration) {
+          debugLog("session", `race abort gen=${gen} at extraPtyList`);
+          destroySessionTerminals(session.sessionId);
+          return;
+        }
+      } catch (err) {
+        debugLog("session", `extra terminal discovery failed: ${err.message}`);
       }
     } else if (session.origin === "pool" || session.origin === "custom") {
       // Daemon session but no terminal found — fallback to shell
@@ -356,25 +369,7 @@ async function resumeOffloadedSession(session) {
 
     // Re-attach orphaned extra terminals from daemon (re-tagged by main.js)
     try {
-      const allPtys = await window.api.ptyList();
-      const extraPtys = allPtys.filter(
-        (p) =>
-          p.sessionId === newSession.sessionId &&
-          !p.exited &&
-          p.termId !== result.termId,
-      );
-      for (const p of extraPtys) {
-        const entry = await reconnectTerminal(p);
-        state.terminals.push(entry);
-        dockRegisterTerminal(entry);
-        if (state.dock) {
-          const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
-          const leaf =
-            (tuiTab && state.dock.getTabLeafId(tuiTab)) ||
-            state.dock.getFirstLeafId();
-          state.dock.addTab(entry.dockTabId, leaf);
-        }
-      }
+      await discoverExtraTerminals(newSession.sessionId, result.termId);
     } catch (err) {
       debugLog("pool", `re-attach orphaned terminals failed: ${err.message}`);
     }
