@@ -1057,6 +1057,37 @@ function killOrphanedTerminals(sessionId) {
     });
 }
 
+// Pre-warm the pool by offloading an idle session when no fresh slots exist.
+// Runs after reconcilePool on the same 30s interval.
+async function preWarmPool() {
+  const { getSessions } = getSessionDiscovery();
+  // Phase 1: check if offload is needed (inside lock)
+  const target = await withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return null;
+    const sessions = await getSessions();
+    enrichSessionsWithGraphData(sessions);
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+    try {
+      return findOffloadTarget(pool, sessionMap);
+    } catch {
+      return null; // No idle slots available — nothing to pre-warm
+    }
+  });
+  if (!target) return;
+  _debugLog("main", `Pre-warming pool: offloading session ${target.sessionId}`);
+  // Phase 2: offload outside lock
+  try {
+    await offloadSession(target.sessionId, target.termId, null, {
+      cwd: target.cwd,
+      gitRoot: target.gitRoot,
+      pid: target.pid,
+    });
+  } catch (err) {
+    _debugLog("main", `Pre-warm offload failed: ${err.message}`);
+  }
+}
+
 // Kill orphaned extra terminals for sessions offloaded > TTL or archived.
 // Runs after reconcilePool on the same 30s interval.
 async function reapOrphanedTerminals() {
@@ -1581,6 +1612,7 @@ module.exports = {
   getPoolHealth,
   cleanupStaleIdleSignals,
   reconcilePool,
+  preWarmPool,
   getPoolTermIds,
   killOrphanedTerminals,
   reapOrphanedTerminals,

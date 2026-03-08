@@ -14,7 +14,7 @@ const {
   parseTerminalHasInput,
   checkTerminalInputs,
 } = require("./terminal-input");
-const { readPool: readPoolFile } = require("./pool");
+const { readPool: readPoolFile, isSlotUncommitted } = require("./pool");
 const { STATUS, POOL_STATUS } = require("./session-statuses");
 const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 const { daemonRequest } = require("./daemon-client");
@@ -144,7 +144,7 @@ async function pollTerminalInput() {
     const pool = readPool();
     if (!pool) return;
 
-    const freshSlots = pool.slots.filter((s) => s.status === POOL_STATUS.FRESH);
+    const freshSlots = pool.slots.filter((s) => isSlotUncommitted(s.status));
     if (freshSlots.length === 0) return;
 
     // Single daemon call to get all terminal buffers
@@ -200,7 +200,7 @@ function triggerPollOnWrite(termId) {
     const pool = readPool();
     if (!pool) return;
     const slot = pool.slots.find(
-      (s) => s.termId === termId && s.status === POOL_STATUS.FRESH,
+      (s) => s.termId === termId && isSlotUncommitted(s.status),
     );
     if (!slot) return;
     pollTerminalInput().catch((err) =>

@@ -58,16 +58,25 @@ function isSlotPinned(slot) {
 }
 
 /**
+ * Check if a pool slot status represents an uncommitted session (fresh or typing).
+ * Typing slots are "protected fresh" — user started typing but hasn't submitted yet.
+ */
+function isSlotUncommitted(status) {
+  return status === POOL_STATUS.FRESH || status === POOL_STATUS.TYPING;
+}
+
+/**
  * Select candidates for shrinking: prefer fresh, then idle, then busy/starting.
  * Pinned slots are excluded from candidates.
  */
 function selectShrinkCandidates(slots, count) {
   const priority = {
     [POOL_STATUS.FRESH]: 0,
-    [POOL_STATUS.IDLE]: 1,
-    [POOL_STATUS.STARTING]: 2,
-    [POOL_STATUS.BUSY]: 3,
-    [POOL_STATUS.ERROR]: 4,
+    [POOL_STATUS.TYPING]: 1,
+    [POOL_STATUS.IDLE]: 2,
+    [POOL_STATUS.STARTING]: 3,
+    [POOL_STATUS.BUSY]: 4,
+    [POOL_STATUS.ERROR]: 5,
   };
   const candidates = [...slots]
     .filter((s) => !isSlotPinned(s))
@@ -99,8 +108,7 @@ function computePoolHealth(pool, sessions, isProcessAlive) {
     const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
     if (!session) {
       result.healthStatus =
-        slot.status === POOL_STATUS.STARTING ||
-        slot.status === POOL_STATUS.FRESH
+        slot.status === POOL_STATUS.STARTING || isSlotUncommitted(slot.status)
           ? POOL_STATUS.STARTING
           : "unknown";
       return result;
@@ -155,11 +163,10 @@ function syncStatuses(pool, sessions) {
     let newStatus = slot.status;
     if (session.status === STATUS.IDLE) newStatus = POOL_STATUS.IDLE;
     else if (session.status === STATUS.PROCESSING) newStatus = POOL_STATUS.BUSY;
-    else if (
-      session.status === STATUS.FRESH ||
-      session.status === STATUS.TYPING
-    ) {
+    else if (session.status === STATUS.FRESH) {
       newStatus = POOL_STATUS.FRESH;
+    } else if (session.status === STATUS.TYPING) {
+      newStatus = POOL_STATUS.TYPING;
     }
 
     if (newStatus !== slot.status) {
@@ -215,16 +222,17 @@ function resolveSlot(pool, msg) {
  */
 function findOffloadTarget(pool, sessionMap) {
   const hasFresh = pool.slots.some((s) => {
-    if (s.status === "fresh") return true;
+    // Typing slots don't count as fresh — they're protected
+    if (s.status === POOL_STATUS.FRESH) return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "fresh";
+    return session && session.status === STATUS.FRESH;
   });
   if (hasFresh) return null;
 
   const idleSlots = pool.slots.filter((s) => {
     if (isSlotPinned(s)) return false;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-    return session && session.status === "idle";
+    return session && session.status === STATUS.IDLE;
   });
   if (idleSlots.length === 0)
     throw new Error("No fresh or idle slots available");
@@ -253,6 +261,7 @@ module.exports = {
   writePool,
   createSlot,
   isSlotPinned,
+  isSlotUncommitted,
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,

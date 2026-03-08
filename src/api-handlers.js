@@ -115,7 +115,7 @@ async function getEffectiveSlotStatus(slot) {
   if (session.status === STATUS.IDLE) return POOL_STATUS.IDLE;
   if (session.status === STATUS.PROCESSING) return POOL_STATUS.BUSY;
   if (session.status === STATUS.FRESH) return POOL_STATUS.FRESH;
-  if (session.status === STATUS.TYPING) return POOL_STATUS.FRESH;
+  if (session.status === STATUS.TYPING) return POOL_STATUS.TYPING;
   return slot.status;
 }
 

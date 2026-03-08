@@ -939,6 +939,75 @@ describe("readPool / writePool — edge cases", () => {
   });
 });
 
+describe("typing session protection", () => {
+  it("syncStatuses maps typing sessions to POOL_STATUS.TYPING", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "fresh",
+      sessionId: "s1",
+    });
+    const sessions = [{ sessionId: "s1", status: "typing" }];
+    const updated = syncStatuses(pool, sessions);
+    expect(updated).not.toBeNull();
+    expect(updated.slots[0].status).toBe("typing");
+  });
+
+  it("findOffloadTarget does not treat typing slots as fresh", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "typing", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "typing" }],
+      ["s2", { sessionId: "s2", status: "idle", idleTs: 100 }],
+    ]);
+    // Should offload s2 (idle), not treat s1 (typing) as fresh
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target).not.toBeNull();
+    expect(target.sessionId).toBe("s2");
+  });
+
+  it("findOffloadTarget does not treat typing sessions (by session status) as fresh", () => {
+    const pool = createPool(2);
+    pool.slots.push(
+      { ...createSlot(0, "t1", 100), status: "busy", sessionId: "s1" },
+      { ...createSlot(1, "t2", 200), status: "idle", sessionId: "s2" },
+    );
+    const sessionMap = new Map([
+      ["s1", { sessionId: "s1", status: "typing" }],
+      ["s2", { sessionId: "s2", status: "idle", idleTs: 100 }],
+    ]);
+    const target = findOffloadTarget(pool, sessionMap);
+    expect(target).not.toBeNull();
+    expect(target.sessionId).toBe("s2");
+  });
+
+  it("selectShrinkCandidates puts typing between fresh and idle", () => {
+    const slots = [
+      { index: 0, status: "idle" },
+      { index: 1, status: "fresh" },
+      { index: 2, status: "typing" },
+      { index: 3, status: "fresh" },
+    ];
+    const result = selectShrinkCandidates(slots, 4);
+    // fresh (1,3), typing (2), idle (0)
+    expect(result.map((s) => s.index)).toEqual([1, 3, 2, 0]);
+  });
+
+  it("computePoolHealth shows starting for typing slot without session", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "typing",
+      sessionId: "s1",
+    });
+    const health = computePoolHealth(pool, [], () => true);
+    expect(health.slots[0].healthStatus).toBe("starting");
+  });
+});
+
 describe("session lifecycle transitions", () => {
   it("fresh → idle → offload → fresh cycle via syncStatuses", () => {
     const pool = createPool(1);
