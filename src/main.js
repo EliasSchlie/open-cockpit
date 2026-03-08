@@ -498,7 +498,7 @@ app.whenReady().then(async () => {
   }
 
   // Lightweight periodic liveness check: detect dead processes between fingerprint refreshes.
-  const LIVENESS_CHECK_INTERVAL = 3000;
+  const LIVENESS_CHECK_INTERVAL = 1000;
   const knownAlivePids = new Set();
   setInterval(() => {
     if (!fs.existsSync(SESSION_PIDS_DIR)) return;

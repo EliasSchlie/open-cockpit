@@ -399,7 +399,7 @@ async function resumeOffloadedSession(session) {
 async function pollForResumedSession(termId, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
     const pool = await window.api.poolRead();
     if (!pool) continue;
     const slot = pool.slots.find(
