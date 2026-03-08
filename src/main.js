@@ -403,6 +403,50 @@ app.whenReady().then(async () => {
     console.error("[main] Idle signal cleanup failed:", err.message);
   }
 
+  // Clean up stale layout files (archived >7 days or session gone entirely)
+  const LAYOUT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+  function cleanupStaleLayouts() {
+    let files;
+    try {
+      files = fs.readdirSync(LAYOUTS_DIR);
+    } catch {
+      return; // ENOENT — no layouts dir yet
+    }
+    const now = Date.now();
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const sessionId = file.slice(0, -5);
+      const filePath = path.join(LAYOUTS_DIR, file);
+      try {
+        const stat = fs.statSync(filePath);
+        // Keep recent layout files regardless of session state
+        if (now - stat.mtimeMs < LAYOUT_GRACE_MS) continue;
+        // Session still has an active PID file — keep it
+        const pidFiles = fs.readdirSync(SESSION_PIDS_DIR).filter((f) => {
+          try {
+            return (
+              fs
+                .readFileSync(path.join(SESSION_PIDS_DIR, f), "utf-8")
+                .trim() === sessionId
+            );
+          } catch {
+            return false;
+          }
+        });
+        if (pidFiles.length > 0) continue;
+        // Delete stale layout
+        fs.unlinkSync(filePath);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+  try {
+    cleanupStaleLayouts();
+  } catch {
+    /* non-fatal */
+  }
+
   // Reconcile pool state with surviving daemon terminals (startup + periodic)
   try {
     await poolManager.reconcilePool();
