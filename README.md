@@ -16,6 +16,10 @@
 
 ---
 
+<p align="center">
+  <img src="build/screenshot.png" alt="Open Cockpit — session sidebar, terminal, and intention editor" />
+</p>
+
 ## What it does
 
 Open Cockpit is a desktop app and Claude Code plugin that solves five problems with running Claude Code at scale:

@@ -110,7 +110,7 @@ This gives you a lightweight steering mechanism:
 |---------|-------------------|--------------|
 | Multi-session overview | ❌ Tab switching | ✅ Unified sidebar |
 | Agent spawning agents | ❌ Blocked / breaks output | ✅ Pool-based, reliable |
-| Persistent terminals | ❌ Stateless Bash tool | ✅ PTY daemon |
+| Persistent terminals | ❌ Resets between calls | ✅ PTY daemon |
 | Shared terminal view | ❌ One-way | ✅ Bidirectional |
 | Intention tracking | ❌ None | ✅ Editable markdown per session |
 | Session lifecycle | ❌ Start/stop | ✅ Pool with offload/resume/archive |
