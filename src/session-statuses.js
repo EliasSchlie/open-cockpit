@@ -38,4 +38,15 @@ const UPDATE_STATUS = {
   ERROR: "error",
 };
 
-module.exports = { STATUS, POOL_STATUS, INITIATOR, UPDATE_STATUS };
+const PLUGIN_VERSION = {
+  NOT_INSTALLED: "not installed",
+  UNKNOWN: "unknown",
+};
+
+module.exports = {
+  STATUS,
+  POOL_STATUS,
+  INITIATOR,
+  UPDATE_STATUS,
+  PLUGIN_VERSION,
+};

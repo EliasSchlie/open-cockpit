@@ -33,13 +33,12 @@ const autoUpdater = require("./auto-updater");
 const {
   checkFirstRun,
   getInstalledPluginVersion,
-  isPluginVersionMismatch,
   getSeenPluginVersion,
   markPluginVersionSeen,
   startPluginVersionWatch,
   stopPluginVersionWatch,
-  VERSION_NOT_INSTALLED,
 } = require("./first-run");
+const { PLUGIN_VERSION } = require("./session-statuses");
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -378,9 +377,9 @@ app.whenReady().then(async () => {
         "utf-8",
       ),
     );
-    cachedAppVersion = pluginJson.version || "unknown";
+    cachedAppVersion = pluginJson.version || PLUGIN_VERSION.UNKNOWN;
   } catch {
-    cachedAppVersion = "unknown";
+    cachedAppVersion = PLUGIN_VERSION.UNKNOWN;
   }
 
   // Start watching installed_plugins.json for version changes
@@ -677,7 +676,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("get-app-version", () => cachedAppVersion);
   ipcMain.handle(
     "get-plugin-version",
-    () => getInstalledPluginVersion() || VERSION_NOT_INSTALLED,
+    () => getInstalledPluginVersion() || PLUGIN_VERSION.NOT_INSTALLED,
   );
   ipcMain.handle("get-seen-plugin-version", () => getSeenPluginVersion());
   ipcMain.handle("mark-plugin-version-seen", (_e, version) =>

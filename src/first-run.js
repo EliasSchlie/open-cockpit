@@ -6,10 +6,9 @@ const { dialog, shell } = require("electron");
 const { secureMkdirSync } = require("./secure-fs");
 const { OPEN_COCKPIT_DIR } = require("./paths");
 const { resolveClaudePath } = require("./pool-manager");
+const { PLUGIN_VERSION } = require("./session-statuses");
 
 const PLUGIN_KEY = "open-cockpit@elias-tools";
-const VERSION_NOT_INSTALLED = "not installed";
-const VERSION_UNKNOWN = "unknown";
 
 const INSTALLED_PLUGINS_FILE = path.join(
   os.homedir(),
@@ -99,8 +98,8 @@ function markPluginVersionSeen(version) {
 function isPluginVersionMismatch(pluginVersion, appVersion) {
   return (
     pluginVersion &&
-    pluginVersion !== VERSION_NOT_INSTALLED &&
-    appVersion !== VERSION_UNKNOWN &&
+    pluginVersion !== PLUGIN_VERSION.NOT_INSTALLED &&
+    appVersion !== PLUGIN_VERSION.UNKNOWN &&
     pluginVersion !== appVersion
   );
 }
@@ -174,6 +173,4 @@ module.exports = {
   isPluginVersionMismatch,
   startPluginVersionWatch,
   stopPluginVersionWatch,
-  VERSION_NOT_INSTALLED,
-  VERSION_UNKNOWN,
 };
