@@ -485,6 +485,12 @@ app.whenReady().then(async () => {
     debugLog(tag, ...args);
   });
 
+  // Terminal dimensions: renderer reports actual cols/rows so pool spawns
+  // can use them instead of the 80×24 daemon default.
+  ipcMain.on("report-terminal-dims", (_e, cols, rows) => {
+    poolManager.setTerminalDims(cols, rows);
+  });
+
   // --- Register shared IPC handlers ---
   const { sharedHandlers, ipcArgMap } = apiHandlersModule;
   for (const [name, argMapper] of Object.entries(ipcArgMap)) {

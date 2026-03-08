@@ -115,6 +115,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("pty-replay", (_e, termId, data) => callback(termId, data)),
   onPtyExit: (callback) =>
     ipcRenderer.on("pty-exit", (_e, termId) => callback(termId)),
+  reportTerminalDims: (cols, rows) =>
+    ipcRenderer.send("report-terminal-dims", cols, rows),
 
   // Setup scripts
   listSetupScripts: () => ipcRenderer.invoke("list-setup-scripts"),
