@@ -365,11 +365,13 @@ function openCommandPalette() {
   paletteSelectedIndex = 0;
   renderPaletteList("");
   dom.commandPaletteInput.focus();
+  window.api.setDialogOpen(true);
 }
 
 function closeCommandPalette() {
   dom.commandPalette.classList.remove("visible");
   dom.commandPaletteInput.value = "";
+  window.api.setDialogOpen(false);
   // Return focus to terminal
   _actions.focusTerminal();
 }
