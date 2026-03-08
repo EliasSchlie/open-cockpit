@@ -123,6 +123,12 @@ contextBridge.exposeInMainWorld("api", {
   listSetupScripts: () => ipcRenderer.invoke("list-setup-scripts"),
   readSetupScript: (name) => ipcRenderer.invoke("read-setup-script", name),
 
+  // Layout persistence
+  saveLayout: (sessionId, layout) =>
+    ipcRenderer.invoke("save-layout", sessionId, layout),
+  loadLayout: (sessionId) => ipcRenderer.invoke("load-layout", sessionId),
+  deleteLayout: (sessionId) => ipcRenderer.invoke("delete-layout", sessionId),
+
   // App info
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
 

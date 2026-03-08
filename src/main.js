@@ -20,6 +20,7 @@ const {
   SESSION_PIDS_DIR,
   IDLE_SIGNALS_DIR,
   SETUP_SCRIPTS_DIR,
+  LAYOUTS_DIR,
   API_SOCKET,
   DEBUG_LOG_FILE,
   DEBUG_LOG_MAX_SIZE,
@@ -580,6 +581,32 @@ app.whenReady().then(async () => {
       return null;
     }
   });
+  // --- Layout persistence ---
+  ipcMain.handle("save-layout", (_e, sessionId, layout) => {
+    try {
+      secureMkdirSync(LAYOUTS_DIR);
+      const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(layout), { mode: 0o600 });
+    } catch {
+      /* best-effort — layout save failure is non-fatal */
+    }
+  });
+  ipcMain.handle("load-layout", (_e, sessionId) => {
+    try {
+      const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
+      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      return null;
+    }
+  });
+  ipcMain.handle("delete-layout", (_e, sessionId) => {
+    try {
+      fs.unlinkSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));
+    } catch {
+      /* ENOENT expected */
+    }
+  });
+
   ipcMain.handle("pty-wait-session", (_e, pid) => {
     return new Promise((resolve) => {
       let attempts = 0;

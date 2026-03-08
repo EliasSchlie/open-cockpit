@@ -54,6 +54,7 @@ import {
   getActiveTermIndex,
   dockRegisterTerminal,
   cycleTabInFocusedLeaf,
+  sanitizeLayout,
 } from "./terminal-manager.js";
 import { initPoolUi, showSettings, updatePoolHealthBadge } from "./pool-ui.js";
 import { openSessionInfo } from "./stats-ui.js";
@@ -206,9 +207,16 @@ async function selectSession(session) {
       }
     }
 
-    // Set the default dock layout
-    const termTabIds = state.terminals.map((t) => t.dockTabId);
-    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+    // Restore saved layout or fall back to default
+    const savedLayout = await window.api.loadLayout(session.sessionId);
+    const sanitized =
+      savedLayout && sanitizeLayout(savedLayout, state.dock.tabs);
+    if (sanitized) {
+      state.dock.setLayout(sanitized);
+    } else {
+      const termTabIds = state.terminals.map((t) => t.dockTabId);
+      state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+    }
   }
 
   const content = await window.api.readIntention(session.sessionId);
@@ -326,9 +334,15 @@ async function resumeOffloadedSession(session) {
     debugLog("pool", `attach after resume failed: ${err.message}`);
   }
 
-  // Set dock layout after terminal is attached
-  const termTabIds = state.terminals.map((t) => t.dockTabId);
-  state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  // Restore saved layout from the offloaded session, or use default
+  const savedLayout = await window.api.loadLayout(session.sessionId);
+  const sanitized = savedLayout && sanitizeLayout(savedLayout, state.dock.tabs);
+  if (sanitized) {
+    state.dock.setLayout(sanitized);
+  } else {
+    const termTabIds = state.terminals.map((t) => t.dockTabId);
+    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  }
 
   // Poll until the slot gets its new session ID, then update our state
   const oldSessionId = session.sessionId;
