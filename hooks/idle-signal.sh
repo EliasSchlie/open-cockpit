@@ -12,7 +12,7 @@
 # (stop_hook_summary, turn_duration) after the Stop hook fires.
 #
 # Usage: idle-signal.sh write [stop|tool|permission]
-#        idle-signal.sh clear
+#        idle-signal.sh clear [post-tool]
 
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -126,6 +126,23 @@ case "${1:-}" in
         fi
         ;;
     clear)
+        caller="${2:-}"
+        # PostToolUse fires during Claude's initial turn (before the user has
+        # interacted), which deletes the pool-init idle signal AND aborts any
+        # pending deferred Stop write — leaving no signal until reconcilePool
+        # recreates it ~30s later.
+        #
+        # Fix: when called from PostToolUse, preserve pool-init/session-clear
+        # signals — they mark genuinely idle sessions that haven't had user
+        # interaction yet. The Stop hook's deferred write will overwrite them
+        # with a real "stop" trigger once Claude's turn finishes.
+        if [ "$caller" = "post-tool" ] && [ -f "$signal_file" ]; then
+            trigger=$(json_get "$(cat "$signal_file")" "trigger") || true
+            if [ "$trigger" = "pool-init" ] || [ "$trigger" = "session-clear" ]; then
+                rm -f "$signal_file.pending"
+                exit 0
+            fi
+        fi
         rm -f "$signal_file" "$signal_file.pending"
         ;;
 esac

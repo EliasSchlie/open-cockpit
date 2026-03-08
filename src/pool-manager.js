@@ -161,6 +161,10 @@ function createFreshIdleSignal(pid, sessionId) {
       trigger: "pool-init",
     }),
   );
+  _debugLog(
+    "main",
+    `Created pool-init idle signal for PID ${pid} (session ${sessionId})`,
+  );
 }
 
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
@@ -895,6 +899,8 @@ function cleanupStaleIdleSignals() {
   const sessionPids = new Set(
     fs.existsSync(SESSION_PIDS_DIR) ? fs.readdirSync(SESSION_PIDS_DIR) : [],
   );
+  let removed = 0;
+  let kept = 0;
   for (const filename of fs.readdirSync(IDLE_SIGNALS_DIR)) {
     const pid = Number(filename);
     if (isNaN(pid)) continue;
@@ -906,11 +912,15 @@ function cleanupStaleIdleSignals() {
           `[main] Removed stale idle signal for PID ${pid}` +
             (!alive ? " (dead)" : " (no session-pids entry)"),
         );
+        removed++;
       } catch {
         // ignore removal errors
       }
+    } else {
+      kept++;
     }
   }
+  _debugLog("main", `cleanupStaleIdleSignals: removed=${removed} kept=${kept}`);
 }
 
 // Reconcile pool.json with reality on startup.

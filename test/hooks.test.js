@@ -209,6 +209,68 @@ describe("idle-signal.sh", () => {
     expect(content.trigger).toBe("permission");
   });
 
+  it("'clear post-tool' preserves pool-init signal", () => {
+    const signalFile = path.join(
+      tmpHome,
+      ".open-cockpit/idle-signals",
+      hookPid(),
+    );
+    fs.writeFileSync(
+      signalFile,
+      '{"trigger":"pool-init","session_id":"abc","ts":1000}',
+    );
+
+    runHook("idle-signal.sh", { args: ["clear", "post-tool"] });
+    expect(fs.existsSync(signalFile)).toBe(true);
+    const content = JSON.parse(fs.readFileSync(signalFile, "utf-8"));
+    expect(content.trigger).toBe("pool-init");
+  });
+
+  it("'clear post-tool' preserves session-clear signal", () => {
+    const signalFile = path.join(
+      tmpHome,
+      ".open-cockpit/idle-signals",
+      hookPid(),
+    );
+    fs.writeFileSync(
+      signalFile,
+      '{"trigger":"session-clear","session_id":"abc","ts":1000}',
+    );
+
+    runHook("idle-signal.sh", { args: ["clear", "post-tool"] });
+    expect(fs.existsSync(signalFile)).toBe(true);
+  });
+
+  it("'clear post-tool' still clears non-fresh signals", () => {
+    const signalFile = path.join(
+      tmpHome,
+      ".open-cockpit/idle-signals",
+      hookPid(),
+    );
+    fs.writeFileSync(
+      signalFile,
+      '{"trigger":"stop","session_id":"abc","ts":1000}',
+    );
+
+    runHook("idle-signal.sh", { args: ["clear", "post-tool"] });
+    expect(fs.existsSync(signalFile)).toBe(false);
+  });
+
+  it("'clear' (UserPromptSubmit) always clears pool-init signal", () => {
+    const signalFile = path.join(
+      tmpHome,
+      ".open-cockpit/idle-signals",
+      hookPid(),
+    );
+    fs.writeFileSync(
+      signalFile,
+      '{"trigger":"pool-init","session_id":"abc","ts":1000}',
+    );
+
+    runHook("idle-signal.sh", { args: ["clear"] });
+    expect(fs.existsSync(signalFile)).toBe(false);
+  });
+
   it("writes signal file on 'write session-clear' (replaces old signal)", () => {
     // Simulate existing idle signal from before /clear
     const signalFile = path.join(
