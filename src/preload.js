@@ -39,6 +39,7 @@ const channels = [
   "session-info",
   "toggle-bell",
   "pool-slots-recovered",
+  "update-status-changed",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
@@ -124,6 +125,27 @@ contextBridge.exposeInMainWorld("api", {
 
   // App info
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
+
+  // Auto-updater
+  checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+  downloadUpdate: () => ipcRenderer.invoke("download-update"),
+  installUpdate: () => ipcRenderer.invoke("install-update"),
+  getUpdateState: () => ipcRenderer.invoke("get-update-state"),
+  onUpdateStatusChanged: (callback) => {
+    const wrapped = (_e, state) => callback(state);
+    ipcRenderer.on("update-status-changed", wrapped);
+    // Store wrapped ref on the callback for removal
+    callback._wrappedUpdateHandler = wrapped;
+  },
+  offUpdateStatusChanged: (callback) => {
+    if (callback._wrappedUpdateHandler) {
+      ipcRenderer.removeListener(
+        "update-status-changed",
+        callback._wrappedUpdateHandler,
+      );
+      delete callback._wrappedUpdateHandler;
+    }
+  },
 
   // Session stats (on-demand)
   getSessionStats: (sessionId) =>

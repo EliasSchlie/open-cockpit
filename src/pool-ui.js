@@ -3,7 +3,7 @@ import {
   STATUS_CLASSES,
   escapeHtml,
 } from "./renderer-state.js";
-import { STATUS, POOL_STATUS } from "./session-statuses.js";
+import { STATUS, POOL_STATUS, UPDATE_STATUS } from "./session-statuses.js";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   createTerminal,
@@ -45,6 +45,24 @@ function ensureShortcutLabels() {
   // Actions only reachable via input events (no COMMANDS entry)
   SHORTCUT_LABELS["next-terminal-tab-alt"] = "Next Tab (Alt)";
   SHORTCUT_LABELS["prev-terminal-tab-alt"] = "Previous Tab (Alt)";
+}
+
+/**
+ * Wrap a button click in loading state: sets text + disables, restores on error.
+ * On success the button stays disabled (caller typically re-renders the whole dialog).
+ * Returns the asyncFn result; re-throws on error after restoring the button.
+ */
+async function withButtonLoading(btn, loadingText, asyncFn) {
+  const originalText = btn.textContent;
+  btn.textContent = loadingText;
+  btn.disabled = true;
+  try {
+    return await asyncFn();
+  } catch (err) {
+    btn.textContent = originalText;
+    btn.disabled = false;
+    throw err;
+  }
 }
 
 function poolStatusDot(status) {
@@ -212,22 +230,26 @@ const SETTINGS_TABS = [
   { id: "general", label: "General" },
   { id: "shortcuts", label: "Keyboard Shortcuts" },
   { id: "pool", label: "Pool" },
+  { id: "updates", label: "Updates" },
 ];
 
 async function showSettings(initialTab = "general") {
   stopPoolSettingsPolling();
 
   // Fetch data for all sections
-  const [health, shortcuts, defaults, version, poolFlags] = await Promise.all([
-    window.api.poolHealth(),
-    window.api.getShortcuts(),
-    window.api.getDefaultShortcuts(),
-    window.api.getAppVersion(),
-    window.api.poolGetFlags(),
-  ]);
+  const [health, shortcuts, defaults, version, poolFlags, updateState] =
+    await Promise.all([
+      window.api.poolHealth(),
+      window.api.getShortcuts(),
+      window.api.getDefaultShortcuts(),
+      window.api.getAppVersion(),
+      window.api.poolGetFlags(),
+      window.api.getUpdateState(),
+    ]);
 
   let keyHandler = null;
   let cleanupRecordingFn = null;
+  let updateStatusCleanup = null;
 
   const { overlay, close } = createOverlayDialog({
     id: "unified-settings",
@@ -250,6 +272,7 @@ async function showSettings(initialTab = "general") {
             ${renderGeneralTab(version)}
             ${renderShortcutsTab(shortcuts, defaults)}
             ${renderPoolTab(health, poolFlags)}
+            ${renderUpdatesTab(version, updateState)}
           </div>
         </div>
       </div>
@@ -261,6 +284,7 @@ async function showSettings(initialTab = "general") {
         document.removeEventListener("keydown", keyHandler, true);
       }
       if (cleanupRecordingFn) cleanupRecordingFn();
+      if (updateStatusCleanup) updateStatusCleanup();
     },
   });
 
@@ -336,6 +360,14 @@ async function showSettings(initialTab = "general") {
     }
     if (tabId === "general") {
       return Array.from(panel.querySelectorAll(".settings-info-row"));
+    }
+    if (tabId === "updates") {
+      const items = [];
+      for (const row of panel.querySelectorAll(".settings-info-row"))
+        items.push(row);
+      for (const btn of panel.querySelectorAll(".offload-menu-btn"))
+        items.push(btn);
+      return items;
     }
     return [];
   }
@@ -515,6 +547,9 @@ async function showSettings(initialTab = "general") {
 
   // --- Wire Shortcuts tab ---
   wireShortcutsTab(overlay, shortcuts, defaults);
+
+  // --- Wire Updates tab ---
+  updateStatusCleanup = wireUpdatesTab(overlay);
 }
 
 // --- General tab ---
@@ -739,6 +774,166 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
   });
 }
 
+// --- Updates tab ---
+
+function updateStatusText(state) {
+  switch (state.status) {
+    case UPDATE_STATUS.IDLE:
+      return "Not checked yet";
+    case UPDATE_STATUS.CHECKING:
+      return "Checking for updates…";
+    case UPDATE_STATUS.UP_TO_DATE:
+      return "Up to date";
+    case UPDATE_STATUS.AVAILABLE:
+      return `Version ${state.version} available`;
+    case UPDATE_STATUS.DOWNLOADING: {
+      const pct = state.progress
+        ? `${Math.round(state.progress.percent)}%`
+        : "…";
+      return `Downloading update… ${pct}`;
+    }
+    case UPDATE_STATUS.DOWNLOADED:
+      return `Version ${state.version} ready to install`;
+    case UPDATE_STATUS.ERROR:
+      return `Error: ${state.error || "Unknown error"}`;
+    default:
+      return state.status;
+  }
+}
+
+function updateActionButtonHtml(state) {
+  switch (state.status) {
+    case UPDATE_STATUS.IDLE:
+    case UPDATE_STATUS.UP_TO_DATE:
+    case UPDATE_STATUS.ERROR:
+      return '<button class="offload-menu-btn update-check-btn">Check for Updates</button>';
+    case UPDATE_STATUS.CHECKING:
+      return '<button class="offload-menu-btn update-check-btn" disabled>Checking…</button>';
+    case UPDATE_STATUS.AVAILABLE:
+      return `<button class="offload-menu-btn offload-menu-load update-download-btn">Download v${escapeHtml(state.version)}</button>`;
+    case UPDATE_STATUS.DOWNLOADING:
+      return '<button class="offload-menu-btn update-download-btn" disabled>Downloading…</button>';
+    case UPDATE_STATUS.DOWNLOADED:
+      return `<button class="offload-menu-btn offload-menu-load update-install-btn">Restart &amp; Update</button>`;
+    default:
+      return '<button class="offload-menu-btn update-check-btn">Check for Updates</button>';
+  }
+}
+
+function renderUpdatesTab(version, updateState) {
+  return `
+    <div class="settings-tab-panel" data-tab="updates">
+      <div class="settings-section">
+        <div class="settings-section-title">App Updates</div>
+        <div class="settings-info-row">
+          <span class="settings-info-label">Current version</span>
+          <span class="settings-info-value">${escapeHtml(version)}</span>
+        </div>
+        <div class="settings-info-row update-status-row">
+          <span class="settings-info-label">Status</span>
+          <span class="settings-info-value update-status-text">${updateStatusText(updateState)}</span>
+        </div>
+        <div class="update-progress-bar" style="display:${updateState.status === UPDATE_STATUS.DOWNLOADING ? "block" : "none"}">
+          <div class="update-progress-fill" style="width:${updateState.progress ? Math.round(updateState.progress.percent) : 0}%"></div>
+        </div>
+        <div class="update-actions">
+          ${updateActionButtonHtml(updateState)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function wireUpdatesTab(overlay) {
+  const panel = overlay.querySelector(
+    '.settings-tab-panel[data-tab="updates"]',
+  );
+  if (!panel) return () => {};
+
+  let lastRenderedStatus = null;
+
+  function updateUI(state) {
+    const statusText = panel.querySelector(".update-status-text");
+    if (statusText) statusText.textContent = updateStatusText(state);
+
+    const progressBar = panel.querySelector(".update-progress-bar");
+    const progressFill = panel.querySelector(".update-progress-fill");
+    if (progressBar && progressFill) {
+      progressBar.style.display =
+        state.status === UPDATE_STATUS.DOWNLOADING ? "block" : "none";
+      progressFill.style.width = `${state.progress ? Math.round(state.progress.percent) : 0}%`;
+    }
+
+    // Only re-render buttons when the status phase changes (not on every progress tick)
+    if (state.status !== lastRenderedStatus) {
+      lastRenderedStatus = state.status;
+      const actionsEl = panel.querySelector(".update-actions");
+      if (actionsEl) {
+        actionsEl.innerHTML = updateActionButtonHtml(state);
+        wireActionButtons();
+      }
+    }
+  }
+
+  function wireActionButtons() {
+    const checkBtn = panel.querySelector(".update-check-btn");
+    if (checkBtn) {
+      checkBtn.addEventListener("click", async () => {
+        try {
+          await withButtonLoading(checkBtn, "Checking…", () =>
+            window.api.checkForUpdates(),
+          );
+        } catch (err) {
+          showNotification(`Update check failed: ${err.message}`);
+        }
+      });
+    }
+
+    const downloadBtn = panel.querySelector(".update-download-btn");
+    if (downloadBtn && !downloadBtn.disabled) {
+      downloadBtn.addEventListener("click", async () => {
+        try {
+          await withButtonLoading(downloadBtn, "Downloading…", () =>
+            window.api.downloadUpdate(),
+          );
+        } catch (err) {
+          showNotification(`Download failed: ${err.message}`);
+          const state = await window.api.getUpdateState();
+          updateUI(state);
+        }
+      });
+    }
+
+    const installBtn = panel.querySelector(".update-install-btn");
+    if (installBtn) {
+      installBtn.addEventListener("click", async () => {
+        try {
+          await withButtonLoading(installBtn, "Restarting…", () =>
+            window.api.installUpdate(),
+          );
+        } catch (err) {
+          showNotification(`Install failed: ${err.message}`);
+        }
+      });
+    }
+  }
+
+  wireActionButtons();
+
+  // Listen for live status updates from main process
+  const handler = (state) => {
+    // Guard: ignore events after overlay is destroyed
+    if (!document.getElementById("unified-settings")) return;
+    updateUI(state);
+  };
+  window.api.onUpdateStatusChanged(handler);
+
+  // Return cleanup — remove the IPC listener to prevent accumulation
+  return () => {
+    window.api.offUpdateStatusChanged(handler);
+  };
+}
+
 // --- Pool tab ---
 function renderPoolTab(health, flags) {
   const slotsHtml = renderPoolSlotsHtml(health);
@@ -869,16 +1064,14 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         showNotification("Pool size must be between 1 and 20");
         return;
       }
-      initBtn.textContent = "Initializing...";
-      initBtn.disabled = true;
       try {
-        await window.api.poolInit(size);
+        await withButtonLoading(initBtn, "Initializing...", () =>
+          window.api.poolInit(size),
+        );
         showNotification(`Pool initialized (${size} slots)`);
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        initBtn.textContent = "Initialize Pool";
-        initBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -896,16 +1089,14 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         showNotification("Pool size must be between 1 and 20");
         return;
       }
-      resizeBtn.textContent = "Resizing...";
-      resizeBtn.disabled = true;
       try {
-        await window.api.poolResize(newSize);
+        await withButtonLoading(resizeBtn, "Resizing...", () =>
+          window.api.poolResize(newSize),
+        );
         showNotification(`Pool resized to ${newSize} slots`);
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        resizeBtn.textContent = "Resize";
-        resizeBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -926,18 +1117,16 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
   const cleanBtn = overlay.querySelector(".pool-clean-btn");
   if (cleanBtn) {
     cleanBtn.addEventListener("click", async () => {
-      cleanBtn.textContent = "Cleaning...";
-      cleanBtn.disabled = true;
       try {
-        const cleaned = await window.api.poolClean();
+        const cleaned = await withButtonLoading(cleanBtn, "Cleaning...", () =>
+          window.api.poolClean(),
+        );
         showNotification(
           `Cleaned ${cleaned} idle session${cleaned !== 1 ? "s" : ""}`,
         );
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        cleanBtn.textContent = "Clean Idle";
-        cleanBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -947,16 +1136,14 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
   const destroyBtn = overlay.querySelector(".pool-destroy-btn");
   if (destroyBtn) {
     destroyBtn.addEventListener("click", async () => {
-      destroyBtn.textContent = "Destroying...";
-      destroyBtn.disabled = true;
       try {
-        await window.api.poolDestroy();
+        await withButtonLoading(destroyBtn, "Destroying...", () =>
+          window.api.poolDestroy(),
+        );
         showNotification("Pool destroyed");
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        destroyBtn.textContent = "Destroy";
-        destroyBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -974,13 +1161,11 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         showNotification("Pool size must be between 1 and 20");
         return;
       }
-      reinitBtn.textContent = "Reinitializing...";
-      reinitBtn.disabled = true;
       try {
-        await window.api.poolDestroy();
+        await withButtonLoading(reinitBtn, "Reinitializing...", () =>
+          window.api.poolDestroy(),
+        );
       } catch (err) {
-        reinitBtn.textContent = "Reinitialize";
-        reinitBtn.disabled = false;
         showNotification(`Destroy failed: ${err.message}`);
         return;
       }

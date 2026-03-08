@@ -27,4 +27,14 @@ const INITIATOR = {
   MODEL: "model",
 };
 
-module.exports = { STATUS, POOL_STATUS, INITIATOR };
+const UPDATE_STATUS = {
+  IDLE: "idle",
+  CHECKING: "checking",
+  AVAILABLE: "available",
+  DOWNLOADING: "downloading",
+  DOWNLOADED: "downloaded",
+  UP_TO_DATE: "up-to-date",
+  ERROR: "error",
+};
+
+module.exports = { STATUS, POOL_STATUS, INITIATOR, UPDATE_STATUS };
