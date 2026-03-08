@@ -7,9 +7,11 @@
 <p align="center">
   Orchestrate multiple Claude Code sessions through a shared pool.
   <br /><br />
-  <a href="https://github.com/EliasSchlie/open-cockpit/releases/latest"><strong>⬇️ Download for macOS</strong></a>
+  <a href="https://github.com/EliasSchlie/open-cockpit/releases/latest"><strong>⬇️ Download</strong></a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="https://github.com/EliasSchlie/open-cockpit/releases">All releases</a>
+  <br />
+  Available for macOS · Linux · Windows
 </p>
 
 ---
@@ -65,11 +67,16 @@ A **Claude Code plugin** (`hooks/`) runs inside each Claude session to report st
 
 ### Download
 
-Download the latest `.dmg` from [GitHub Releases](https://github.com/EliasSchlie/open-cockpit/releases):
-- **Apple Silicon** (M1/M2/M3/M4): `Open Cockpit-x.x.x-arm64.dmg`
-- **Intel**: `Open Cockpit-x.x.x.dmg`
+Download the latest installer from [GitHub Releases](https://github.com/EliasSchlie/open-cockpit/releases):
 
-### First launch (unsigned app)
+| Platform | File |
+|----------|------|
+| **macOS (Apple Silicon)** | `Open Cockpit-x.x.x-arm64.dmg` |
+| **macOS (Intel)** | `Open Cockpit-x.x.x.dmg` |
+| **Linux** | `Open Cockpit-x.x.x.AppImage` or `.deb` |
+| **Windows** | `Open Cockpit Setup x.x.x.exe` |
+
+### macOS first launch (unsigned app)
 
 The app is ad-hoc signed but not notarized. macOS will show "damaged" or "can't be verified" on first open. To fix:
 
@@ -81,6 +88,12 @@ The app is ad-hoc signed but not notarized. macOS will show "damaged" or "can't 
 3. Open the app normally
 
 The `xattr -cr` must be run on the `.app` in `/Applications`, not just the DMG - macOS re-adds quarantine when you copy.
+
+### Platform notes
+
+- **macOS**: full feature set including iTerm2 integration and Cursor/VS Code app activation
+- **Linux**: full core features; iTerm and app activation features are macOS-only
+- **Windows**: full core features; CLI (`cockpit-cli`) requires bash (WSL or Git Bash)
 
 ### Plugin
 
