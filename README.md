@@ -17,7 +17,7 @@
 ---
 
 <p align="center">
-  <img src="build/screenshot.png" alt="Open Cockpit — session sidebar, terminal, and intention editor" />
+  <img src="build/screenshot.jpg" alt="Open Cockpit — session sidebar, terminal, and intention editor" />
 </p>
 
 ## What it does
