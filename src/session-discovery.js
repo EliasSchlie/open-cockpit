@@ -16,7 +16,11 @@ const {
 } = require("./terminal-input");
 const { readPool: readPoolFile, isSlotUncommitted } = require("./pool");
 const { STATUS, POOL_STATUS } = require("./session-statuses");
-const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
+const {
+  secureMkdirSync,
+  secureWriteFileSync,
+  readJsonSync,
+} = require("./secure-fs");
 const { daemonRequest } = require("./daemon-client");
 const {
   SESSION_PIDS_DIR,
@@ -473,12 +477,7 @@ async function getOffloadedSessions() {
         .map((s) => s.sessionId),
     );
     if (archivedIds.size > 0) {
-      let sessionGraph;
-      try {
-        sessionGraph = JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
-      } catch {
-        sessionGraph = {};
-      }
+      const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
       for (const s of sessions) {
         if (s.status !== STATUS.OFFLOADED) continue;
         const entry = sessionGraph[s.sessionId];
@@ -770,12 +769,7 @@ async function getSessionsUncached() {
       if (slot.sessionId) poolSessionIdsForArchive.add(slot.sessionId);
     }
   }
-  let sessionGraph;
-  try {
-    sessionGraph = JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
-  } catch {
-    sessionGraph = {};
-  }
+  const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
   const sessionIdSet = new Set(sessions.map((s) => s.sessionId));
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];

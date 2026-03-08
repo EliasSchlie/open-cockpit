@@ -12,7 +12,11 @@ const execFileAsync = promisify(execFile);
 const platform = require("./platform");
 const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 const { createPoolLock } = require("./pool-lock");
-const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
+const {
+  secureMkdirSync,
+  secureWriteFileSync,
+  readJsonSync,
+} = require("./secure-fs");
 const {
   readPool: readPoolFile,
   writePool: writePoolFile,
@@ -254,11 +258,7 @@ function validateSessionId(sessionId) {
 // --- Session graph (parent-child tracking) ---
 
 function readSessionGraph() {
-  try {
-    return JSON.parse(fs.readFileSync(SESSION_GRAPH_FILE, "utf-8"));
-  } catch {
-    return {};
-  }
+  return readJsonSync(SESSION_GRAPH_FILE, {});
 }
 
 function writeSessionGraph(graph) {
@@ -553,13 +553,7 @@ async function readOffloadSnapshot(sessionId) {
 // Read offload meta
 function readOffloadMeta(sessionId) {
   validateSessionId(sessionId);
-  const metaFile = path.join(OFFLOADED_DIR, sessionId, "meta.json");
-  try {
-    return JSON.parse(fs.readFileSync(metaFile, "utf-8"));
-  } catch {
-    /* ENOENT expected — meta may not exist, or JSON may be corrupted */
-    return null;
-  }
+  return readJsonSync(path.join(OFFLOADED_DIR, sessionId, "meta.json"));
 }
 
 // --- Pool Management ---
@@ -610,11 +604,7 @@ function getCachedClaudePath() {
 const DEFAULT_POOL_FLAGS = "--dangerously-skip-permissions";
 
 function readPoolSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(POOL_SETTINGS_FILE, "utf-8"));
-  } catch {
-    return {};
-  }
+  return readJsonSync(POOL_SETTINGS_FILE, {});
 }
 
 function writePoolSettings(settings) {
