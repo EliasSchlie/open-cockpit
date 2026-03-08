@@ -45,7 +45,7 @@ const {
   withFreshSlot,
   readIntention,
   writeIntention,
-  resolveClaudePath,
+  getCachedClaudePath,
   acceptTrustPrompt,
 } = require("./pool-manager");
 
@@ -203,7 +203,7 @@ const sharedHandlers = {
   "archive-session": async ({ sessionId }) => archiveSession(sessionId),
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
   "spawn-custom-session": async ({ cwd, flags }) => {
-    const claudePath = resolveClaudePath();
+    const claudePath = getCachedClaudePath();
     const args = ["--dangerously-skip-permissions"];
     if (flags) {
       // Split flags string into args (simple space-split, respects quotes)
