@@ -797,31 +797,47 @@ body.dock-resizing-v {
   white-space: nowrap;
 }
 
-.session-search-origin {
+.session-search-heading.preview {
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.session-search-heading .dim {
+  color: var(--text-dim);
+}
+
+.session-search-tag {
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 3px;
   flex-shrink: 0;
 }
 
-.session-search-origin.origin-pool {
+.session-search-tag.origin-pool {
   color: var(--green);
   border: 1px solid rgba(0, 255, 65, 0.3);
 }
 
-.session-search-origin.origin-custom {
+.session-search-tag.origin-custom {
   color: #00e5ff;
   border: 1px solid rgba(0, 229, 255, 0.3);
 }
 
-.session-search-origin.origin-sub-claude {
+.session-search-tag.origin-sub-claude {
   color: var(--mauve);
   border: 1px solid rgba(255, 0, 255, 0.3);
 }
 
-.session-search-origin.origin-ext {
+.session-search-tag.origin-ext {
   color: var(--text-dim);
   border: 1px solid rgba(128, 128, 128, 0.3);
+}
+
+.session-search-tag.status-offloaded,
+.session-search-tag.status-archived {
+  color: var(--text-dim);
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  font-style: italic;
 }
 
 .session-search-meta {

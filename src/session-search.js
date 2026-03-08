@@ -1,5 +1,6 @@
 // Session search: fuzzy search overlay for quickly jumping to sessions
 import { state, dom, STATUS_CLASSES, escapeHtml } from "./renderer-state.js";
+import { STATUS } from "./session-statuses.js";
 
 // Hoisted regex for word boundary detection in fuzzy scoring
 const BOUNDARY_RE = /[\s/\-_.]/;
@@ -86,7 +87,10 @@ function scoreSession(session, query) {
   if (!query) return 0;
 
   const fields = [
-    { text: session.intentionHeading || "", weight: 3 },
+    {
+      text: session.intentionHeading || session.intentionPreview || "",
+      weight: 3,
+    },
     { text: session.project || "", weight: 2 },
     { text: _displayPath(session), weight: 1 },
   ];
@@ -187,15 +191,27 @@ function renderResults(query) {
     item.className = `session-search-item${i === selectedIndex ? " selected" : ""}`;
 
     const statusClass = STATUS_CLASSES[s.status] || "dead";
-    const heading = escapeHtml(s.intentionHeading || "Untitled");
+    const headingText = s.intentionHeading || s.intentionPreview || null;
+    const isPreview = !s.intentionHeading && !!s.intentionPreview;
+    const heading = headingText
+      ? escapeHtml(headingText)
+      : '<span class="dim">Untitled</span>';
+    const headingClass = isPreview ? " preview" : "";
     const path = escapeHtml(_displayPath(s));
-    const origin = escapeHtml(s.origin || "ext");
+
+    // Show origin for live sessions, status label for offloaded/archived
+    const isOffloadedOrArchived =
+      s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED;
+    const tagText = isOffloadedOrArchived ? s.status : s.origin || "ext";
+    const tagClass = isOffloadedOrArchived
+      ? `status-${statusClass}`
+      : `origin-${escapeHtml(s.origin || "ext")}`;
 
     item.innerHTML = `
       <div class="session-search-main">
         <span class="session-status ${statusClass}"></span>
-        <span class="session-search-heading">${heading}</span>
-        <span class="session-search-origin origin-${origin}">${origin}</span>
+        <span class="session-search-heading${headingClass}">${heading}</span>
+        <span class="session-search-tag ${tagClass}">${escapeHtml(tagText)}</span>
       </div>
       <div class="session-search-meta">${path}</div>
     `;
