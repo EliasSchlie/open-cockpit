@@ -1,6 +1,7 @@
 // Session search: fuzzy search overlay for quickly jumping to sessions
 import { state, dom, STATUS_CLASSES, escapeHtml } from "./renderer-state.js";
 import { STATUS } from "./session-statuses.js";
+import { createPickerOverlay } from "./picker-overlay.js";
 
 // Hoisted regex for word boundary detection in fuzzy scoring
 const BOUNDARY_RE = /[\s/\-_.]/;
@@ -8,49 +9,31 @@ const BOUNDARY_RE = /[\s/\-_.]/;
 // --- Cross-module dependencies (set via initSessionSearch) ---
 let _actions = {};
 let _displayPath = (s) => s.cwd || "~";
+let filteredSessions = [];
+let picker;
 
 export function initSessionSearch(actions) {
   _actions = actions;
   if (actions.displayPath) _displayPath = actions.displayPath;
 
-  dom.sessionSearchInput.addEventListener("input", () => {
-    selectedIndex = 0;
-    renderResults(dom.sessionSearchInput.value);
-  });
-
-  dom.sessionSearchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeSessionSearch();
-      return;
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      updateSelection(Math.min(selectedIndex + 1, filteredSessions.length - 1));
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      updateSelection(Math.max(selectedIndex - 1, 0));
-      return;
-    }
-    if (e.key === "Enter" && filteredSessions.length > 0) {
-      e.preventDefault();
-      const session = filteredSessions[selectedIndex];
-      closeSessionSearch();
+  picker = createPickerOverlay({
+    overlayEl: dom.sessionSearch,
+    inputEl: dom.sessionSearchInput,
+    listEl: dom.sessionSearchList,
+    onInput: (query) => renderResults(query),
+    onSelect: (index) => {
+      const session = filteredSessions[index];
+      picker.close();
       _actions.selectSession(session);
-      return;
-    }
-  });
-
-  dom.sessionSearch.addEventListener("click", (e) => {
-    if (e.target === dom.sessionSearch) closeSessionSearch();
+    },
+    onOpen: () => renderResults(""),
+    onClose: () => {
+      filteredSessions = [];
+      _actions.focusTerminal();
+    },
+    getItemCount: () => filteredSessions.length,
   });
 }
-
-// --- State ---
-let selectedIndex = 0;
-let filteredSessions = [];
 
 // --- Fuzzy matching ---
 
@@ -121,28 +104,7 @@ function recencyBonus(session, now) {
 // --- Open/close ---
 
 export function toggleSessionSearch() {
-  if (dom.sessionSearch.classList.contains("visible")) {
-    closeSessionSearch();
-  } else {
-    openSessionSearch();
-  }
-}
-
-function openSessionSearch() {
-  dom.sessionSearch.classList.add("visible");
-  dom.sessionSearchInput.value = "";
-  selectedIndex = 0;
-  renderResults("");
-  dom.sessionSearchInput.focus();
-  window.api.setDialogOpen(true);
-}
-
-function closeSessionSearch() {
-  dom.sessionSearch.classList.remove("visible");
-  dom.sessionSearchInput.value = "";
-  filteredSessions = [];
-  window.api.setDialogOpen(false);
-  _actions.focusTerminal();
+  picker.toggle();
 }
 
 // --- Rendering ---
@@ -169,10 +131,12 @@ function renderResults(query) {
     filteredSessions = scored.map((s) => s.session);
   }
 
-  selectedIndex = Math.min(
+  const selectedIndex = picker.getSelectedIndex();
+  const clamped = Math.min(
     selectedIndex,
     Math.max(0, filteredSessions.length - 1),
   );
+  picker.setSelectedIndex(clamped);
 
   const list = dom.sessionSearchList;
   list.innerHTML = "";
@@ -188,7 +152,7 @@ function renderResults(query) {
   for (let i = 0; i < filteredSessions.length; i++) {
     const s = filteredSessions[i];
     const item = document.createElement("div");
-    item.className = `session-search-item${i === selectedIndex ? " selected" : ""}`;
+    item.className = `overlay-picker-item session-search-item${i === clamped ? " selected" : ""}`;
 
     const statusClass = STATUS_CLASSES[s.status] || "dead";
     const headingText = s.intentionHeading || s.intentionPreview || null;
@@ -218,20 +182,10 @@ function renderResults(query) {
     `;
 
     item.addEventListener("click", () => {
-      closeSessionSearch();
+      picker.close();
       _actions.selectSession(s);
     });
-    item.addEventListener("mouseenter", () => updateSelection(i));
+    item.addEventListener("mouseenter", () => picker.updateSelection(i));
     list.appendChild(item);
-  }
-}
-
-function updateSelection(newIndex) {
-  const items = dom.sessionSearchList.querySelectorAll(".session-search-item");
-  if (items[selectedIndex]) items[selectedIndex].classList.remove("selected");
-  selectedIndex = newIndex;
-  if (items[selectedIndex]) {
-    items[selectedIndex].classList.add("selected");
-    items[selectedIndex].scrollIntoView({ block: "nearest" });
   }
 }
