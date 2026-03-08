@@ -47,6 +47,24 @@ function ensureShortcutLabels() {
   SHORTCUT_LABELS["prev-terminal-tab-alt"] = "Previous Tab (Alt)";
 }
 
+/**
+ * Wrap a button click in loading state: sets text + disables, restores on error.
+ * On success the button stays disabled (caller typically re-renders the whole dialog).
+ * Returns the asyncFn result; re-throws on error after restoring the button.
+ */
+async function withButtonLoading(btn, loadingText, asyncFn) {
+  const originalText = btn.textContent;
+  btn.textContent = loadingText;
+  btn.disabled = true;
+  try {
+    return await asyncFn();
+  } catch (err) {
+    btn.textContent = originalText;
+    btn.disabled = false;
+    throw err;
+  }
+}
+
 function poolStatusDot(status) {
   const cls = STATUS_CLASSES[status] || "dead";
   return `<span class="session-status ${cls}" style="display:inline-block;vertical-align:middle;margin-right:6px;"></span>`;
@@ -861,14 +879,12 @@ function wireUpdatesTab(overlay) {
     const checkBtn = panel.querySelector(".update-check-btn");
     if (checkBtn) {
       checkBtn.addEventListener("click", async () => {
-        checkBtn.textContent = "Checking…";
-        checkBtn.disabled = true;
         try {
-          await window.api.checkForUpdates();
+          await withButtonLoading(checkBtn, "Checking…", () =>
+            window.api.checkForUpdates(),
+          );
         } catch (err) {
           showNotification(`Update check failed: ${err.message}`);
-          checkBtn.textContent = "Check for Updates";
-          checkBtn.disabled = false;
         }
       });
     }
@@ -876,10 +892,10 @@ function wireUpdatesTab(overlay) {
     const downloadBtn = panel.querySelector(".update-download-btn");
     if (downloadBtn && !downloadBtn.disabled) {
       downloadBtn.addEventListener("click", async () => {
-        downloadBtn.textContent = "Downloading…";
-        downloadBtn.disabled = true;
         try {
-          await window.api.downloadUpdate();
+          await withButtonLoading(downloadBtn, "Downloading…", () =>
+            window.api.downloadUpdate(),
+          );
         } catch (err) {
           showNotification(`Download failed: ${err.message}`);
           const state = await window.api.getUpdateState();
@@ -891,14 +907,12 @@ function wireUpdatesTab(overlay) {
     const installBtn = panel.querySelector(".update-install-btn");
     if (installBtn) {
       installBtn.addEventListener("click", async () => {
-        installBtn.textContent = "Restarting…";
-        installBtn.disabled = true;
         try {
-          await window.api.installUpdate();
+          await withButtonLoading(installBtn, "Restarting…", () =>
+            window.api.installUpdate(),
+          );
         } catch (err) {
           showNotification(`Install failed: ${err.message}`);
-          installBtn.textContent = "Restart & Update";
-          installBtn.disabled = false;
         }
       });
     }
@@ -1014,16 +1028,14 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         showNotification("Pool size must be between 1 and 20");
         return;
       }
-      initBtn.textContent = "Initializing...";
-      initBtn.disabled = true;
       try {
-        await window.api.poolInit(size);
+        await withButtonLoading(initBtn, "Initializing...", () =>
+          window.api.poolInit(size),
+        );
         showNotification(`Pool initialized (${size} slots)`);
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        initBtn.textContent = "Initialize Pool";
-        initBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -1041,16 +1053,14 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         showNotification("Pool size must be between 1 and 20");
         return;
       }
-      resizeBtn.textContent = "Resizing...";
-      resizeBtn.disabled = true;
       try {
-        await window.api.poolResize(newSize);
+        await withButtonLoading(resizeBtn, "Resizing...", () =>
+          window.api.poolResize(newSize),
+        );
         showNotification(`Pool resized to ${newSize} slots`);
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        resizeBtn.textContent = "Resize";
-        resizeBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -1071,18 +1081,16 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
   const cleanBtn = overlay.querySelector(".pool-clean-btn");
   if (cleanBtn) {
     cleanBtn.addEventListener("click", async () => {
-      cleanBtn.textContent = "Cleaning...";
-      cleanBtn.disabled = true;
       try {
-        const cleaned = await window.api.poolClean();
+        const cleaned = await withButtonLoading(cleanBtn, "Cleaning...", () =>
+          window.api.poolClean(),
+        );
         showNotification(
           `Cleaned ${cleaned} idle session${cleaned !== 1 ? "s" : ""}`,
         );
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        cleanBtn.textContent = "Clean Idle";
-        cleanBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -1092,16 +1100,14 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
   const destroyBtn = overlay.querySelector(".pool-destroy-btn");
   if (destroyBtn) {
     destroyBtn.addEventListener("click", async () => {
-      destroyBtn.textContent = "Destroying...";
-      destroyBtn.disabled = true;
       try {
-        await window.api.poolDestroy();
+        await withButtonLoading(destroyBtn, "Destroying...", () =>
+          window.api.poolDestroy(),
+        );
         showNotification("Pool destroyed");
         await _actions.loadSessions();
         showSettings("pool");
       } catch (err) {
-        destroyBtn.textContent = "Destroy";
-        destroyBtn.disabled = false;
         showNotification(`Error: ${err.message}`);
       }
     });
@@ -1119,13 +1125,11 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         showNotification("Pool size must be between 1 and 20");
         return;
       }
-      reinitBtn.textContent = "Reinitializing...";
-      reinitBtn.disabled = true;
       try {
-        await window.api.poolDestroy();
+        await withButtonLoading(reinitBtn, "Reinitializing...", () =>
+          window.api.poolDestroy(),
+        );
       } catch (err) {
-        reinitBtn.textContent = "Reinitialize";
-        reinitBtn.disabled = false;
         showNotification(`Destroy failed: ${err.message}`);
         return;
       }
