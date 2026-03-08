@@ -618,6 +618,7 @@ function getPoolFlags() {
 }
 
 function setPoolFlags(flags) {
+  if (typeof flags !== "string") throw new Error("flags must be a string");
   const settings = readPoolSettings();
   settings.flags = flags;
   writePoolSettings(settings);
@@ -663,11 +664,16 @@ function parseFlags(flagStr) {
   return args;
 }
 
+// Parse and cache pool flags once for a batch of spawns.
+function getPoolArgs() {
+  return parseFlags(getPoolFlags());
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
-async function spawnPoolSlot(index) {
+// Pass pre-parsed args from getPoolArgs() to avoid redundant disk reads.
+async function spawnPoolSlot(index, args) {
+  if (!args) args = getPoolArgs();
   const claudePath = getCachedClaudePath();
-  const flags = getPoolFlags();
-  const args = parseFlags(flags);
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
@@ -700,8 +706,9 @@ async function poolInit(size) {
     };
 
     // Spawn each slot as a Claude session in a daemon terminal (parallel)
+    const args = getPoolArgs();
     p.slots = await Promise.all(
-      Array.from({ length: size }, (_, i) => spawnPoolSlot(i)),
+      Array.from({ length: size }, (_, i) => spawnPoolSlot(i, args)),
     );
 
     writePool(p);
@@ -820,9 +827,10 @@ async function poolResize(newSize) {
 
     if (newSize > currentSize) {
       // Grow: spawn new slots in parallel
+      const args = getPoolArgs();
       const newSlots = await Promise.all(
         Array.from({ length: newSize - currentSize }, (_, j) =>
-          spawnPoolSlot(currentSize + j),
+          spawnPoolSlot(currentSize + j, args),
         ),
       );
       pool.slots.push(...newSlots);
@@ -911,6 +919,7 @@ async function reconcilePool() {
     const { terminalHasInputCache } = getSessionDiscovery();
     let changed = false;
     const recovered = [];
+    const spawnArgs = getPoolArgs();
     let daemonPtys;
     try {
       const resp = await daemonRequest({ type: "list" });
@@ -943,7 +952,7 @@ async function reconcilePool() {
             "main",
             `Auto-recovering ${reason} slot ${slot.index} (termId=${slot.termId} pid=${slot.pid})`,
           );
-          const newSlot = await spawnPoolSlot(slot.index);
+          const newSlot = await spawnPoolSlot(slot.index, spawnArgs);
           slot.termId = newSlot.termId;
           slot.pid = newSlot.pid;
           slot.status = POOL_STATUS.STARTING;
