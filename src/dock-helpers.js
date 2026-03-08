@@ -83,6 +83,8 @@ export function setupTerminalResize(entry) {
         prevCols = cols;
         prevRows = rows;
         window.api.ptyResize(entry.termId, cols, rows);
+        // Report dims so future pool spawns use actual terminal size
+        window.api.reportTerminalDims(cols, rows);
       } else {
         // Dimensions unchanged — force repaint for DOM reattachment cases
         // where the canvas renderer is stale. Skipped when dimensions changed

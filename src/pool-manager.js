@@ -66,6 +66,14 @@ let _cachedClaudePath = null;
 const lastWrittenContent = new Map();
 const fileWatchers = new Map();
 
+// Last-known terminal dimensions from the renderer, used when spawning pool
+// PTYs so they start at the actual window size instead of the 80×24 default.
+let _terminalDims = null;
+
+function setTerminalDims(cols, rows) {
+  _terminalDims = { cols, rows };
+}
+
 const { withPoolLock } = createPoolLock(POOL_FILE);
 
 // Poll a condition until it returns a truthy value, with timeout.
@@ -598,12 +606,16 @@ function getCachedClaudePath() {
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 async function spawnPoolSlot(index) {
   const claudePath = getCachedClaudePath();
+  const dims = _terminalDims;
   const resp = await daemonRequest({
     type: "spawn",
     cwd: os.homedir(),
     cmd: claudePath,
     args: ["--dangerously-skip-permissions"],
     env: { OPEN_COCKPIT_POOL: "1" },
+    // Use last-known terminal dimensions so Claude's TUI starts at the
+    // correct size. Falls back to daemon default (80×24) on first launch.
+    ...dims,
   });
   return createSlot(index, resp.termId, resp.pid);
 }
@@ -1508,4 +1520,5 @@ module.exports = {
   openInCursor,
   focusExternalTerminal,
   closeExternalTerminal,
+  setTerminalDims,
 };
