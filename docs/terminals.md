@@ -17,6 +17,18 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 `reportTerminalDims` still reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash), but it's no longer required for correctness.
 
+## TUI reflow prevention
+
+xterm.js reflow on resize treats all content as reflowable text, re-wrapping lines at the new column width. Claude's Ink-based TUI uses absolute cursor positioning (ANSI CSI sequences like `\e[row;colH`), which reflow garbles: the input bar shifts to the middle of the screen, UI elements overlay each other, and content appears at wrong positions.
+
+`setupTerminalResize` in `dock-helpers.js` handles this: before `fitAddon.fit()` resizes a pool TUI terminal, it checks if dimensions will change. If so, it clears the xterm buffer (scrollback + visible screen via `\x1b[2J\x1b[H`) so there's nothing to reflow. The subsequent `ptyResize` sends SIGWINCH, triggering Claude's full redraw at the correct dimensions.
+
+Shell terminals are unaffected — reflow is acceptable for normal text output.
+
+**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Either write the buffer at matching dimensions (initial attach) or clear before resize (ongoing resizes).
+
+**macOS-specific**: macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets the same dimensions (`bcmp` check in `tty_ioctl`). This is why `attachPoolTerminal` fetches PTY dims and writes the buffer at matching dimensions rather than skipping the buffer and relying on SIGWINCH — if the PTY already matches the window size, SIGWINCH never fires.
+
 ## Programmatic terminal access
 
 Sessions can discover and interact with their own terminal tabs via the `session-terminals` API and `cockpit-cli term` commands. All `term` subcommands auto-detect the caller's session ID by walking PID ancestry (checks `~/.open-cockpit/session-pids/<PID>`), so no target is needed when calling from within a Claude session.
