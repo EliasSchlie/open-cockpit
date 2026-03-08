@@ -108,6 +108,32 @@ const terminalHasInputCache = new Map(); // termId -> input text string
 const TERMINAL_POLL_MS = 10_000;
 const TERMINAL_WRITE_DEBOUNCE_MS = 500;
 
+// Track consecutive empty-parse results per termId. A cached "has input" entry
+// is only cleared after MISS_THRESHOLD consecutive polls return empty. This
+// prevents transient parse failures (truncated buffer, mid-redraw, alt-screen
+// loss) from dropping typing status.
+const consecutiveMisses = new Map(); // termId -> miss count
+const MISS_THRESHOLD = 3;
+
+// Wrapper so external callers (pool-manager) keep consecutiveMisses in sync.
+// Exposes Map-like interface used by pool-manager: .get(), .delete(), .clear(), .has()
+const terminalInputApi = {
+  get: (termId) => terminalHasInputCache.get(termId),
+  has: (termId) => terminalHasInputCache.has(termId),
+  set: (termId, val) => {
+    consecutiveMisses.delete(termId);
+    terminalHasInputCache.set(termId, val);
+  },
+  delete: (termId) => {
+    consecutiveMisses.delete(termId);
+    return terminalHasInputCache.delete(termId);
+  },
+  clear: () => {
+    consecutiveMisses.clear();
+    terminalHasInputCache.clear();
+  },
+};
+
 // Cache transcriptContains results (key -> true, once true stays true)
 const transcriptCache = new Map();
 
@@ -169,13 +195,28 @@ async function pollTerminalInput() {
     let changed = false;
     for (const [termId, inputText] of results) {
       const prev = terminalHasInputCache.get(termId) || "";
-      if (inputText !== prev) {
-        if (inputText) {
+      if (inputText) {
+        // Input detected — update cache and reset miss counter
+        consecutiveMisses.delete(termId);
+        if (inputText !== prev) {
           terminalHasInputCache.set(termId, inputText);
-        } else {
-          terminalHasInputCache.delete(termId);
+          changed = true;
         }
-        changed = true;
+      } else if (prev) {
+        // Previously had input, now empty — require consecutive misses before
+        // clearing to handle transient parse failures (alt-screen loss,
+        // mid-redraw captures, buffer truncation)
+        const misses = (consecutiveMisses.get(termId) || 0) + 1;
+        consecutiveMisses.set(termId, misses);
+        if (misses >= MISS_THRESHOLD) {
+          terminalHasInputCache.delete(termId);
+          consecutiveMisses.delete(termId);
+          changed = true;
+          _debugLog(
+            "main",
+            `Terminal input cleared for termId=${termId} after ${MISS_THRESHOLD} consecutive misses`,
+          );
+        }
       }
     }
 
@@ -183,6 +224,7 @@ async function pollTerminalInput() {
     for (const termId of freshTermIds) {
       if (!ptyTermIds.has(termId) && terminalHasInputCache.has(termId)) {
         terminalHasInputCache.delete(termId);
+        consecutiveMisses.delete(termId);
         changed = true;
       }
     }
@@ -1016,6 +1058,6 @@ module.exports = {
   findGitRoot,
   pollTerminalInput,
   triggerPollOnWrite,
-  terminalHasInputCache,
+  terminalHasInputCache: terminalInputApi,
   getJsonlSize,
 };
