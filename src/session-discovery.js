@@ -826,7 +826,9 @@ async function getSessionsUncached() {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
-      const origin = poolSessionIdsForArchive.has(s.sessionId) ? "pool" : "ext";
+      const origin = poolSessionIdsForArchive.has(s.sessionId)
+        ? "pool"
+        : originCache.get(String(s.pid)) || "ext";
 
       secureMkdirSync(offloadDir, { recursive: true });
       const meta = {

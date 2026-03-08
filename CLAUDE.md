@@ -230,10 +230,22 @@ Pool slots can be pinned to prevent LRU offloading:
 
 Sessions in the sidebar display an origin tag:
 - **pool** (green) — spawned by the pool manager (`OPEN_COCKPIT_POOL=1` env var)
+- **custom** (cyan) — standalone sessions spawned via Cmd+Shift+N (`OPEN_COCKPIT_CUSTOM=1` env var)
 - **sub-claude** (purple) — spawned by sub-claude (`SUB_CLAUDE=1` env var)
 - **ext** (gray) — external sessions (no known env markers)
 
 Detection uses `ps eww <PID>` to read process environment. Results are cached by PID.
+
+## Custom sessions
+
+Standalone Claude sessions spawned via `Cmd+Shift+N`. Unlike pool sessions, custom sessions:
+- Are **not part of the pool** — they don't occupy pool slots or get offloaded/recycled
+- Run on the PTY daemon (like pool sessions) but are tracked independently
+- Show a **custom** (cyan) origin tag in the sidebar
+- Are **fully killed** on archive (PTY terminated), not just cleared
+- Support custom working directory and extra CLI flags (e.g. `--model sonnet`)
+
+The dialog prompts for a working directory (default: `~`) and optional flags. The session spawns Claude with `--dangerously-skip-permissions` plus any extra flags.
 
 ## Setup scripts
 

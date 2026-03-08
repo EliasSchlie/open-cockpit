@@ -192,19 +192,30 @@ async function loadSessions() {
   };
 
   // Split into sections — pool and external mixed together (top-level only)
+  // Custom sessions stay in their own section only while fresh/typing (unused).
+  // Once activated (processing/idle/etc.), they flow into normal sections.
+  const custom = sessions.filter(
+    (s) =>
+      isTopLevel(s) &&
+      s.origin === "custom" &&
+      (s.status === STATUS.FRESH || s.status === STATUS.TYPING),
+  );
+  const customIds = new Set(custom.map((s) => s.sessionId));
+  const notInCustom = (s) => !customIds.has(s.sessionId);
   const typing = sessions.filter(
-    (s) => isTopLevel(s) && s.status === STATUS.TYPING,
+    (s) => isTopLevel(s) && notInCustom(s) && s.status === STATUS.TYPING,
   );
   const recent = sessions.filter(
     (s) =>
       isTopLevel(s) &&
+      notInCustom(s) &&
       (s.status === STATUS.IDLE ||
         s.status === STATUS.OFFLOADED ||
         // Archived/offloaded parents with alive children stay in Recent
         (s.status === STATUS.ARCHIVED && hasAliveChildren(s))),
   );
   const processing = sessions.filter(
-    (s) => isTopLevel(s) && s.status === STATUS.PROCESSING,
+    (s) => isTopLevel(s) && notInCustom(s) && s.status === STATUS.PROCESSING,
   );
   const archived = sessions.filter(
     (s) =>
@@ -212,7 +223,13 @@ async function loadSessions() {
   );
 
   // Build fingerprint to check if anything changed
-  const allItems = [...typing, ...recent, ...processing, ...archived];
+  const allItems = [
+    ...custom,
+    ...typing,
+    ...recent,
+    ...processing,
+    ...archived,
+  ];
   // Store section-ordered sessions for navigation (must match sidebar DOM order)
   state.sidebarSessions = allItems;
   const fingerprints = allItems.map(sessionFingerprint).join("\n");
@@ -306,6 +323,7 @@ async function loadSessions() {
     }
   }
 
+  addSection("Custom", custom);
   addSection("Typing", typing);
   addSection("Recent", recent);
   addSection("Processing", processing);
