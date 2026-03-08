@@ -1,11 +1,16 @@
 // Session search: fuzzy search overlay for quickly jumping to sessions
 import { state, dom, STATUS_CLASSES, escapeHtml } from "./renderer-state.js";
 
+// Hoisted regex for word boundary detection in fuzzy scoring
+const BOUNDARY_RE = /[\s/\-_.]/;
+
 // --- Cross-module dependencies (set via initSessionSearch) ---
 let _actions = {};
+let _displayPath = (s) => s.cwd || "~";
 
 export function initSessionSearch(actions) {
   _actions = actions;
+  if (actions.displayPath) _displayPath = actions.displayPath;
 
   dom.sessionSearchInput.addEventListener("input", () => {
     selectedIndex = 0;
@@ -63,7 +68,7 @@ function fuzzyScore(query, target) {
       // Bonus for consecutive matches
       if (ti === prevMatchIdx + 1) score += 3;
       // Bonus for match at word boundary (start, after space/slash/dash)
-      if (ti === 0 || /[\s/\-_.]/.test(t[ti - 1])) score += 5;
+      if (ti === 0 || BOUNDARY_RE.test(t[ti - 1])) score += 5;
       // Base match point
       score += 1;
       prevMatchIdx = ti;
@@ -83,10 +88,7 @@ function scoreSession(session, query) {
   const fields = [
     { text: session.intentionHeading || "", weight: 3 },
     { text: session.project || "", weight: 2 },
-    {
-      text: session.cwd ? session.cwd.replace(session.home || "", "~") : "",
-      weight: 1,
-    },
+    { text: _displayPath(session), weight: 1 },
   ];
 
   let bestScore = -1;
@@ -102,9 +104,7 @@ function scoreSession(session, query) {
 
 // Sessions are sorted by combined score: fuzzy match quality + recency bonus.
 // Recency uses idleTs for live sessions, or meta timestamp for offloaded/archived.
-function recencyBonus(session) {
-  const now = Date.now();
-  // Use idleTs if available, otherwise approximate from status
+function recencyBonus(session, now) {
   const ts = session.idleTs || session.offloadedAt || 0;
   if (!ts) return 0;
   const ageMs = now - ts;
@@ -136,6 +136,7 @@ function openSessionSearch() {
 function closeSessionSearch() {
   dom.sessionSearch.classList.remove("visible");
   dom.sessionSearchInput.value = "";
+  filteredSessions = [];
   window.api.setDialogOpen(false);
   _actions.focusTerminal();
 }
@@ -145,11 +146,12 @@ function closeSessionSearch() {
 function renderResults(query) {
   const sessions = state.cachedSessions;
   const q = query.trim();
+  const now = Date.now();
 
   if (!q) {
     // No query: show all sessions sorted by recency
     filteredSessions = [...sessions].sort(
-      (a, b) => recencyBonus(b) - recencyBonus(a),
+      (a, b) => recencyBonus(b, now) - recencyBonus(a, now),
     );
   } else {
     // Score and filter
@@ -157,7 +159,7 @@ function renderResults(query) {
     for (const s of sessions) {
       const matchScore = scoreSession(s, q);
       if (matchScore < 0) continue;
-      scored.push({ session: s, score: matchScore + recencyBonus(s) });
+      scored.push({ session: s, score: matchScore + recencyBonus(s, now) });
     }
     scored.sort((a, b) => b.score - a.score);
     filteredSessions = scored.map((s) => s.session);
@@ -186,8 +188,8 @@ function renderResults(query) {
 
     const statusClass = STATUS_CLASSES[s.status] || "dead";
     const heading = escapeHtml(s.intentionHeading || "Untitled");
-    const path = escapeHtml(s.cwd ? s.cwd.replace(s.home || "", "~") : "~");
-    const origin = s.origin || "ext";
+    const path = escapeHtml(_displayPath(s));
+    const origin = escapeHtml(s.origin || "ext");
 
     item.innerHTML = `
       <div class="session-search-main">

@@ -797,6 +797,7 @@ initCommandPalette({
 initSessionSearch({
   selectSession,
   focusTerminal,
+  displayPath,
 });
 
 // Editor doc change callback
