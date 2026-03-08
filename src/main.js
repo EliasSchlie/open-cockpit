@@ -420,6 +420,11 @@ app.whenReady().then(async () => {
       /* logged inside reconcilePool */
     }
     try {
+      await poolManager.preWarmPool();
+    } catch {
+      /* logged inside preWarmPool */
+    }
+    try {
       await poolManager.reapOrphanedTerminals();
     } catch {
       /* logged inside reapOrphanedTerminals */

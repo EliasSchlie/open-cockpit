@@ -236,15 +236,23 @@ async function showSettings(initialTab = "general") {
   stopPoolSettingsPolling();
 
   // Fetch data for all sections
-  const [health, shortcuts, defaults, version, poolFlags, updateState] =
-    await Promise.all([
-      window.api.poolHealth(),
-      window.api.getShortcuts(),
-      window.api.getDefaultShortcuts(),
-      window.api.getAppVersion(),
-      window.api.poolGetFlags(),
-      window.api.getUpdateState(),
-    ]);
+  const [
+    health,
+    shortcuts,
+    defaults,
+    version,
+    poolFlags,
+    updateState,
+    minFresh,
+  ] = await Promise.all([
+    window.api.poolHealth(),
+    window.api.getShortcuts(),
+    window.api.getDefaultShortcuts(),
+    window.api.getAppVersion(),
+    window.api.poolGetFlags(),
+    window.api.getUpdateState(),
+    window.api.poolGetMinFresh(),
+  ]);
 
   let keyHandler = null;
   let cleanupRecordingFn = null;
@@ -270,7 +278,7 @@ async function showSettings(initialTab = "general") {
           <div class="settings-content">
             ${renderGeneralTab(version, updateState)}
             ${renderShortcutsTab(shortcuts, defaults)}
-            ${renderPoolTab(health, poolFlags)}
+            ${renderPoolTab(health, poolFlags, minFresh)}
           </div>
         </div>
       </div>
@@ -917,10 +925,11 @@ function wireGeneralUpdates(overlay) {
 }
 
 // --- Pool tab ---
-function renderPoolTab(health, flags) {
+function renderPoolTab(health, flags, minFresh) {
   const slotsHtml = renderPoolSlotsHtml(health);
   const countsHtml = renderPoolCountsHtml(health);
   const escapedFlags = escapeHtml(flags || "");
+  const minFreshVal = typeof minFresh === "number" ? minFresh : 1;
 
   const flagsHtml = `
     <div class="pool-flags-row">
@@ -943,6 +952,10 @@ function renderPoolTab(health, flags) {
             <label class="pool-size-label">
               Pool size:
               <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
+            </label>
+            <label class="pool-size-label">
+              Min fresh:
+              <input type="number" class="pool-min-fresh-input" value="${minFreshVal}" min="0" max="10">
             </label>
             <button class="offload-menu-btn pool-resize-btn">Resize</button>
             <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
@@ -1031,6 +1044,25 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
     flagsInput.addEventListener("input", () => {
       clearTimeout(flagsSaveTimeout);
       flagsSaveTimeout = setTimeout(saveFlags, 1000);
+    });
+  }
+
+  // Min fresh slots input — save on change
+  const minFreshInput = overlay.querySelector(".pool-min-fresh-input");
+  if (minFreshInput) {
+    const saveMinFresh = () => {
+      const val = parseInt(minFreshInput.value, 10);
+      if (isNaN(val) || val < 0 || val > 10) return;
+      window.api.poolSetMinFresh(val);
+    };
+    minFreshInput.addEventListener("blur", saveMinFresh);
+    minFreshInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveMinFresh();
+        showNotification("Min fresh slots saved");
+      }
+      e.stopPropagation();
     });
   }
 

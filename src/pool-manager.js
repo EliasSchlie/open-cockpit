@@ -632,6 +632,22 @@ function setPoolFlags(flags) {
   writePoolSettings(settings);
 }
 
+const DEFAULT_MIN_FRESH_SLOTS = 1;
+
+function getMinFreshSlots() {
+  const settings = readPoolSettings();
+  const val = settings.minFreshSlots;
+  return typeof val === "number" && val >= 0 ? val : DEFAULT_MIN_FRESH_SLOTS;
+}
+
+function setMinFreshSlots(n) {
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0)
+    throw new Error("minFreshSlots must be a non-negative number");
+  const settings = readPoolSettings();
+  settings.minFreshSlots = n;
+  writePoolSettings(settings);
+}
+
 // Parse a flags string into an array of arguments.
 // Handles quoted strings and backslash escapes.
 function parseFlags(flagStr) {
@@ -1057,6 +1073,63 @@ function killOrphanedTerminals(sessionId) {
     });
 }
 
+// Check if an idle session should be offloaded to maintain fresh slot availability.
+// Returns offload target info, null (enough fresh slots), or false (pool not initialized).
+// Acquires pool lock for the check.
+async function checkOffloadNeeded(minFresh = 1) {
+  const { getSessions } = getSessionDiscovery();
+  return withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return false;
+    const sessions = await getSessions();
+    enrichSessionsWithGraphData(sessions);
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+    return findOffloadTarget(pool, sessionMap, minFresh);
+  });
+}
+
+// Offload the given target (returned by checkOffloadNeeded).
+async function executeOffload(target) {
+  await offloadSession(target.sessionId, target.termId, null, {
+    cwd: target.cwd,
+    gitRoot: target.gitRoot,
+    pid: target.pid,
+  });
+}
+
+// Pre-warm the pool by offloading idle sessions to maintain minFreshSlots.
+// Runs after reconcilePool on the same 30s interval.
+async function preWarmPool() {
+  const minFresh = getMinFreshSlots();
+  if (minFresh === 0) return;
+
+  // May need to offload multiple sessions to reach minFresh
+  for (let i = 0; i < minFresh; i++) {
+    let target;
+    try {
+      target = await checkOffloadNeeded(minFresh);
+    } catch (err) {
+      // "No fresh or idle slots available" is expected — anything else is a bug
+      if (!err.message?.includes("No fresh or idle")) {
+        _debugLog("main", `Pre-warm check failed: ${err.message}`);
+      }
+      return;
+    }
+    if (target === false) return; // Pool not initialized
+    if (!target) return; // Enough fresh slots
+    _debugLog(
+      "main",
+      `Pre-warming pool: offloading session ${target.sessionId}`,
+    );
+    try {
+      await executeOffload(target);
+    } catch (err) {
+      _debugLog("main", `Pre-warm offload failed: ${err.message}`);
+      return;
+    }
+  }
+}
+
 // Kill orphaned extra terminals for sessions offloaded > TTL or archived.
 // Runs after reconcilePool on the same 30s interval.
 async function reapOrphanedTerminals() {
@@ -1279,22 +1352,12 @@ async function poolClean() {
 async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
   // Phase 1: check if offload is needed (inside lock)
-  const needsOffload = await withPoolLock(async () => {
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const sessions = await getSessions();
-    enrichSessionsWithGraphData(sessions);
-    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    return findOffloadTarget(pool, sessionMap);
-  });
+  const needsOffload = await checkOffloadNeeded();
+  if (needsOffload === false) throw new Error("Pool not initialized");
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
   if (needsOffload) {
-    await offloadSession(needsOffload.sessionId, needsOffload.termId, null, {
-      cwd: needsOffload.cwd,
-      gitRoot: needsOffload.gitRoot,
-      pid: needsOffload.pid,
-    });
+    await executeOffload(needsOffload);
     await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
   }
 
@@ -1581,6 +1644,7 @@ module.exports = {
   getPoolHealth,
   cleanupStaleIdleSignals,
   reconcilePool,
+  preWarmPool,
   getPoolTermIds,
   killOrphanedTerminals,
   reapOrphanedTerminals,
@@ -1595,6 +1659,8 @@ module.exports = {
   poolClean,
   getPoolFlags,
   setPoolFlags,
+  getMinFreshSlots,
+  setMinFreshSlots,
   parseFlags,
   withFreshSlot,
   poolResume,

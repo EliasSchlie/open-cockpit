@@ -16,6 +16,7 @@ const STATUS = {
 const POOL_STATUS = {
   STARTING: "starting",
   FRESH: "fresh",
+  TYPING: "typing",
   IDLE: "idle",
   BUSY: "busy",
   DEAD: "dead",
