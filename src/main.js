@@ -33,10 +33,12 @@ const autoUpdater = require("./auto-updater");
 const {
   checkFirstRun,
   getInstalledPluginVersion,
-  getDismissedVersion,
-  setDismissedVersion,
+  isPluginVersionMismatch,
+  getSeenPluginVersion,
+  markPluginVersionSeen,
   startPluginVersionWatch,
   stopPluginVersionWatch,
+  VERSION_NOT_INSTALLED,
 } = require("./first-run");
 
 // --- Debug logging ---
@@ -675,11 +677,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("get-app-version", () => cachedAppVersion);
   ipcMain.handle(
     "get-plugin-version",
-    () => getInstalledPluginVersion() || "not installed",
+    () => getInstalledPluginVersion() || VERSION_NOT_INSTALLED,
   );
-  ipcMain.handle("get-dismissed-plugin-version", () => getDismissedVersion());
-  ipcMain.handle("dismiss-plugin-version", (_e, version) =>
-    setDismissedVersion(version),
+  ipcMain.handle("get-seen-plugin-version", () => getSeenPluginVersion());
+  ipcMain.handle("mark-plugin-version-seen", (_e, version) =>
+    markPluginVersionSeen(version),
   );
 
   // Session stats (on-demand only)

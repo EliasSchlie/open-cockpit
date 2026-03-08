@@ -1060,24 +1060,21 @@ window.api.onPoolSlotsRecovered((slots) => {
 // Plugin version mismatch check (non-blocking toast)
 (async () => {
   try {
-    const [appVersion, pluginVersion, dismissed] = await Promise.all([
+    const [appVersion, pluginVersion, seen] = await Promise.all([
       window.api.getAppVersion(),
       window.api.getPluginVersion(),
-      window.api.getDismissedPluginVersion(),
+      window.api.getSeenPluginVersion(),
     ]);
     if (
-      pluginVersion &&
-      pluginVersion !== "not installed" &&
-      appVersion !== "unknown" &&
-      pluginVersion !== appVersion &&
-      dismissed !== pluginVersion
+      window.api.isPluginVersionMismatch(pluginVersion, appVersion) &&
+      seen !== pluginVersion
     ) {
       showToast(
         `Plugin version (${pluginVersion}) differs from app (${appVersion}). ` +
           `Plugin will auto-update soon. Re-init pool after update to pick up new hooks.`,
         "warning",
       );
-      window.api.dismissPluginVersion(pluginVersion);
+      window.api.markPluginVersionSeen(pluginVersion);
     }
   } catch {
     // Non-critical — skip silently

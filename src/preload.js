@@ -129,10 +129,14 @@ contextBridge.exposeInMainWorld("api", {
   // App info
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   getPluginVersion: () => ipcRenderer.invoke("get-plugin-version"),
-  getDismissedPluginVersion: () =>
-    ipcRenderer.invoke("get-dismissed-plugin-version"),
-  dismissPluginVersion: (version) =>
-    ipcRenderer.invoke("dismiss-plugin-version", version),
+  getSeenPluginVersion: () => ipcRenderer.invoke("get-seen-plugin-version"),
+  markPluginVersionSeen: (version) =>
+    ipcRenderer.invoke("mark-plugin-version-seen", version),
+  isPluginVersionMismatch: (pluginVersion, appVersion) =>
+    pluginVersion &&
+    pluginVersion !== "not installed" &&
+    appVersion !== "unknown" &&
+    pluginVersion !== appVersion,
 
   // Auto-updater
   checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),

@@ -557,11 +557,10 @@ async function showSettings(initialTab = "general") {
 
 // --- General tab ---
 function renderGeneralTab(version, pluginVersion, updateState) {
-  const pluginMismatch =
-    pluginVersion &&
-    pluginVersion !== "not installed" &&
-    version !== "unknown" &&
-    pluginVersion !== version;
+  const pluginMismatch = window.api.isPluginVersionMismatch(
+    pluginVersion,
+    version,
+  );
   return `
     <div class="settings-tab-panel" data-tab="general">
       <div class="settings-section">

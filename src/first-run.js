@@ -8,6 +8,8 @@ const { OPEN_COCKPIT_DIR } = require("./paths");
 const { resolveClaudePath } = require("./pool-manager");
 
 const PLUGIN_KEY = "open-cockpit@elias-tools";
+const VERSION_NOT_INSTALLED = "not installed";
+const VERSION_UNKNOWN = "unknown";
 
 const INSTALLED_PLUGINS_FILE = path.join(
   os.homedir(),
@@ -76,9 +78,9 @@ function isPluginInstalled() {
   return cachedPluginVersion !== null;
 }
 
-// --- Dismissed version persistence ---
+// --- Seen version persistence (suppress repeat toast for same mismatch) ---
 
-function getDismissedVersion() {
+function getSeenPluginVersion() {
   try {
     return fs.readFileSync(DISMISSED_VERSION_FILE, "utf-8").trim();
   } catch {
@@ -86,12 +88,21 @@ function getDismissedVersion() {
   }
 }
 
-function setDismissedVersion(version) {
+function markPluginVersionSeen(version) {
   try {
     fs.writeFileSync(DISMISSED_VERSION_FILE, version, "utf-8");
   } catch {
     // Non-critical
   }
+}
+
+function isPluginVersionMismatch(pluginVersion, appVersion) {
+  return (
+    pluginVersion &&
+    pluginVersion !== VERSION_NOT_INSTALLED &&
+    appVersion !== VERSION_UNKNOWN &&
+    pluginVersion !== appVersion
+  );
 }
 
 async function checkFirstRun() {
@@ -158,8 +169,11 @@ async function checkFirstRun() {
 module.exports = {
   checkFirstRun,
   getInstalledPluginVersion,
-  getDismissedVersion,
-  setDismissedVersion,
+  getSeenPluginVersion,
+  markPluginVersionSeen,
+  isPluginVersionMismatch,
   startPluginVersionWatch,
   stopPluginVersionWatch,
+  VERSION_NOT_INSTALLED,
+  VERSION_UNKNOWN,
 };
