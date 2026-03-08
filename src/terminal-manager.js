@@ -166,10 +166,21 @@ function sanitizeLayout(layout, registeredTabs) {
   return { ...layout, children, sizes };
 }
 
-// Initialize dock with optional existing terminals and saved layout.
-// If no terminals/layout provided, caller adds tabs and sets layout after.
 export { sanitizeLayout };
 
+// Apply a saved layout (sanitized) or fall back to the default two-pane split.
+export function applyLayoutOrDefault(savedLayout) {
+  const sanitized = savedLayout && sanitizeLayout(savedLayout, state.dock.tabs);
+  if (sanitized) {
+    state.dock.setLayout(sanitized);
+  } else {
+    const termTabIds = state.terminals.map((t) => t.dockTabId);
+    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  }
+}
+
+// Initialize dock with optional existing terminals and saved layout.
+// If no terminals/layout provided, caller adds tabs and sets layout after.
 export function initDockLayout(existingTerminals, savedLayout) {
   ensureEditorContainer();
   ensureDock();
@@ -178,22 +189,27 @@ export function initDockLayout(existingTerminals, savedLayout) {
     for (const t of existingTerminals) dockRegisterTerminal(t);
   }
   registerEditorTab(state.dock, state.editorContainer);
-  if (savedLayout) {
-    const sanitized = sanitizeLayout(savedLayout, state.dock.tabs);
-    if (sanitized) {
-      state.dock.setLayout(sanitized);
-    } else if (existingTerminals && existingTerminals.length > 0) {
-      const termTabIds = existingTerminals.map((t) => t.dockTabId);
-      state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
-    }
-  } else if (existingTerminals && existingTerminals.length > 0) {
-    const termTabIds = existingTerminals.map((t) => t.dockTabId);
-    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
+  if (savedLayout || (existingTerminals && existingTerminals.length > 0)) {
+    applyLayoutOrDefault(savedLayout);
   }
 }
 
 // Debounced layout persistence — avoids excessive disk writes during resize drags
 let _layoutSaveTimer = null;
+let _pendingLayout = null;
+let _pendingSessionId = null;
+
+function scheduleLayoutSave(sessionId, layout) {
+  _pendingLayout = layout;
+  _pendingSessionId = sessionId;
+  clearTimeout(_layoutSaveTimer);
+  _layoutSaveTimer = setTimeout(() => {
+    _layoutSaveTimer = null;
+    _pendingLayout = null;
+    _pendingSessionId = null;
+    window.api.saveLayout(sessionId, layout);
+  }, 500);
+}
 
 // Sync current terminals into the session cache (renderer + main process)
 export function syncSessionCache() {
@@ -214,11 +230,7 @@ export function syncSessionCache() {
   }
   // Persist layout to disk (debounced, fire-and-forget)
   if (layout) {
-    const sessionId = state.currentSessionId;
-    clearTimeout(_layoutSaveTimer);
-    _layoutSaveTimer = setTimeout(() => {
-      window.api.saveLayout(sessionId, layout);
-    }, 500);
+    scheduleLayoutSave(state.currentSessionId, layout);
   }
 }
 
@@ -453,14 +465,14 @@ export async function closeTerminal(index) {
 
 // Flush any pending debounced layout save immediately
 export function flushLayoutSave() {
-  if (_layoutSaveTimer) {
-    clearTimeout(_layoutSaveTimer);
-    _layoutSaveTimer = null;
+  if (!_layoutSaveTimer) return; // nothing pending
+  clearTimeout(_layoutSaveTimer);
+  _layoutSaveTimer = null;
+  if (_pendingSessionId && _pendingLayout) {
+    window.api.saveLayout(_pendingSessionId, _pendingLayout);
   }
-  if (state.currentSessionId && state.dock) {
-    const layout = state.dock.getLayout();
-    if (layout) window.api.saveLayout(state.currentSessionId, layout);
-  }
+  _pendingLayout = null;
+  _pendingSessionId = null;
 }
 
 // Hide current session's terminals (preserve them in cache)

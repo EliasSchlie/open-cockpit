@@ -11,11 +11,7 @@ import {
   syncBellButton,
 } from "./renderer-state.js";
 import { STATUS } from "./session-statuses.js";
-import {
-  createDefaultLayout,
-  TAB_EDITOR,
-  disposeTerminalEntry,
-} from "./dock-helpers.js";
+import { disposeTerminalEntry } from "./dock-helpers.js";
 import { createEditor, setOnDocChange } from "./editor.js";
 import { createOverlayDialog } from "./overlay-dialog.js";
 import {
@@ -54,7 +50,7 @@ import {
   getActiveTermIndex,
   dockRegisterTerminal,
   cycleTabInFocusedLeaf,
-  sanitizeLayout,
+  applyLayoutOrDefault,
 } from "./terminal-manager.js";
 import { initPoolUi, showSettings, updatePoolHealthBadge } from "./pool-ui.js";
 import { openSessionInfo } from "./stats-ui.js";
@@ -209,14 +205,7 @@ async function selectSession(session) {
 
     // Restore saved layout or fall back to default
     const savedLayout = await window.api.loadLayout(session.sessionId);
-    const sanitized =
-      savedLayout && sanitizeLayout(savedLayout, state.dock.tabs);
-    if (sanitized) {
-      state.dock.setLayout(sanitized);
-    } else {
-      const termTabIds = state.terminals.map((t) => t.dockTabId);
-      state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
-    }
+    applyLayoutOrDefault(savedLayout);
   }
 
   const content = await window.api.readIntention(session.sessionId);
@@ -336,13 +325,7 @@ async function resumeOffloadedSession(session) {
 
   // Restore saved layout from the offloaded session, or use default
   const savedLayout = await window.api.loadLayout(session.sessionId);
-  const sanitized = savedLayout && sanitizeLayout(savedLayout, state.dock.tabs);
-  if (sanitized) {
-    state.dock.setLayout(sanitized);
-  } else {
-    const termTabIds = state.terminals.map((t) => t.dockTabId);
-    state.dock.setLayout(createDefaultLayout(termTabIds, [TAB_EDITOR]));
-  }
+  applyLayoutOrDefault(savedLayout);
 
   // Poll until the slot gets its new session ID, then update our state
   const oldSessionId = session.sessionId;

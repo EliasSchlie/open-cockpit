@@ -12,7 +12,7 @@ const {
   INPUT_EVENT_ACTIONS,
 } = require("./shortcuts");
 const { createApiServer } = require("./api-server");
-const { secureMkdirSync } = require("./secure-fs");
+const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
 const {
   IS_DEV,
   OWN_POOL,
@@ -412,6 +412,21 @@ app.whenReady().then(async () => {
     } catch {
       return; // ENOENT — no layouts dir yet
     }
+    // Build set of active session IDs from PID files (once, not per layout file)
+    const activeSessionIds = new Set();
+    try {
+      for (const f of fs.readdirSync(SESSION_PIDS_DIR)) {
+        try {
+          activeSessionIds.add(
+            fs.readFileSync(path.join(SESSION_PIDS_DIR, f), "utf-8").trim(),
+          );
+        } catch {
+          /* skip unreadable PID files */
+        }
+      }
+    } catch {
+      /* ENOENT — no session-pids dir */
+    }
     const now = Date.now();
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
@@ -419,22 +434,8 @@ app.whenReady().then(async () => {
       const filePath = path.join(LAYOUTS_DIR, file);
       try {
         const stat = fs.statSync(filePath);
-        // Keep recent layout files regardless of session state
         if (now - stat.mtimeMs < LAYOUT_GRACE_MS) continue;
-        // Session still has an active PID file — keep it
-        const pidFiles = fs.readdirSync(SESSION_PIDS_DIR).filter((f) => {
-          try {
-            return (
-              fs
-                .readFileSync(path.join(SESSION_PIDS_DIR, f), "utf-8")
-                .trim() === sessionId
-            );
-          } catch {
-            return false;
-          }
-        });
-        if (pidFiles.length > 0) continue;
-        // Delete stale layout
+        if (activeSessionIds.has(sessionId)) continue;
         fs.unlinkSync(filePath);
       } catch {
         /* best-effort cleanup */
@@ -630,7 +631,7 @@ app.whenReady().then(async () => {
     try {
       secureMkdirSync(LAYOUTS_DIR);
       const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
-      fs.writeFileSync(filePath, JSON.stringify(layout), { mode: 0o600 });
+      secureWriteFileSync(filePath, JSON.stringify(layout));
     } catch {
       /* best-effort — layout save failure is non-fatal */
     }
