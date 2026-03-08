@@ -17,6 +17,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
 - `src/pool-lock.js` — Async mutex for pool.json read-modify-write cycles (`withPoolLock`)
 - `src/session-statuses.js` — Shared status string constants (STATUS enum)
+- `src/platform.js` — Cross-platform abstraction (process introspection, CWD detection, shell config, macOS-only features no-op elsewhere)
 - `src/parse-origins.js` — Session origin detection from `ps eww` output (pool/sub-claude/ext)
 - `src/secure-fs.js` — Owner-only file helpers (mode 0o600/0o700)
 - `src/terminal-input.js` — Headless terminal emulator for detecting text in Claude's TUI input box
