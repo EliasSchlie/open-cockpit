@@ -73,9 +73,24 @@ export function setupTerminalResize(entry) {
       // or zero-sized container and hasn't painted yet. In that case fit() is
       // a silent no-op, leaving the terminal at wrong cols/rows. Retry after
       // the next paint so xterm can compute font metrics first.
-      if (!entry.fitAddon.proposeDimensions()) {
+      const proposed = entry.fitAddon.proposeDimensions();
+      if (!proposed) {
         requestAnimationFrame(() => doFit());
         return;
+      }
+      // Pool TUI terminals (Claude's Ink-based TUI) use absolute cursor
+      // positioning. xterm.js reflow on resize treats content as reflowable
+      // text and re-wraps lines, garbling cursor-positioned UI elements
+      // (e.g. the input bar shifts to the middle of the screen). Clear the
+      // buffer before resizing so there's nothing to reflow. The subsequent
+      // ptyResize sends SIGWINCH, which triggers Claude's full redraw at the
+      // correct dimensions.
+      if (
+        entry.isPoolTui &&
+        (proposed.cols !== prevCols || proposed.rows !== prevRows)
+      ) {
+        entry.term.clear();
+        entry.term.write("\x1b[2J\x1b[H");
       }
       entry.fitAddon.fit();
       const { cols, rows } = entry.term;
