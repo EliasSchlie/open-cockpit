@@ -601,7 +601,13 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
-  autoUpdater.init({ debugLog });
+  autoUpdater.init({ debugLog, send });
+
+  // --- Auto-updater IPC ---
+  ipcMain.handle("check-for-updates", () => autoUpdater.checkForUpdates());
+  ipcMain.handle("download-update", () => autoUpdater.downloadUpdate());
+  ipcMain.handle("install-update", () => autoUpdater.installUpdate());
+  ipcMain.handle("get-update-state", () => autoUpdater.getState());
 
   // --- API server ---
   const apiHandlers = apiHandlersModule.buildApiHandlers();

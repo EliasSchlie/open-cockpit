@@ -212,21 +212,26 @@ const SETTINGS_TABS = [
   { id: "general", label: "General" },
   { id: "shortcuts", label: "Keyboard Shortcuts" },
   { id: "pool", label: "Pool" },
+  { id: "updates", label: "Updates" },
 ];
 
 async function showSettings(initialTab = "general") {
   stopPoolSettingsPolling();
 
   // Fetch data for all sections
-  const [health, shortcuts, defaults, version] = await Promise.all([
-    window.api.poolHealth(),
-    window.api.getShortcuts(),
-    window.api.getDefaultShortcuts(),
-    window.api.getAppVersion(),
-  ]);
+  const [health, shortcuts, defaults, version, updateState] = await Promise.all(
+    [
+      window.api.poolHealth(),
+      window.api.getShortcuts(),
+      window.api.getDefaultShortcuts(),
+      window.api.getAppVersion(),
+      window.api.getUpdateState(),
+    ],
+  );
 
   let keyHandler = null;
   let cleanupRecordingFn = null;
+  let updateStatusCleanup = null;
 
   const { overlay, close } = createOverlayDialog({
     id: "unified-settings",
@@ -249,6 +254,7 @@ async function showSettings(initialTab = "general") {
             ${renderGeneralTab(version)}
             ${renderShortcutsTab(shortcuts, defaults)}
             ${renderPoolTab(health)}
+            ${renderUpdatesTab(version, updateState)}
           </div>
         </div>
       </div>
@@ -260,6 +266,7 @@ async function showSettings(initialTab = "general") {
         document.removeEventListener("keydown", keyHandler, true);
       }
       if (cleanupRecordingFn) cleanupRecordingFn();
+      if (updateStatusCleanup) updateStatusCleanup();
     },
   });
 
@@ -335,6 +342,14 @@ async function showSettings(initialTab = "general") {
     }
     if (tabId === "general") {
       return Array.from(panel.querySelectorAll(".settings-info-row"));
+    }
+    if (tabId === "updates") {
+      const items = [];
+      for (const row of panel.querySelectorAll(".settings-info-row"))
+        items.push(row);
+      for (const btn of panel.querySelectorAll(".offload-menu-btn"))
+        items.push(btn);
+      return items;
     }
     return [];
   }
@@ -514,6 +529,9 @@ async function showSettings(initialTab = "general") {
 
   // --- Wire Shortcuts tab ---
   wireShortcutsTab(overlay, shortcuts, defaults);
+
+  // --- Wire Updates tab ---
+  updateStatusCleanup = wireUpdatesTab(overlay);
 }
 
 // --- General tab ---
@@ -736,6 +754,161 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
       updateResetBtn(row, actionId, defaultVal);
     });
   });
+}
+
+// --- Updates tab ---
+
+function updateStatusText(state) {
+  switch (state.status) {
+    case "idle":
+      return "Not checked yet";
+    case "checking":
+      return "Checking for updates…";
+    case "up-to-date":
+      return "Up to date";
+    case "available":
+      return `Version ${state.version} available`;
+    case "downloading": {
+      const pct = state.progress
+        ? `${Math.round(state.progress.percent)}%`
+        : "…";
+      return `Downloading update… ${pct}`;
+    }
+    case "downloaded":
+      return `Version ${state.version} ready to install`;
+    case "error":
+      return `Error: ${state.error || "Unknown error"}`;
+    default:
+      return state.status;
+  }
+}
+
+function updateActionButtonHtml(state) {
+  switch (state.status) {
+    case "idle":
+    case "up-to-date":
+    case "error":
+      return '<button class="offload-menu-btn update-check-btn">Check for Updates</button>';
+    case "checking":
+      return '<button class="offload-menu-btn update-check-btn" disabled>Checking…</button>';
+    case "available":
+      return `<button class="offload-menu-btn offload-menu-load update-download-btn">Download v${escapeHtml(state.version)}</button>`;
+    case "downloading":
+      return '<button class="offload-menu-btn update-download-btn" disabled>Downloading…</button>';
+    case "downloaded":
+      return `<button class="offload-menu-btn offload-menu-load update-install-btn">Restart &amp; Update</button>`;
+    default:
+      return '<button class="offload-menu-btn update-check-btn">Check for Updates</button>';
+  }
+}
+
+function renderUpdatesTab(version, updateState) {
+  return `
+    <div class="settings-tab-panel" data-tab="updates">
+      <div class="settings-section">
+        <div class="settings-section-title">App Updates</div>
+        <div class="settings-info-row">
+          <span class="settings-info-label">Current version</span>
+          <span class="settings-info-value">${escapeHtml(version)}</span>
+        </div>
+        <div class="settings-info-row update-status-row">
+          <span class="settings-info-label">Status</span>
+          <span class="settings-info-value update-status-text">${updateStatusText(updateState)}</span>
+        </div>
+        <div class="update-progress-bar" style="display:${updateState.status === "downloading" ? "block" : "none"}">
+          <div class="update-progress-fill" style="width:${updateState.progress ? Math.round(updateState.progress.percent) : 0}%"></div>
+        </div>
+        <div class="update-actions">
+          ${updateActionButtonHtml(updateState)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function wireUpdatesTab(overlay) {
+  const panel = overlay.querySelector(
+    '.settings-tab-panel[data-tab="updates"]',
+  );
+  if (!panel) return () => {};
+
+  function updateUI(state) {
+    const statusText = panel.querySelector(".update-status-text");
+    if (statusText) statusText.textContent = updateStatusText(state);
+
+    const progressBar = panel.querySelector(".update-progress-bar");
+    const progressFill = panel.querySelector(".update-progress-fill");
+    if (progressBar && progressFill) {
+      progressBar.style.display =
+        state.status === "downloading" ? "block" : "none";
+      progressFill.style.width = `${state.progress ? Math.round(state.progress.percent) : 0}%`;
+    }
+
+    const actionsEl = panel.querySelector(".update-actions");
+    if (actionsEl) {
+      actionsEl.innerHTML = updateActionButtonHtml(state);
+      wireActionButtons();
+    }
+  }
+
+  function wireActionButtons() {
+    const checkBtn = panel.querySelector(".update-check-btn");
+    if (checkBtn) {
+      checkBtn.addEventListener("click", async () => {
+        checkBtn.textContent = "Checking…";
+        checkBtn.disabled = true;
+        try {
+          await window.api.checkForUpdates();
+        } catch (err) {
+          showNotification(`Update check failed: ${err.message}`);
+          checkBtn.textContent = "Check for Updates";
+          checkBtn.disabled = false;
+        }
+      });
+    }
+
+    const downloadBtn = panel.querySelector(".update-download-btn");
+    if (downloadBtn && !downloadBtn.disabled) {
+      downloadBtn.addEventListener("click", async () => {
+        downloadBtn.textContent = "Downloading…";
+        downloadBtn.disabled = true;
+        try {
+          await window.api.downloadUpdate();
+        } catch (err) {
+          showNotification(`Download failed: ${err.message}`);
+          const state = await window.api.getUpdateState();
+          updateUI(state);
+        }
+      });
+    }
+
+    const installBtn = panel.querySelector(".update-install-btn");
+    if (installBtn) {
+      installBtn.addEventListener("click", async () => {
+        installBtn.textContent = "Restarting…";
+        installBtn.disabled = true;
+        try {
+          await window.api.installUpdate();
+        } catch (err) {
+          showNotification(`Install failed: ${err.message}`);
+          installBtn.textContent = "Restart & Update";
+          installBtn.disabled = false;
+        }
+      });
+    }
+  }
+
+  wireActionButtons();
+
+  // Listen for live status updates from main process
+  const handler = (state) => updateUI(state);
+  window.api.onUpdateStatusChanged(handler);
+
+  // Return cleanup function
+  return () => {
+    // No removeListener available via context bridge — cleanup is best-effort.
+    // The overlay DOM is destroyed on close, so handlers become no-ops.
+  };
 }
 
 // --- Pool tab ---
