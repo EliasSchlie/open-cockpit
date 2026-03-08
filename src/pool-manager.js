@@ -1074,12 +1074,13 @@ function killOrphanedTerminals(sessionId) {
 }
 
 // Check if an idle session should be offloaded to maintain fresh slot availability.
-// Returns offload target info or null. Acquires pool lock for the check.
+// Returns offload target info, null (enough fresh slots), or false (pool not initialized).
+// Acquires pool lock for the check.
 async function checkOffloadNeeded(minFresh = 1) {
   const { getSessions } = getSessionDiscovery();
   return withPoolLock(async () => {
     const pool = readPool();
-    if (!pool) return null;
+    if (!pool) return false;
     const sessions = await getSessions();
     enrichSessionsWithGraphData(sessions);
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
@@ -1107,9 +1108,14 @@ async function preWarmPool() {
     let target;
     try {
       target = await checkOffloadNeeded(minFresh);
-    } catch {
-      return; // No idle slots available
+    } catch (err) {
+      // "No fresh or idle slots available" is expected — anything else is a bug
+      if (!err.message?.includes("No fresh or idle")) {
+        _debugLog("main", `Pre-warm check failed: ${err.message}`);
+      }
+      return;
     }
+    if (target === false) return; // Pool not initialized
     if (!target) return; // Enough fresh slots
     _debugLog(
       "main",
@@ -1347,6 +1353,7 @@ async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
   // Phase 1: check if offload is needed (inside lock)
   const needsOffload = await checkOffloadNeeded();
+  if (needsOffload === false) throw new Error("Pool not initialized");
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
   if (needsOffload) {
