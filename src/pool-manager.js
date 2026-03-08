@@ -29,6 +29,7 @@ const {
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
   findOffloadTarget,
+  findOffloadTargets,
 } = require("./pool");
 const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 const {
@@ -1076,24 +1077,34 @@ async function executeOffload(target) {
 
 // Pre-warm the pool by offloading idle sessions to maintain minFreshSlots.
 // Runs after reconcilePool on the same 30s interval.
+// Collects all offload targets in a single locked pass, then executes outside the lock.
 async function preWarmPool() {
+  const { getSessions } = getSessionDiscovery();
   const minFresh = getMinFreshSlots();
   if (minFresh === 0) return;
 
-  // May need to offload multiple sessions to reach minFresh
-  for (let i = 0; i < minFresh; i++) {
-    let target;
-    try {
-      target = await checkOffloadNeeded(minFresh);
-    } catch (err) {
-      // "No fresh or idle slots available" is expected — anything else is a bug
-      if (!err.message?.includes("No fresh or idle")) {
-        _debugLog("main", `Pre-warm check failed: ${err.message}`);
-      }
-      return;
+  // Phase 1: collect all offload targets in a single lock acquisition
+  let targets;
+  try {
+    targets = await withPoolLock(async () => {
+      const pool = readPool();
+      if (!pool) return false;
+      const sessions = await getSessions();
+      enrichSessionsWithGraphData(sessions);
+      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+      return findOffloadTargets(pool, sessionMap, minFresh);
+    });
+  } catch (err) {
+    if (!err.message?.includes("No fresh or idle")) {
+      _debugLog("main", `Pre-warm check failed: ${err.message}`);
     }
-    if (target === false) return; // Pool not initialized
-    if (!target) return; // Enough fresh slots
+    return;
+  }
+  if (targets === false) return; // Pool not initialized
+  if (targets.length === 0) return; // Enough fresh slots
+
+  // Phase 2: execute offloads outside the lock (each acquires its own lock internally)
+  for (const target of targets) {
     _debugLog(
       "main",
       `Pre-warming pool: offloading session ${target.sessionId}`,
