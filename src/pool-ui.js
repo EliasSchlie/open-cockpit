@@ -923,12 +923,12 @@ function renderPoolTab(health, flags) {
   const escapedFlags = escapeHtml(flags || "");
 
   const flagsHtml = `
-    <label class="pool-flags-label">
-      Session flags:
+    <div class="pool-flags-row">
+      <label class="pool-flags-label">Session flags:</label>
       <input type="text" class="pool-flags-input" value="${escapedFlags}"
         placeholder="--dangerously-skip-permissions"
         spellcheck="false">
-    </label>`;
+    </div>`;
 
   return `
     <div class="settings-tab-panel" data-tab="pool">
@@ -938,12 +938,12 @@ function renderPoolTab(health, flags) {
           health.initialized
             ? `
           <div class="pool-slots-list">${slotsHtml}</div>
+          ${flagsHtml}
           <div class="pool-controls">
             <label class="pool-size-label">
               Pool size:
               <input type="number" class="pool-size-input" value="${health.poolSize}" min="1" max="20">
             </label>
-            ${flagsHtml}
             <button class="offload-menu-btn pool-resize-btn">Resize</button>
             <button class="offload-menu-btn pool-reload-btn">Reload Sessions</button>
             <button class="offload-menu-btn pool-clean-btn">Clean Idle</button>
@@ -952,12 +952,12 @@ function renderPoolTab(health, flags) {
           </div>
         `
             : `
+          ${flagsHtml}
           <div class="pool-controls">
             <label class="pool-size-label">
               Pool size:
               <input type="number" class="pool-size-input" value="10" min="1" max="20">
             </label>
-            ${flagsHtml}
             <button class="offload-menu-btn offload-menu-load pool-init-btn">Initialize Pool</button>
           </div>
         `

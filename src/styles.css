@@ -1201,25 +1201,28 @@ body.dock-resizing-v {
   border-color: var(--accent);
 }
 
+.pool-flags-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
 .pool-flags-label {
   font-size: 13px;
   color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 200px;
 }
 
 .pool-flags-input {
-  flex: 1;
-  padding: 4px 8px;
+  width: 100%;
+  padding: 6px 10px;
   font-size: 13px;
   font-family: "SF Mono", Menlo, monospace;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
+  box-sizing: border-box;
 }
 
 .pool-flags-input:focus {
