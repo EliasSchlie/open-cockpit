@@ -40,6 +40,7 @@ export function createTerminal(extraOpts = {}) {
     fontFamily: "'SF Mono', Menlo, monospace",
     fontSize: 13,
     cursorBlink: false,
+    macOptionIsMeta: true,
     ...extraOpts,
   });
 }
