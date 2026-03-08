@@ -246,27 +246,39 @@ export async function spawnTerminal(cwd, cmd, args, targetLeafId) {
 
 // Attach to an existing pool slot's PTY (no spawn — the Claude TUI is already running)
 export async function attachPoolTerminal(poolTermId) {
+  // Fetch the PTY's current dimensions so we can create xterm at the same size.
+  // This prevents xterm.js reflow garbling when the replay buffer is written:
+  // the buffer was rendered at these dimensions, so writing to a matching-size
+  // terminal produces correct output. FitAddon later resizes to window dims.
+  const allPtys = await window.api.ptyList();
+  const ptyInfo = allPtys.find((p) => p.termId === poolTermId);
+
   const container = document.createElement("div");
   container.style.cssText = "width:100%;height:100%;";
 
-  const term = createTerminal();
+  const term = createTerminal({
+    ...(ptyInfo?.cols && { cols: ptyInfo.cols }),
+    ...(ptyInfo?.rows && { rows: ptyInfo.rows }),
+  });
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   term.open(container);
 
+  // Write the buffer directly at matching dimensions (no reflow).
+  // Then skip the daemon's replay event to avoid writing it twice.
+  if (ptyInfo?.buffer) {
+    term.write(ptyInfo.buffer);
+  }
+
   const entry = {
     termId: poolTermId,
-    pid: null,
+    pid: ptyInfo?.pid || null,
     term,
     fitAddon,
     container,
     isPoolTui: true,
-    // Skip daemon replay — the buffer was generated at 80×24 (daemon default)
-    // and xterm.js reflow to the actual window size garbles TUI cursor
-    // positioning. Instead, the initial ptyResize triggers SIGWINCH which makes
-    // Claude redraw at the correct dimensions.
-    skipReplay: true,
+    skipReplay: !!ptyInfo?.buffer,
     dockTabId: null,
     _resizeHandler: null,
   };
