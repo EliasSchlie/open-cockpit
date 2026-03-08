@@ -66,6 +66,7 @@ import {
   focusAdjacentPane,
   splitFocusedTab,
 } from "./command-palette.js";
+import { initSessionSearch, toggleSessionSearch } from "./session-search.js";
 
 // --- Populate DOM refs ---
 dom.sessionList = document.getElementById("session-list");
@@ -78,6 +79,9 @@ dom.sidebar = document.getElementById("sidebar");
 dom.commandPalette = document.getElementById("command-palette");
 dom.commandPaletteInput = document.getElementById("command-palette-input");
 dom.commandPaletteList = document.getElementById("command-palette-list");
+dom.sessionSearch = document.getElementById("session-search");
+dom.sessionSearchInput = document.getElementById("session-search-input");
+dom.sessionSearchList = document.getElementById("session-search-list");
 
 // --- Focus management ---
 
@@ -786,6 +790,13 @@ initCommandPalette({
   toggleChildren,
   switchChildSession,
   openSessionInfo,
+  openSessionSearch: toggleSessionSearch,
+});
+
+// Session search
+initSessionSearch({
+  selectSession,
+  focusTerminal,
 });
 
 // Editor doc change callback
@@ -1029,6 +1040,7 @@ window.api.onOpenInCursor(() => {
 window.api.onOpenPoolSettings(() => showSettings());
 window.api.onOpenSessionInfo(() => openSessionInfo());
 window.api.onToggleBell(toggleBellMuted);
+window.api.onSessionSearch(toggleSessionSearch);
 
 // Bell toggle button
 document

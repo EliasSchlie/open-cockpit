@@ -47,6 +47,8 @@ const DEFAULT_SHORTCUTS = {
   "new-custom-session": "CmdOrCtrl+Shift+N",
   // Bell
   "toggle-bell": "CmdOrCtrl+Shift+B",
+  // Session search
+  "session-search": "CmdOrCtrl+K",
   // Session info
   "session-info": "CmdOrCtrl+I",
   // These are handled via before-input-event, not menu accelerators

@@ -721,6 +721,126 @@ body.dock-resizing-v {
   font-family: "SF Mono", Menlo, monospace;
 }
 
+/* Session search overlay */
+#session-search {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+#session-search.visible {
+  display: flex;
+}
+
+#session-search-dialog {
+  width: 520px;
+  max-height: 460px;
+  background: #161616;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#session-search-input {
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+
+#session-search-input::placeholder {
+  color: var(--text-dim);
+}
+
+#session-search-list {
+  overflow-y: auto;
+  max-height: 400px;
+  padding: 4px;
+}
+
+.session-search-item {
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.session-search-item:hover,
+.session-search-item.selected {
+  background: var(--accent-dim);
+}
+
+.session-search-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-search-heading {
+  color: var(--text);
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-search-origin {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.session-search-origin.origin-pool {
+  color: var(--green);
+  border: 1px solid rgba(0, 255, 65, 0.3);
+}
+
+.session-search-origin.origin-custom {
+  color: #00e5ff;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+}
+
+.session-search-origin.origin-sub-claude {
+  color: var(--mauve);
+  border: 1px solid rgba(255, 0, 255, 0.3);
+}
+
+.session-search-origin.origin-ext {
+  color: var(--text-dim);
+  border: 1px solid rgba(128, 128, 128, 0.3);
+}
+
+.session-search-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: 14px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-search-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
 /* Offload menu overlay */
 .offload-menu-overlay {
   display: flex;

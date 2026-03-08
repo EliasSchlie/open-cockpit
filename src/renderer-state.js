@@ -36,6 +36,9 @@ export const dom = {
   commandPalette: null,
   commandPaletteInput: null,
   commandPaletteList: null,
+  sessionSearch: null,
+  sessionSearchInput: null,
+  sessionSearchList: null,
 };
 
 // --- Mutable state ---
