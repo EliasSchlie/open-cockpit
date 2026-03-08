@@ -140,12 +140,47 @@ describe("parseTerminalHasInput", () => {
     expect(await parseTerminalHasInput("just some text\r\n", 80)).toBe("");
   });
 
-  // Regression: pollTerminalInput previously used per-slot `read-buffer` daemon
-  // requests that silently failed (returning "") when the daemon didn't support
-  // that command. This caused parseTerminalHasInput to always return "",
-  // hiding typed text. The fix uses `list` (which returns all buffers) instead.
-  // This test verifies the core invariant: a buffer with visible text after the
-  // prompt MUST return the text, never be silently swallowed by empty-string fallback.
+  // Test: buffer missing alternate screen switch (truncated at 100KB)
+  // When the daemon buffer exceeds BUFFER_SIZE, the leading alt-screen switch
+  // is lost. parseTerminalHasInput should prepend it as a fallback.
+  it("detects input when alternate screen switch is truncated", async () => {
+    // Buffer WITHOUT the alt-screen switch — simulates truncation
+    const truncatedBuffer = [
+      // No \x1b[?1049h here — it was before the truncation point
+      "\x1b[2J\x1b[H",
+      " ▐▛███▜▌   Claude Code v2.1.69\r\n",
+      "▝▜█████▛▘  Opus 4.6 · Claude Max\r\n",
+      "  ▘▘ ▝▝    /Users/test\r\n",
+      "\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+      "❯ truncated alt screen test\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+    ].join("");
+
+    expect(await parseTerminalHasInput(truncatedBuffer, 80)).toBe(
+      "truncated alt screen test",
+    );
+  });
+
+  // Test: buffer with explicit alternate screen mode
+  it("detects input with alternate screen enabled", async () => {
+    const altScreenBuffer = [
+      "\x1b[?1049h", // switch to alt screen
+      "\x1b[2J\x1b[H",
+      " ▐▛███▜▌   Claude Code v2.1.69\r\n",
+      "▝▜█████▛▘  Opus 4.6 · Claude Max\r\n",
+      "  ▘▘ ▝▝    /Users/test\r\n",
+      "\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+      "❯ alt screen prompt\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+    ].join("");
+
+    expect(await parseTerminalHasInput(altScreenBuffer, 80)).toBe(
+      "alt screen prompt",
+    );
+  });
+
   it("never misses input when given the actual buffer (regression: silent empty fallback)", async () => {
     const bufferWithText = [
       "\x1b[2J\x1b[H",
@@ -217,6 +252,21 @@ describe("checkTerminalInputs", () => {
 
     expect(results.get(1)).toBe("");
     expect(results.get(2)).toBe("");
+  });
+
+  it("uses PTY cols and rows from daemon response", async () => {
+    const ptys = [
+      {
+        termId: 1,
+        buffer: makeBuffer(" with dimensions"),
+        cols: 100,
+        rows: 30,
+      },
+    ];
+    const freshTermIds = new Set([1]);
+
+    const results = await checkTerminalInputs(ptys, freshTermIds);
+    expect(results.get(1)).toBe("with dimensions");
   });
 
   it("returns empty map when no fresh PTYs in list", async () => {
