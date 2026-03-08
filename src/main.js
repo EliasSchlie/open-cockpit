@@ -289,6 +289,11 @@ function buildMenu() {
         },
         { type: "separator" },
         {
+          label: "Search Sessions",
+          accelerator: accel("session-search"),
+          click: () => send("session-search"),
+        },
+        {
           label: "Command Palette",
           accelerator: accel("toggle-command-palette"),
           click: () => send("toggle-command-palette"),

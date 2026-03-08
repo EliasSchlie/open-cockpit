@@ -207,6 +207,12 @@ export function initCommandPalette(actions) {
       action: () => toggleBellMuted(),
     },
     {
+      id: "session-search",
+      label: "Search Sessions",
+      shortcutAction: "session-search",
+      action: () => _actions.openSessionSearch(),
+    },
+    {
       id: "session-info",
       label: "Session Info",
       shortcutAction: "session-info",

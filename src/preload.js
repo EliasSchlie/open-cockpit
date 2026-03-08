@@ -38,6 +38,7 @@ const channels = [
   "open-pool-settings",
   "session-info",
   "toggle-bell",
+  "session-search",
   "pool-slots-recovered",
   "update-status-changed",
 ];
@@ -225,6 +226,8 @@ contextBridge.exposeInMainWorld("api", {
   onOpenPoolSettings: (callback) =>
     ipcRenderer.on("open-pool-settings", () => callback()),
   onToggleBell: (callback) => ipcRenderer.on("toggle-bell", () => callback()),
+  onSessionSearch: (callback) =>
+    ipcRenderer.on("session-search", () => callback()),
 
   // Open in Cursor
   openInCursor: (cwd) => ipcRenderer.invoke("open-in-cursor", cwd),

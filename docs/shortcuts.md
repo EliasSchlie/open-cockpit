@@ -54,6 +54,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+O` | Focus External Terminal |
 | `Ctrl+Alt+Cmd+C` | Open in Cursor |
 | `Escape` | Focus Terminal |
+| `Cmd+K` | Search Sessions |
 | `Cmd+/` | Command Palette |
 | `Cmd+,` | Pool Settings |
 | `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
