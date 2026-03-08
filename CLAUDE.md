@@ -69,6 +69,7 @@ New sessions will have the latest hooks.
 - `~/.open-cockpit/colors.json` — Directory color overrides ([docs/theme.md](docs/theme.md))
 - `~/.open-cockpit/idle-signals/<PID>` — Idle signal files (written by plugin hooks)
 - `~/.open-cockpit/pool.json` — Pool state (slots, sizes, session mappings, pinnedUntil)
+- `~/.open-cockpit/pool-settings.json` — Pool settings (session flags). Defaults to `--dangerously-skip-permissions`
 - `~/.open-cockpit/session-graph.json` — Parent-child session relationships (initiator: "user"|"model")
 - `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived session data (meta.json, snapshot.log)
 - `~/.open-cockpit/shortcuts.json` — User keyboard shortcut overrides (only non-default values)

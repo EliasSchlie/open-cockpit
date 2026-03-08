@@ -1583,6 +1583,7 @@ module.exports = {
   poolClean,
   getPoolFlags,
   setPoolFlags,
+  parseFlags,
   withFreshSlot,
   poolResume,
   watchIntention,
