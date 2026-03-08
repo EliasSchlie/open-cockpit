@@ -26,6 +26,7 @@ const {
   OFFLOADED_DIR,
   POOL_FILE,
   SESSION_GRAPH_FILE,
+  isPidAlive,
 } = require("./paths");
 
 // --- Init pattern for injected dependencies ---
@@ -552,14 +553,7 @@ async function getSessionsUncached() {
         .trim();
       if (!sessionId) continue;
 
-      let alive = false;
-      try {
-        process.kill(Number(pid), 0);
-        alive = true;
-      } catch {
-        /* ESRCH expected — process doesn't exist */
-        alive = false;
-      }
+      const alive = isPidAlive(pid);
 
       pidEntries.push({ pid, sessionId, alive });
     }

@@ -8,6 +8,7 @@ const {
   DAEMON_SCRIPT,
   DAEMON_PID_FILE,
   OPEN_COCKPIT_DIR,
+  isPidAlive,
 } = require("./paths");
 
 let daemonSocket = null;
@@ -27,8 +28,7 @@ function init({ onPtyEvent, debugLog }) {
 function isDaemonRunning() {
   try {
     const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim(), 10);
-    process.kill(pid, 0);
-    return true;
+    return isPidAlive(pid);
   } catch {
     return false;
   }

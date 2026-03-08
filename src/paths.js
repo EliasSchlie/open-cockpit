@@ -33,7 +33,17 @@ const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
 const DEFAULT_POOL_SIZE = 5;
 const ORPHAN_TERMINAL_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
+function isPidAlive(pid) {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
+  isPidAlive,
   IS_DEV,
   OWN_POOL,
   OPEN_COCKPIT_DIR,

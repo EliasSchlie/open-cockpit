@@ -24,6 +24,7 @@ const {
   API_SOCKET,
   DEBUG_LOG_FILE,
   DEBUG_LOG_MAX_SIZE,
+  isPidAlive,
 } = require("./paths");
 const daemonClient = require("./daemon-client");
 const sessionDiscovery = require("./session-discovery");
@@ -516,11 +517,9 @@ app.whenReady().then(async () => {
     let anyDied = false;
     for (const pid of files) {
       if (!/^\d+$/.test(pid)) continue;
-      try {
-        process.kill(Number(pid), 0);
+      if (isPidAlive(pid)) {
         knownAlivePids.add(pid);
-      } catch {
-        /* ESRCH expected — process existence check */
+      } else {
         if (knownAlivePids.has(pid)) {
           knownAlivePids.delete(pid);
           anyDied = true;

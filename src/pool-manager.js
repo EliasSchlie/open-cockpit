@@ -44,6 +44,7 @@ const {
   DEFAULT_POOL_SIZE,
   ORPHAN_TERMINAL_TTL_MS,
   OPEN_COCKPIT_DIR,
+  isPidAlive,
 } = require("./paths");
 
 // Lazy require to avoid circular dependency with session-discovery
@@ -894,15 +895,7 @@ async function getPoolHealth() {
   const { getSessions } = getSessionDiscovery();
   const pool = readPool();
   const sessions = await getSessions();
-  return computePoolHealth(pool, sessions, (pid) => {
-    try {
-      process.kill(Number(pid), 0);
-      return true;
-    } catch {
-      /* ESRCH expected — process existence check */
-      return false;
-    }
-  });
+  return computePoolHealth(pool, sessions, isPidAlive);
 }
 
 // Clean up idle signal files for PIDs that no longer exist.
@@ -915,13 +908,7 @@ function cleanupStaleIdleSignals() {
   for (const filename of fs.readdirSync(IDLE_SIGNALS_DIR)) {
     const pid = Number(filename);
     if (isNaN(pid)) continue;
-    let alive = false;
-    try {
-      process.kill(pid, 0);
-      alive = true;
-    } catch {
-      // process doesn't exist
-    }
+    const alive = isPidAlive(pid);
     if (!alive || !sessionPids.has(filename)) {
       try {
         fs.unlinkSync(path.join(IDLE_SIGNALS_DIR, filename));
