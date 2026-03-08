@@ -230,7 +230,6 @@ const SETTINGS_TABS = [
   { id: "general", label: "General" },
   { id: "shortcuts", label: "Keyboard Shortcuts" },
   { id: "pool", label: "Pool" },
-  { id: "updates", label: "Updates" },
 ];
 
 async function showSettings(initialTab = "general") {
@@ -269,10 +268,9 @@ async function showSettings(initialTab = "general") {
             ).join("")}
           </div>
           <div class="settings-content">
-            ${renderGeneralTab(version)}
+            ${renderGeneralTab(version, updateState)}
             ${renderShortcutsTab(shortcuts, defaults)}
             ${renderPoolTab(health, poolFlags)}
-            ${renderUpdatesTab(version, updateState)}
           </div>
         </div>
       </div>
@@ -359,12 +357,7 @@ async function showSettings(initialTab = "general") {
       return items;
     }
     if (tabId === "general") {
-      return Array.from(panel.querySelectorAll(".settings-info-row"));
-    }
-    if (tabId === "updates") {
-      const items = [];
-      for (const row of panel.querySelectorAll(".settings-info-row"))
-        items.push(row);
+      const items = Array.from(panel.querySelectorAll(".settings-info-row"));
       for (const btn of panel.querySelectorAll(".offload-menu-btn"))
         items.push(btn);
       return items;
@@ -548,12 +541,12 @@ async function showSettings(initialTab = "general") {
   // --- Wire Shortcuts tab ---
   wireShortcutsTab(overlay, shortcuts, defaults);
 
-  // --- Wire Updates tab ---
-  updateStatusCleanup = wireUpdatesTab(overlay);
+  // --- Wire General tab (update status listener) ---
+  updateStatusCleanup = wireGeneralUpdates(overlay);
 }
 
 // --- General tab ---
-function renderGeneralTab(version) {
+function renderGeneralTab(version, updateState) {
   return `
     <div class="settings-tab-panel" data-tab="general">
       <div class="settings-section">
@@ -565,6 +558,19 @@ function renderGeneralTab(version) {
         <div class="settings-info-row">
           <span class="settings-info-label">App</span>
           <span class="settings-info-value">Open Cockpit</span>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">Updates</div>
+        <div class="settings-info-row update-status-row">
+          <span class="settings-info-label">Status</span>
+          <span class="settings-info-value update-status-text">${updateStatusText(updateState)}</span>
+        </div>
+        <div class="update-progress-bar" style="display:${updateState.status === UPDATE_STATUS.DOWNLOADING ? "block" : "none"}">
+          <div class="update-progress-fill" style="width:${updateState.progress ? Math.round(updateState.progress.percent) : 0}%"></div>
+        </div>
+        <div class="update-actions">
+          ${updateActionButtonHtml(updateState)}
         </div>
       </div>
     </div>
@@ -820,33 +826,9 @@ function updateActionButtonHtml(state) {
   }
 }
 
-function renderUpdatesTab(version, updateState) {
-  return `
-    <div class="settings-tab-panel" data-tab="updates">
-      <div class="settings-section">
-        <div class="settings-section-title">App Updates</div>
-        <div class="settings-info-row">
-          <span class="settings-info-label">Current version</span>
-          <span class="settings-info-value">${escapeHtml(version)}</span>
-        </div>
-        <div class="settings-info-row update-status-row">
-          <span class="settings-info-label">Status</span>
-          <span class="settings-info-value update-status-text">${updateStatusText(updateState)}</span>
-        </div>
-        <div class="update-progress-bar" style="display:${updateState.status === UPDATE_STATUS.DOWNLOADING ? "block" : "none"}">
-          <div class="update-progress-fill" style="width:${updateState.progress ? Math.round(updateState.progress.percent) : 0}%"></div>
-        </div>
-        <div class="update-actions">
-          ${updateActionButtonHtml(updateState)}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function wireUpdatesTab(overlay) {
+function wireGeneralUpdates(overlay) {
   const panel = overlay.querySelector(
-    '.settings-tab-panel[data-tab="updates"]',
+    '.settings-tab-panel[data-tab="general"]',
   );
   if (!panel) return () => {};
 
