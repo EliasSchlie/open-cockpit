@@ -83,19 +83,6 @@ Download the latest installer from [GitHub Releases](https://github.com/EliasSch
 | **Linux** | `Open Cockpit-x.x.x.AppImage` or `.deb` |
 | **Windows** | `Open Cockpit Setup x.x.x.exe` |
 
-### macOS first launch (unsigned app)
-
-The app is ad-hoc signed but not notarized. macOS will show "damaged" or "can't be verified" on first open. To fix:
-
-1. Open the DMG and drag **Open Cockpit** to `/Applications`
-2. Run in Terminal:
-   ```bash
-   xattr -cr /Applications/Open\ Cockpit.app
-   ```
-3. Open the app normally
-
-The `xattr -cr` must be run on the `.app` in `/Applications`, not just the DMG — macOS re-adds quarantine when you copy.
-
 ### Platform notes
 
 - **macOS**: full feature set including iTerm2 integration and Cursor/VS Code app activation
