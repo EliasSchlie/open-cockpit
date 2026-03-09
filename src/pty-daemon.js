@@ -23,8 +23,10 @@ const {
   chmodSync,
 } = require("./platform");
 
-const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
-const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const OPEN_COCKPIT_DIR =
+  process.env.OPEN_COCKPIT_DIR || path.join(os.homedir(), ".open-cockpit");
+const SOCKET_PATH =
+  process.env.PTY_DAEMON_SOCK || path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
 const ALLOWED_SHELLS = getAllowedShells();
