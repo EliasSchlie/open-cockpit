@@ -4,7 +4,12 @@
  */
 const path = require("path");
 const fs = require("fs");
-const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
+const {
+  STATUS,
+  POOL_STATUS,
+  INITIATOR,
+  sessionToPoolStatus,
+} = require("./session-statuses");
 const { readJsonSync } = require("./secure-fs");
 
 /**
@@ -157,14 +162,7 @@ function syncStatuses(pool, sessions) {
     // Allow dead slots to recover if their process came back alive
     if (slot.status === POOL_STATUS.DEAD && !session.alive) continue;
 
-    let newStatus = slot.status;
-    if (session.status === STATUS.IDLE) newStatus = POOL_STATUS.IDLE;
-    else if (session.status === STATUS.PROCESSING) newStatus = POOL_STATUS.BUSY;
-    else if (session.status === STATUS.FRESH) {
-      newStatus = POOL_STATUS.FRESH;
-    } else if (session.status === STATUS.TYPING) {
-      newStatus = POOL_STATUS.TYPING;
-    }
+    const newStatus = sessionToPoolStatus(session.status) ?? slot.status;
 
     if (newStatus !== slot.status) {
       slot.status = newStatus;

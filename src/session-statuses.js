@@ -43,10 +43,30 @@ const PLUGIN_VERSION = {
   UNKNOWN: "unknown",
 };
 
+/**
+ * Map a live session status to the corresponding pool slot status.
+ * Returns null if the session status has no pool equivalent (caller decides fallback).
+ */
+function sessionToPoolStatus(sessionStatus) {
+  switch (sessionStatus) {
+    case STATUS.IDLE:
+      return POOL_STATUS.IDLE;
+    case STATUS.PROCESSING:
+      return POOL_STATUS.BUSY;
+    case STATUS.FRESH:
+      return POOL_STATUS.FRESH;
+    case STATUS.TYPING:
+      return POOL_STATUS.TYPING;
+    default:
+      return null;
+  }
+}
+
 module.exports = {
   STATUS,
   POOL_STATUS,
   INITIATOR,
   UPDATE_STATUS,
   PLUGIN_VERSION,
+  sessionToPoolStatus,
 };
