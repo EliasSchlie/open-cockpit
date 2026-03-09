@@ -18,13 +18,14 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 - **dead** — Claude process exited unexpectedly
 - **archived** — stored session (meta.json `archived: true`), shown in Archive section, resumable
 
-## Idle detection invariants
+## Idle detection
 
-- **Idle signal = idle.** The app trusts the signal file directly — no mtime/size cross-checks against the JSONL transcript.
-- **Why:** Local commands (`/model`, `/help`, etc.) write to the JSONL without triggering hooks, which would cause false "processing" if we compared transcript mtime with signal mtime.
-- **Safety:** `UserPromptSubmit` always clears the signal before processing begins. Stop-hook re-prompts happen within an already-cleared cycle, so no stale signal persists during processing.
-- **No false idle positives.** The app may trigger notifications on idle transitions — a premature "idle" is worse than a delayed one.
-- **Activation tracking:** Sessions with a non-`pool-init` idle signal trigger are marked "activated" in an in-memory Set. Activated sessions always classify as `idle`/`processing`, never `fresh`/`typing` — prevents misclassification when transcript checks fail (e.g. after `/resume` or `/clear`).
+See [idle-signals.md](idle-signals.md) for the full lifecycle, actors, `.pending` mechanism, stale fallback, activation tracking, and failure modes.
+
+Key invariants:
+- **Idle signal = idle.** The app trusts the signal file directly — no mtime/size cross-checks.
+- **No false positives.** Premature "idle" is worse than delayed — triggers notifications.
+- **Activation tracking** prevents fresh/typing misclassification after `/resume` or `/clear`.
 
 ## Archiving
 

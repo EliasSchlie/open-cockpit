@@ -159,6 +159,7 @@ git pull
 - [docs/terminals.md](docs/terminals.md) — Terminal tab model, attach strategy, programmatic access
 - [docs/pty-daemon.md](docs/pty-daemon.md) — PTY daemon architecture, protocol, debugging
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI)
+- [docs/idle-signals.md](docs/idle-signals.md) — Idle signal lifecycle, actors, failure modes
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference
 - [docs/theme.md](docs/theme.md) — Color scheme, directory colors
