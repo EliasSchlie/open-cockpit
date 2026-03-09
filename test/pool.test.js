@@ -302,6 +302,20 @@ describe("syncStatuses", () => {
     expect(updated.slots[0].status).toBe("idle");
   });
 
+  it("transitions starting slot to error when session is dead", () => {
+    const pool = createPool(1);
+    pool.slots.push({
+      ...createSlot(0, "t1", 100),
+      status: "starting",
+      sessionId: "s1",
+      createdAt: new Date().toISOString(),
+    });
+    const sessions = [{ sessionId: "s1", status: "dead" }];
+    const updated = syncStatuses(pool, sessions);
+    expect(updated).not.toBeNull();
+    expect(updated.slots[0].status).toBe("error");
+  });
+
   it("times out starting slot after STARTING_TIMEOUT_MS", () => {
     const pool = createPool(1);
     pool.slots.push({

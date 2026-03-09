@@ -172,10 +172,19 @@ function syncStatuses(pool, sessions, log) {
             );
           slot.status = resolved;
           changed = true;
+        } else {
+          // Session is dead/offloaded/archived — no point staying STARTING
+          if (log)
+            log(
+              "main",
+              `Slot ${slot.index} STARTING→error (session ${slot.sessionId} is ${session.status})`,
+            );
+          slot.status = POOL_STATUS.ERROR;
+          changed = true;
         }
-      } else if (slot.createdAt) {
-        // Timeout guard: STARTING too long → ERROR so reconcilePool restarts it
-        const age = Date.now() - new Date(slot.createdAt).getTime();
+      } else {
+        // No session yet — timeout guard so slots don't stay STARTING forever
+        const age = Date.now() - new Date(slot.createdAt || 0).getTime();
         if (age > STARTING_TIMEOUT_MS) {
           if (log)
             log(
