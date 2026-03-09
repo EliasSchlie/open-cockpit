@@ -373,7 +373,11 @@ async function resumeOffloadedSession(session) {
     if (oldCached) {
       for (const entry of oldCached.terminals) {
         if (activeTermIds.has(entry.termId)) continue;
-        window.api.ptyDetach(entry.termId).catch(() => {});
+        window.api
+          .ptyDetach(entry.termId)
+          .catch((e) =>
+            debugLog("term", `detach failed termId=${entry.termId}`, e.message),
+          );
         disposeTerminalEntry(entry, state.dock);
       }
     }
@@ -651,11 +655,24 @@ async function archiveCurrentSession() {
     const pty = allPtys.find(
       (p) => p.sessionId === session.sessionId && !p.exited,
     );
-    if (pty) window.api.ptyKill(pty.termId).catch(() => {});
+    if (pty)
+      window.api
+        .ptyKill(pty.termId)
+        .catch((e) =>
+          debugLog("term", `kill failed termId=${pty.termId}`, e.message),
+        );
     destroySessionTerminals(session.sessionId);
   } else if (session.origin !== ORIGIN.POOL && session.alive && session.pid) {
     // External/sub-claude session: close external terminal
-    window.api.closeExternalTerminal(session.pid).catch(() => {});
+    window.api
+      .closeExternalTerminal(session.pid)
+      .catch((e) =>
+        debugLog(
+          "term",
+          `closeExternalTerminal failed pid=${session.pid}`,
+          e.message,
+        ),
+      );
   }
 
   // Archive in background (with child check + confirmation if needed)
@@ -1096,7 +1113,9 @@ loadDirColors().then(async () => {
   try {
     const shortcuts = await window.api.getShortcuts();
     setShortcutConfig(shortcuts);
-  } catch {}
+  } catch (err) {
+    debugLog("startup", "getShortcuts failed", err.message);
+  }
 
   await reconnectAllPtys();
   const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh
