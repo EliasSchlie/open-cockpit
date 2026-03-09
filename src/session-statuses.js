@@ -7,6 +7,7 @@ const ORIGIN = {
   POOL: "pool",
   CUSTOM: "custom",
   SUB_CLAUDE: "sub-claude",
+  SUB_AGENT: "sub-agent",
   EXT: "ext",
 };
 

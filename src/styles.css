@@ -18,6 +18,7 @@
   --yellow: #ffff00;
   --mauve: #ff00ff;
   --blue: #00aaff;
+  --peach: #ffa050;
 }
 
 html,
@@ -291,6 +292,11 @@ body {
 .session-origin-custom {
   color: #00ccff;
   background: rgba(0, 204, 255, 0.1);
+}
+
+.session-origin-sub-agent {
+  color: var(--peach);
+  background: rgba(255, 160, 80, 0.1);
 }
 
 .session-origin-stale {
@@ -786,6 +792,11 @@ body.dock-resizing-v {
 .session-search-tag.origin-sub-claude {
   color: var(--mauve);
   border: 1px solid rgba(255, 0, 255, 0.3);
+}
+
+.session-search-tag.origin-sub-agent {
+  color: var(--peach);
+  border: 1px solid rgba(255, 160, 80, 0.3);
 }
 
 .session-search-tag.origin-ext {

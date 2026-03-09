@@ -184,7 +184,7 @@ async function offloadSession(
   sessionId,
   termId,
   claudeSessionId,
-  { cwd, gitRoot, pid } = {},
+  { cwd, gitRoot, pid, origin } = {},
 ) {
   // Get terminal buffer and render to readable text
   let snapshot = null;
@@ -205,7 +205,7 @@ async function offloadSession(
     gitRoot,
     claudeSessionId,
     snapshot,
-    origin: ORIGIN.POOL,
+    origin: origin || ORIGIN.POOL,
   });
   // Clean up terminal input cache for the offloaded slot
   const { terminalHasInputCache } = getSessionDiscovery();
@@ -347,6 +347,15 @@ function enrichSessionsWithGraphData(sessions) {
     }
   }
   if (graphChanged) writeSessionGraph(graph);
+
+  // Override origin for sessions with a parent (sub-agents).
+  // Env-based detection assigns POOL/CUSTOM because sub-agents inherit
+  // their parent's env vars. The graph is the source of truth.
+  for (const s of sessions) {
+    if (s.parentSessionId) {
+      s.origin = ORIGIN.SUB_AGENT;
+    }
+  }
 }
 
 // Render raw PTY buffer into readable screen text using a headless terminal.
@@ -1091,6 +1100,7 @@ async function executeOffload(target) {
     cwd: target.cwd,
     gitRoot: target.gitRoot,
     pid: target.pid,
+    origin: target.origin,
   });
 }
 
