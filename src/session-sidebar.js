@@ -514,12 +514,13 @@ function showSessionContextMenu(e, session) {
   menu.style.top = `${e.clientY}px`;
 
   const isArchived = session.status === STATUS.ARCHIVED;
+  const isDead = session.status === STATUS.DEAD;
   const isOffloaded = session.status === STATUS.OFFLOADED;
 
-  if (isArchived) {
+  if (isArchived || isDead) {
     menu.innerHTML = `
       <div class="session-context-item" data-action="restart">Restart</div>
-      <div class="session-context-item" data-action="unarchive">Move to Recent</div>
+      ${isArchived ? '<div class="session-context-item" data-action="unarchive">Move to Recent</div>' : ""}
     `;
   } else if (isOffloaded) {
     menu.innerHTML = `
