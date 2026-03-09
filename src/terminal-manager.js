@@ -337,10 +337,19 @@ export async function attachPoolTerminal(poolTermId) {
   term.loadAddon(fitAddon);
   term.open(container);
 
-  // Write the buffer directly at matching dimensions (no reflow).
-  // Then skip the daemon's replay event to avoid writing it twice.
-  if (ptyInfo?.buffer) {
-    term.write(ptyInfo.buffer);
+  // Skip the daemon's replay event — the buffer contains old session content
+  // from before /clear (the PTY persists across session recycling). Instead of
+  // writing stale content, force a SIGWINCH so Claude redraws cleanly.
+  const hasBuffer = !!ptyInfo?.buffer;
+  if (hasBuffer && ptyInfo.cols && ptyInfo.rows) {
+    // Jiggle PTY dimensions to force SIGWINCH delivery. macOS kernel skips
+    // SIGWINCH when ioctl(TIOCSWINSZ) sets identical dimensions.
+    window.api.ptyResize(
+      poolTermId,
+      Math.max(1, ptyInfo.cols - 1),
+      ptyInfo.rows,
+    );
+    await window.api.ptyResize(poolTermId, ptyInfo.cols, ptyInfo.rows);
   }
 
   const entry = {
@@ -350,7 +359,7 @@ export async function attachPoolTerminal(poolTermId) {
     fitAddon,
     container,
     isPoolTui: true,
-    skipReplay: !!ptyInfo?.buffer,
+    skipReplay: hasBuffer,
     dockTabId: null,
     _resizeHandler: null,
   };

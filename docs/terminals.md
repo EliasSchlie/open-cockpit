@@ -10,12 +10,9 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 ## Pool TUI attach strategy
 
-`attachPoolTerminal` fetches the PTY's current dimensions and replay buffer from the daemon, creates xterm at those exact dimensions, and writes the buffer directly. This avoids two pitfalls:
+`attachPoolTerminal` skips the daemon's replay buffer entirely — recycled pool slots' buffers contain old session content from before `/clear`. Instead, it forces a SIGWINCH to trigger Claude's clean redraw. macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets identical dimensions, so the code "jiggles" the PTY (shrinks by 1 column, then restores) to guarantee delivery.
 
-1. **xterm.js reflow garbling**: Writing an 80×24 buffer into a 200×50 terminal causes xterm to reflow lines, corrupting TUI cursor positioning.
-2. **macOS SIGWINCH suppression**: macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets the same dimensions (`bcmp` check in `tty_ioctl`). If the PTY already matches the window size, relying on SIGWINCH for a redraw silently fails.
-
-`reportTerminalDims` still reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash), but it's no longer required for correctness.
+`reportTerminalDims` reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash).
 
 ## TUI reflow prevention
 
@@ -25,9 +22,7 @@ xterm.js reflow on resize treats all content as reflowable text, re-wrapping lin
 
 Shell terminals are unaffected — reflow is acceptable for normal text output.
 
-**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Either write the buffer at matching dimensions (initial attach) or clear before resize (ongoing resizes).
-
-**macOS-specific**: macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets the same dimensions (`bcmp` check in `tty_ioctl`). This is why `attachPoolTerminal` fetches PTY dims and writes the buffer at matching dimensions rather than skipping the buffer and relying on SIGWINCH — if the PTY already matches the window size, SIGWINCH never fires.
+**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Skip the buffer entirely (initial attach) or clear before resize (ongoing resizes).
 
 ## Reconnect handling
 
