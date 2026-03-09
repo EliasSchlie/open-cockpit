@@ -657,11 +657,26 @@ export async function reconnectTerminal(ptyInfo) {
   };
 
   if (ptyInfo.buffer) {
-    term.write(ptyInfo.buffer);
-    entry.skipReplay = true;
-    // Flag so setupTerminalResize clears on first fit if dims changed,
-    // preventing reflow garbling of cursor-positioned content.
-    entry._hasReconnectBuffer = true;
+    if (entry.isPoolTui) {
+      // Pool TUI: skip stale buffer (may contain old session content from
+      // before /clear). Force SIGWINCH via dimension jiggle so Claude redraws.
+      entry.skipReplay = true;
+      if (ptyInfo.cols && ptyInfo.rows) {
+        window.api.ptyResize(
+          ptyInfo.termId,
+          Math.max(1, ptyInfo.cols - 1),
+          ptyInfo.rows,
+        );
+        await window.api.ptyResize(ptyInfo.termId, ptyInfo.cols, ptyInfo.rows);
+      }
+    } else {
+      // Shell: write buffer to restore scrollback
+      term.write(ptyInfo.buffer);
+      entry.skipReplay = true;
+      // Flag so setupTerminalResize clears on first fit if dims changed,
+      // preventing reflow garbling of cursor-positioned content.
+      entry._hasReconnectBuffer = true;
+    }
   }
 
   pendingTerminals.set(ptyInfo.termId, entry);

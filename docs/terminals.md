@@ -26,7 +26,10 @@ Shell terminals are unaffected — reflow is acceptable for normal text output.
 
 ## Reconnect handling
 
-When reconnecting to a session after app restart, `reconnectTerminal()` writes the PTY's saved buffer at matching dimensions. If the window has since changed size, `fitAddon.fit()` would reflow the buffer, garbling TUI content. To prevent this, entries are flagged with `_hasReconnectBuffer` — on the first resize, `setupTerminalResize` clears the buffer and lets SIGWINCH trigger a full redraw.
+When reconnecting to a session after app restart, `reconnectTerminal()` handles pool TUI and shell terminals differently:
+
+- **Pool TUI**: Skips the daemon buffer entirely (may contain stale content) and forces a SIGWINCH via dimension jiggle, same as `attachPoolTerminal`.
+- **Shell**: Writes the buffer at matching dimensions to restore scrollback. Flagged with `_hasReconnectBuffer` so `setupTerminalResize` clears on first resize if dims changed, preventing reflow garbling.
 
 ## API-created tabs
 
