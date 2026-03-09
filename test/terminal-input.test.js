@@ -181,6 +181,38 @@ describe("parseTerminalHasInput", () => {
     );
   });
 
+  // Regression: buffer truncation causes TUI decorations to bleed into prompt line
+  it("strips TUI decoration artifacts from prompt text", async () => {
+    // Simulates truncated buffer where box-drawing and geometric chars
+    // appear after the prompt character on the same line
+    const decorationBleed = [
+      "\x1b[2J\x1b[H",
+      " ▐▛███▜▌   Claude Code v2.1.69\r\n",
+      "▝▜█████▛▘  Opus 4.6 · Claude Max\r\n",
+      "  ▘▘ ▝▝    /Users/test\r\n",
+      "\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+      "❯ \x1b[199C─   ▪\r\n", // cursor right + decoration chars at end of line
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+    ].join("");
+    expect(await parseTerminalHasInput(decorationBleed, 200)).toBe("");
+  });
+
+  it("preserves real input even when mixed with decoration chars", async () => {
+    // Real input that happens to contain text after stripping decorations
+    const mixedInput = [
+      "\x1b[2J\x1b[H",
+      " ▐▛███▜▌   Claude Code v2.1.69\r\n",
+      "▝▜█████▛▘  Opus 4.6 · Claude Max\r\n",
+      "  ▘▘ ▝▝    /Users/test\r\n",
+      "\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+      "❯ fix the bug\r\n",
+      "────────────────────────────────────────────────────────────────────────────────\r\n",
+    ].join("");
+    expect(await parseTerminalHasInput(mixedInput, 80)).toBe("fix the bug");
+  });
+
   it("never misses input when given the actual buffer (regression: silent empty fallback)", async () => {
     const bufferWithText = [
       "\x1b[2J\x1b[H",
