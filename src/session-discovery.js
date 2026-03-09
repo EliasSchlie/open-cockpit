@@ -21,7 +21,11 @@ const {
   secureWriteFileSync,
   readJsonSync,
 } = require("./secure-fs");
-const { daemonRequest, daemonSend } = require("./daemon-client");
+const {
+  daemonRequest,
+  daemonSend,
+  daemonSendSafe,
+} = require("./daemon-client");
 const {
   SESSION_PIDS_DIR,
   CLAUDE_PROJECTS_DIR,
@@ -175,8 +179,8 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
 const JITTER_SETTLE_MS = 50;
 
 async function jitterTerminal(termId, cols, rows) {
-  daemonSend({ type: "resize", termId, cols: cols + 1, rows });
-  daemonSend({ type: "resize", termId, cols, rows });
+  daemonSendSafe({ type: "resize", termId, cols: cols + 1, rows });
+  daemonSendSafe({ type: "resize", termId, cols, rows });
   await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
 }
 
@@ -208,46 +212,67 @@ async function pollTerminalInput() {
     const freshTermIds = new Set(freshSlots.map((s) => s.termId));
     const ptyTermIds = new Set(ptys.map((p) => p.termId));
     const ptyByTermId = new Map(ptys.map((p) => [p.termId, p]));
-    const results = await checkTerminalInputs(ptys, freshTermIds);
+    let results = await checkTerminalInputs(ptys, freshTermIds);
+
+    // Batch jitter-verify: collect terminals that detected input without
+    // recent user keystrokes, jitter them all, re-read once, re-parse.
+    const suspectTermIds = new Set();
+    for (const [termId, inputText] of results) {
+      if (inputText && !recentWriteTermIds.has(termId)) {
+        const pty = ptyByTermId.get(termId);
+        if (pty && pty.cols) suspectTermIds.add(termId);
+      }
+    }
+    if (suspectTermIds.size > 0) {
+      try {
+        for (const termId of suspectTermIds) {
+          const pty = ptyByTermId.get(termId);
+          daemonSendSafe({
+            type: "resize",
+            termId,
+            cols: pty.cols + 1,
+            rows: pty.rows,
+          });
+          daemonSendSafe({
+            type: "resize",
+            termId,
+            cols: pty.cols,
+            rows: pty.rows,
+          });
+        }
+        await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
+        const resp2 = await daemonRequest({ type: "list" });
+        const refreshedPtys = resp2.ptys || [];
+        const verified = await checkTerminalInputs(
+          refreshedPtys,
+          suspectTermIds,
+        );
+        // Merge verified results back — replace suspect entries
+        const merged = new Map(results);
+        for (const [termId, text] of verified) {
+          if (suspectTermIds.has(termId)) {
+            if (text) {
+              merged.set(termId, text);
+            } else {
+              merged.delete(termId);
+              _debugLog("main", `Jitter cleared artifact for termId=${termId}`);
+            }
+          }
+        }
+        results = merged;
+      } catch (err) {
+        _debugLog(
+          "main",
+          "batch jitter failed, trusting detections",
+          err.message,
+        );
+      }
+    }
 
     let changed = false;
     for (const [termId, inputText] of results) {
       const prev = terminalHasInputCache.get(termId) || "";
       if (inputText) {
-        // Input detected — if the user recently typed here, trust it.
-        // Otherwise, jitter to verify it's not a mid-redraw artifact.
-        if (!recentWriteTermIds.has(termId)) {
-          const pty = ptyByTermId.get(termId);
-          if (pty && pty.cols) {
-            try {
-              await jitterTerminal(termId, pty.cols, pty.rows);
-              const resp2 = await daemonRequest({ type: "list" });
-              const refreshed = (resp2.ptys || []).find(
-                (p) => p.termId === termId,
-              );
-              if (refreshed) {
-                const verified = await parseTerminalHasInput(
-                  refreshed.buffer || "",
-                  refreshed.cols || 200,
-                  refreshed.rows || 50,
-                );
-                if (!verified) {
-                  _debugLog(
-                    "main",
-                    `Jitter cleared artifact for termId=${termId}`,
-                  );
-                  continue; // artifact — skip this detection
-                }
-              }
-            } catch (err) {
-              _debugLog(
-                "main",
-                "jitter verify failed, trusting detection",
-                err.message,
-              );
-            }
-          }
-        }
         // Verified or trusted — update cache
         consecutiveMisses.delete(termId);
         if (inputText !== prev) {
