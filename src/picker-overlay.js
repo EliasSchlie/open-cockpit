@@ -102,8 +102,8 @@ export function createPickerOverlay({
     }
     if (e.key === "Enter" && count > 0) {
       e.preventDefault();
-      close();
       onSelect(selectedIndex);
+      close();
       return;
     }
   });
@@ -120,8 +120,8 @@ export function createPickerOverlay({
     const items = listEl.querySelectorAll(`.${itemClass}`);
     const index = Array.from(items).indexOf(item);
     if (index !== -1) {
-      close();
       onSelect(index);
+      close();
     }
   });
 
