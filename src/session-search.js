@@ -22,9 +22,7 @@ export function initSessionSearch(actions) {
     listEl: dom.sessionSearchList,
     onInput: (query) => renderResults(query),
     onSelect: (index) => {
-      const session = filteredSessions[index];
-      picker.close();
-      _actions.selectSession(session);
+      _actions.selectSession(filteredSessions[index]);
     },
     onOpen: () => renderResults(""),
     onClose: () => {
@@ -131,12 +129,7 @@ function renderResults(query) {
     filteredSessions = scored.map((s) => s.session);
   }
 
-  const selectedIndex = picker.getSelectedIndex();
-  const clamped = Math.min(
-    selectedIndex,
-    Math.max(0, filteredSessions.length - 1),
-  );
-  picker.setSelectedIndex(clamped);
+  const clamped = picker.clampSelection();
 
   const list = dom.sessionSearchList;
   list.innerHTML = "";

@@ -56,8 +56,14 @@ export function createPickerOverlay({
     return selectedIndex;
   }
 
-  function setSelectedIndex(i) {
-    selectedIndex = i;
+  function clampSelection() {
+    const count = getItemCount();
+    if (count === 0) {
+      selectedIndex = 0;
+    } else if (selectedIndex >= count) {
+      selectedIndex = count - 1;
+    }
+    return selectedIndex;
   }
 
   function updateSelection(newIndex) {
@@ -96,6 +102,7 @@ export function createPickerOverlay({
     }
     if (e.key === "Enter" && count > 0) {
       e.preventDefault();
+      close();
       onSelect(selectedIndex);
       return;
     }
@@ -111,7 +118,7 @@ export function createPickerOverlay({
     close,
     toggle,
     getSelectedIndex,
-    setSelectedIndex,
+    clampSelection,
     updateSelection,
   };
 }

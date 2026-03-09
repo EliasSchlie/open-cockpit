@@ -242,9 +242,7 @@ export function initCommandPalette(actions) {
     listEl: dom.commandPaletteList,
     onInput: (query) => renderPaletteList(query),
     onSelect: (index) => {
-      const cmd = filteredCommands[index];
-      picker.close();
-      cmd.action();
+      filteredCommands[index].action();
     },
     onOpen: () => renderPaletteList(""),
     onClose: () => _actions.focusTerminal(),
@@ -350,12 +348,7 @@ function renderPaletteList(query) {
       )
     : COMMANDS.filter((c) => !c.id.startsWith("tab-")); // Hide tab-N from unfiltered list
 
-  const selectedIndex = picker.getSelectedIndex();
-  const clamped = Math.min(
-    selectedIndex,
-    Math.max(0, filteredCommands.length - 1),
-  );
-  picker.setSelectedIndex(clamped);
+  const clamped = picker.clampSelection();
 
   dom.commandPaletteList.innerHTML = "";
   filteredCommands.forEach((cmd, i) => {
@@ -367,6 +360,7 @@ function renderPaletteList(query) {
       picker.close();
       cmd.action();
     });
+
     item.addEventListener("mouseenter", () => picker.updateSelection(i));
     dom.commandPaletteList.appendChild(item);
   });
