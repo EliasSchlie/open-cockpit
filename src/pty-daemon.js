@@ -23,70 +23,22 @@ const {
   chmodSync,
 } = require("./platform");
 
+const { sanitizeBufferStart, BUFFER_SIZE } = require("./buffer-sanitize");
+
 const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
 const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
-const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
 
-// Screen-reset sequences that mark the start of a clean terminal frame.
-// Trimming to the first one after truncation prevents mid-redraw artifacts.
-const SCREEN_CLEAR = "\x1b[2J"; // Erase entire display
-const ALT_SCREEN_ON = "\x1b[?1049h"; // Switch to alternate screen buffer
-// Max bytes to scan for a screen-reset boundary (don't discard >25% of buffer)
-const RESET_SCAN_LIMIT = Math.floor(BUFFER_SIZE / 4);
-
 /**
- * Clean up the start of a truncated buffer for artifact-free replay.
- * 1. Skip UTF-8 continuation bytes (split multi-byte chars)
- * 2. Skip partial ANSI escape sequences
- * 3. Trim to first screen-reset boundary (prevents mid-redraw artifacts)
+ * Materialize a terminal's buffer for reading. Skips sanitization when the
+ * buffer hasn't been truncated (joined length <= BUFFER_SIZE).
  */
-function sanitizeBufferStart(buf) {
-  if (!buf) return buf;
-
-  // Step 1: Skip leading UTF-8 continuation bytes (0x80-0xBF)
-  let start = 0;
-  while (
-    start < buf.length &&
-    buf.charCodeAt(start) >= 0x80 &&
-    buf.charCodeAt(start) <= 0xbf
-  ) {
-    start++;
-  }
-
-  // Step 2: Skip a partial ANSI escape at the start
-  const escIdx = buf.indexOf("\x1b", start);
-  if (escIdx >= 0 && escIdx < start + 40) {
-    const afterEsc = buf.substring(escIdx, escIdx + 40);
-    const complete =
-      /^\x1b(?:\[[\x20-\x3f]*[\x40-\x7e]|\].*?(?:\x07|\x1b\\)|[()][0-9A-Za-z]|.)/.test(
-        afterEsc,
-      );
-    if (!complete) {
-      const nextEsc = buf.indexOf("\x1b", escIdx + 1);
-      start = nextEsc > 0 ? nextEsc : escIdx + 1;
-    }
-  }
-
-  // Step 3: Find the first screen-reset boundary after the truncation point.
-  // This marks the beginning of a complete redraw frame — everything before
-  // it is a partial frame that would cause rendering artifacts on replay.
-  const scanEnd = Math.min(buf.length, start + RESET_SCAN_LIMIT);
-  let resetIdx = -1;
-
-  const altIdx = buf.indexOf(ALT_SCREEN_ON, start);
-  if (altIdx >= 0 && altIdx < scanEnd) resetIdx = altIdx;
-
-  const clearIdx = buf.indexOf(SCREEN_CLEAR, start);
-  if (clearIdx >= 0 && clearIdx < scanEnd) {
-    // Prefer the earlier reset point
-    if (resetIdx < 0 || clearIdx < resetIdx) resetIdx = clearIdx;
-  }
-
-  if (resetIdx > start) start = resetIdx;
-
-  return start > 0 ? buf.slice(start) : buf;
+function getBuffer(entry) {
+  const joined = entry.chunks.join("");
+  if (joined.length <= BUFFER_SIZE) return joined;
+  return sanitizeBufferStart(joined.slice(-BUFFER_SIZE));
 }
+
 const ALLOWED_SHELLS = getAllowedShells();
 const EXTRA_PATH_DIRS = getExtraPathDirs();
 
@@ -229,9 +181,7 @@ function handleSpawn(socket, msg) {
       entry.chunks.push(data);
       entry.chunksLen += data.length;
       if (entry.chunksLen > BUFFER_SIZE * 2) {
-        const joined = sanitizeBufferStart(
-          entry.chunks.join("").slice(-BUFFER_SIZE),
-        );
+        const joined = getBuffer(entry);
         entry.chunks = [joined];
         entry.chunksLen = joined.length;
       }
@@ -320,9 +270,7 @@ function handleKill(socket, msg) {
 function handleList(socket, msg) {
   const ptys = [];
   for (const [, entry] of terminals) {
-    const buffer = sanitizeBufferStart(
-      entry.chunks.join("").slice(-BUFFER_SIZE),
-    );
+    const buffer = getBuffer(entry);
     ptys.push({
       ...entry.meta,
       buffer,
@@ -343,7 +291,7 @@ function handleReadBuffer(socket, msg) {
     });
     return;
   }
-  const buffer = sanitizeBufferStart(entry.chunks.join("").slice(-BUFFER_SIZE));
+  const buffer = getBuffer(entry);
   sendTo(socket, {
     type: "read-buffer-result",
     id: msg.id,
@@ -370,9 +318,7 @@ function handleAttach(socket, msg) {
 
   // Then replay buffered output (no id — goes through push event path)
   if (entry.chunksLen > 0) {
-    const buffer = sanitizeBufferStart(
-      entry.chunks.join("").slice(-BUFFER_SIZE),
-    );
+    const buffer = getBuffer(entry);
     sendTo(socket, { type: "replay", termId: msg.termId, data: buffer });
   }
   if (entry.meta.exited) {

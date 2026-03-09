@@ -8,20 +8,16 @@
  */
 
 const { Terminal } = require("@xterm/headless");
+const { ALT_SCREEN_ON } = require("./buffer-sanitize");
 
 const PROMPT_CHAR = "❯";
-// Claude Code's TUI renders in the alternate screen buffer. If the daemon's
-// 100KB buffer was truncated and lost the original \x1b[?1049h switch,
-// we prepend it as a fallback so xterm renders into the correct buffer.
-const ALT_SCREEN_ON = "\x1b[?1049h";
 
 // TUI decoration characters that can bleed into the prompt line when the
 // 100KB PTY buffer is truncated mid-escape-sequence, causing xterm.js replay
 // artifacts. Strip these before deciding if there's real user input.
 // Ranges: Box Drawing (U+2500–U+257F), Block Elements (U+2580–U+259F),
 //         Geometric Shapes (U+25A0–U+25FF), Braille (U+2800–U+28FF),
-//         Misc Symbols (U+2600–U+26FF), Dingbats (U+2700–U+27BF excl ❯)
-// Also strip the ⏵ (U+23F5) play button used in Claude's status bar.
+//         ⏵ play button (U+23F5) from Claude's status bar
 // eslint-disable-next-line no-misleading-character-class
 const TUI_DECORATION_RE =
   /[\u2500-\u257F\u2580-\u259F\u25A0-\u25FF\u2800-\u28FF\u23F5]/g;
