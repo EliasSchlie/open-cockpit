@@ -168,36 +168,22 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
   return hasIntentionContent || hasTermInput ? STATUS.TYPING : STATUS.FRESH;
 }
 
-// Force a clean TUI redraw by jittering the terminal width.
+// Force a clean TUI redraw by jittering the terminal width (cols+1 → cols).
 // Claude Code's TUI redraws on SIGWINCH, flushing any mid-frame artifacts
 // from the PTY buffer. A short delay lets the TUI finish writing its clean
-// frame before we re-read.
+// frame before the caller re-reads.
 const JITTER_SETTLE_MS = 50;
 
-async function jitterRedraw(ptys, freshTermIds) {
-  const targets = ptys.filter((p) => freshTermIds.has(p.termId) && p.cols);
-  if (targets.length === 0) return;
-  // Resize all fresh terminals: cols+1, then back to cols.
-  // Daemon resize is fire-and-forget (no response), so use daemonSend.
-  for (const p of targets) {
-    daemonSend({
-      type: "resize",
-      termId: p.termId,
-      cols: p.cols + 1,
-      rows: p.rows,
-    });
-  }
-  for (const p of targets) {
-    daemonSend({
-      type: "resize",
-      termId: p.termId,
-      cols: p.cols,
-      rows: p.rows,
-    });
-  }
-  // Let the TUI process SIGWINCH and write its clean frame
+async function jitterTerminal(termId, cols, rows) {
+  daemonSend({ type: "resize", termId, cols: cols + 1, rows });
+  daemonSend({ type: "resize", termId, cols, rows });
   await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
 }
+
+// Track terminals that have received user keystrokes (via write API).
+// When a write-triggered poll detects text, we trust it without jitter.
+// Cleared when the terminal transitions out of fresh/typing.
+const recentWriteTermIds = new Set();
 
 async function pollTerminalInput() {
   if (pollInFlight) return;
@@ -209,7 +195,7 @@ async function pollTerminalInput() {
     const freshSlots = pool.slots.filter((s) => isSlotUncommitted(s.status));
     if (freshSlots.length === 0) return;
 
-    // Get current terminal state to learn cols/rows for jitter
+    // Single daemon call to get all terminal buffers
     let ptys;
     try {
       const resp = await daemonRequest({ type: "list" });
@@ -220,28 +206,49 @@ async function pollTerminalInput() {
     }
 
     const freshTermIds = new Set(freshSlots.map((s) => s.termId));
-
-    // Jitter-resize fresh terminals to force a clean TUI redraw, then re-read
-    try {
-      await jitterRedraw(ptys, freshTermIds);
-      const resp2 = await daemonRequest({ type: "list" });
-      ptys = resp2.ptys || [];
-    } catch (err) {
-      _debugLog(
-        "main",
-        "pollTerminalInput: jitter failed, using original buffers",
-        err.message,
-      );
-    }
-
     const ptyTermIds = new Set(ptys.map((p) => p.termId));
+    const ptyByTermId = new Map(ptys.map((p) => [p.termId, p]));
     const results = await checkTerminalInputs(ptys, freshTermIds);
 
     let changed = false;
     for (const [termId, inputText] of results) {
       const prev = terminalHasInputCache.get(termId) || "";
       if (inputText) {
-        // Input detected — update cache and reset miss counter
+        // Input detected — if the user recently typed here, trust it.
+        // Otherwise, jitter to verify it's not a mid-redraw artifact.
+        if (!recentWriteTermIds.has(termId)) {
+          const pty = ptyByTermId.get(termId);
+          if (pty && pty.cols) {
+            try {
+              await jitterTerminal(termId, pty.cols, pty.rows);
+              const resp2 = await daemonRequest({ type: "list" });
+              const refreshed = (resp2.ptys || []).find(
+                (p) => p.termId === termId,
+              );
+              if (refreshed) {
+                const verified = await parseTerminalHasInput(
+                  refreshed.buffer || "",
+                  refreshed.cols || 200,
+                  refreshed.rows || 50,
+                );
+                if (!verified) {
+                  _debugLog(
+                    "main",
+                    `Jitter cleared artifact for termId=${termId}`,
+                  );
+                  continue; // artifact — skip this detection
+                }
+              }
+            } catch (err) {
+              _debugLog(
+                "main",
+                "jitter verify failed, trusting detection",
+                err.message,
+              );
+            }
+          }
+        }
+        // Verified or trusted — update cache
         consecutiveMisses.delete(termId);
         if (inputText !== prev) {
           terminalHasInputCache.set(termId, inputText);
@@ -274,6 +281,11 @@ async function pollTerminalInput() {
       }
     }
 
+    // Prune recentWriteTermIds — only keep entries for current fresh terminals
+    for (const termId of recentWriteTermIds) {
+      if (!freshTermIds.has(termId)) recentWriteTermIds.delete(termId);
+    }
+
     if (changed) {
       invalidateSessionsCache();
       if (_onSessionsChanged) _onSessionsChanged();
@@ -287,6 +299,7 @@ async function pollTerminalInput() {
 // Debounced so rapid typing doesn't flood — only the trailing edge fires.
 // Pool check is inside the callback to avoid disk I/O on every keystroke.
 function triggerPollOnWrite(termId) {
+  recentWriteTermIds.add(termId);
   clearTimeout(writeDebounceTimer);
   writeDebounceTimer = setTimeout(() => {
     const pool = readPool();
@@ -1103,6 +1116,7 @@ module.exports = {
   findGitRoot,
   pollTerminalInput,
   triggerPollOnWrite,
+  jitterTerminal,
   terminalHasInputCache: terminalInputApi,
   getJsonlSize,
 };
