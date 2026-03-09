@@ -30,6 +30,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/session-sidebar.js` — Session list rendering, directory colors, context menus, snapshots
 - `src/terminal-manager.js` — Terminal creation, attach, switch, close, caching, reconnect, PTY IPC
 - `src/pool-ui.js` — Pool settings panel, slot terminal popup, shortcut settings
+- `src/picker-overlay.js` — Shared overlay picker factory (open/close, keyboard nav, click-outside)
 - `src/command-palette.js` — COMMANDS registry, pane navigation, palette UI
 - `src/session-search.js` — Fuzzy session search overlay (⌘K)
 - `src/session-stats.js` — On-demand JSONL parsing, token/cost stats, sub-agent aggregation
