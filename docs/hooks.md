@@ -24,32 +24,4 @@ Resolves the session ID via the PID mapping written by `session-pid-map.sh`.
 
 ## Idle signal hooks → `idle-signal.sh`
 
-Detects when sessions become idle (waiting for user input) or start processing. Writes signal files to `~/.open-cockpit/idle-signals/<PID>`.
-
-**No false positives.** Idle signals must only appear when a session is truly waiting for user input. The app may trigger notifications (e.g. a bell) on idle, so a premature signal is worse than a delayed one. The `stop` trigger defers writing for 5 seconds and verifies via a `.pending` file that no re-prompt occurred (UserPromptSubmit clears it, new Stop hooks overwrite it).
-
-### Signal lifecycle
-
-| Hook Event | Matcher | Action | Meaning |
-|------------|---------|--------|---------|
-| `Stop` | — | deferred write (stop) | Claude finished responding (verified after 5s) |
-| `PreToolUse` | `AskUserQuestion\|ExitPlanMode` | write (tool) | Claude is asking for input |
-| `PermissionRequest` | — | write (permission) | Waiting for permission approval |
-| `PostToolUse` | — | clear | Processing resumed after tool use |
-| `UserPromptSubmit` | — | clear | User submitted a prompt |
-| `SessionStart` | `clear` | clear | Session was cleared (`/clear`) |
-
-### Signal file format
-
-```json
-{"cwd": "/path/to/project", "session_id": "uuid", "transcript": "/path/to/jsonl", "ts": 1234567890, "trigger": "stop"}
-```
-
-### How the app uses signals
-
-- **Has signal + has human turns in JSONL** → idle (ready for input)
-- **Has signal + no human turns** → fresh (never used)
-- **No signal + alive** → processing (fallback: size-based stale detection after 30s)
-- **Not alive** → dead
-
-**Why we trust the signal directly (no mtime/size cross-checks):** `UserPromptSubmit` always clears the signal before processing begins. Even when Stop hooks re-prompt Claude, the original `UserPromptSubmit` already cleared the signal, so no stale signal persists during processing. Local commands (e.g. `/model`, `/help`) write to the JSONL transcript without triggering hooks — comparing transcript mtime with signal mtime would cause permanent false "processing" detection.
+Detects when sessions become idle (waiting for user input) or start processing. Writes signal files to `~/.open-cockpit/idle-signals/<PID>`. See [idle-signals.md](idle-signals.md) for full lifecycle details, the `.pending` deferred-write mechanism, all actors, and failure modes.
