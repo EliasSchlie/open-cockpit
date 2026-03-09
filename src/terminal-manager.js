@@ -553,6 +553,32 @@ export function cleanupStaleTerminals(liveSessions) {
   }
 }
 
+// Place a terminal tab in the same leaf as the Claude TUI (or the first leaf).
+function addTabNearTui(entry) {
+  if (!state.dock) return;
+  const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
+  const leaf =
+    (tuiTab && state.dock.getTabLeafId(tuiTab)) || state.dock.getFirstLeafId();
+  state.dock.addTab(entry.dockTabId, leaf);
+}
+
+// Discover and attach extra daemon terminals for a session (e.g. opened via API).
+// Skips the primary terminal (excludeTermId) which is already attached.
+export async function discoverExtraTerminals(sessionId, excludeTermId) {
+  const allPtys = await window.api.ptyList();
+  const extraPtys = allPtys.filter(
+    (p) => p.sessionId === sessionId && !p.exited && p.termId !== excludeTermId,
+  );
+  for (const p of extraPtys) {
+    const entry = await reconnectTerminal(p);
+    state.terminals.push(entry);
+    dockRegisterTerminal(entry);
+    addTabNearTui(entry);
+  }
+  if (extraPtys.length > 0) syncSessionCache();
+  return extraPtys.length;
+}
+
 // --- Focus management ---
 
 export function focusTerminal() {
@@ -720,8 +746,13 @@ window.api.onPtyExit((termId) => {
 });
 
 // API-spawned terminal: attach to it and show a tab (if it belongs to current session)
+// For non-current sessions, the terminal will be discovered when switching to that session.
 window.api.onApiTermOpened(async (sessionId, termId) => {
-  if (sessionId !== state.currentSessionId) return;
+  if (sessionId !== state.currentSessionId) {
+    // Invalidate cached terminals so the tab is discovered on next session switch
+    sessionTerminals.delete(sessionId);
+    return;
+  }
   if (state.terminals.some((t) => t.termId === termId)) return;
 
   const container = document.createElement("div");
@@ -762,13 +793,7 @@ window.api.onApiTermOpened(async (sessionId, termId) => {
   setupTerminalResize(entry);
 
   dockRegisterTerminal(entry);
-  if (state.dock) {
-    const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
-    const leaf =
-      (tuiTab && state.dock.getTabLeafId(tuiTab)) ||
-      state.dock.getFirstLeafId();
-    state.dock.addTab(entry.dockTabId, leaf);
-  }
+  addTabNearTui(entry);
   syncSessionCache();
 });
 
