@@ -48,7 +48,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+Shift+Tab` | Cycle Pane Focus (editor → terminals → editor) |
 | `Cmd+J` | Jump to Recent Idle Session |
 | `Cmd+D` | Archive Current Session |
-| `Cmd+R` | Resume Session |
+| *(unbound)* | Resume Session |
 | `Cmd+\` | Toggle Sidebar |
 | `Cmd+E` | Focus Editor |
 | `` Cmd+` `` | Focus Terminal |
