@@ -1385,11 +1385,25 @@ async function poolClean() {
   return cleaned;
 }
 
+// Serialize withFreshSlot calls so concurrent callers can't double-offload
+// the same session or race into the claim phase simultaneously.
+// Separate from withPoolLock because offloadSession acquires it internally.
+let _freshSlotQueue = Promise.resolve();
+
 // Ensure a fresh slot exists, then atomically claim and return it.
 // The claimFn receives (pool, slot) inside the lock and should perform
 // the slot-specific work (send prompt / resume command, mark busy, etc.).
 // Returns whatever claimFn returns.
-async function withFreshSlot(claimFn) {
+function withFreshSlot(claimFn) {
+  const p = _freshSlotQueue.then(() => _withFreshSlotInner(claimFn));
+  _freshSlotQueue = p.then(
+    () => {},
+    () => {},
+  ); // keep chain alive
+  return p;
+}
+
+async function _withFreshSlotInner(claimFn) {
   const { getSessions } = getSessionDiscovery();
   // Phase 1: check if offload is needed (inside lock)
   const needsOffload = await checkOffloadNeeded();
