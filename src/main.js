@@ -592,6 +592,9 @@ app.whenReady().then(async () => {
     });
     return resp;
   });
+  ipcMain.handle("pty-jitter", async (_e, termId, cols, rows) => {
+    await sessionDiscovery.jitterTerminal(termId, cols, rows);
+  });
   ipcMain.handle("pty-detach", async (_e, termId) => {
     await daemonClient.ensureDaemon();
     daemonClient.daemonSendSafe({ type: "detach", termId });

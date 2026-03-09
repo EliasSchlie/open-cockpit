@@ -1130,6 +1130,13 @@ loadDirColors().then(async () => {
         loadSessions();
         sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
       }
+      // Jitter all visible terminals to clear artifacts accumulated while backgrounded
+      for (const entry of state.terminals) {
+        const { cols, rows } = entry.term;
+        if (cols && rows) {
+          window.api.ptyJitter(entry.termId, cols, rows).catch(() => {});
+        }
+      }
     }
   });
 });
