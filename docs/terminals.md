@@ -10,9 +10,12 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 ## Pool TUI attach strategy
 
-`attachPoolTerminal` fetches the PTY's current dimensions and replay buffer from the daemon, creates xterm at those exact dimensions, and writes the buffer directly. This avoids xterm.js reflow garbling (writing an 80×24 buffer into a 200×50 terminal causes line re-wrapping that corrupts cursor-positioned content). The buffer is clean because `offloadSession` clears it via the daemon's `clear-buffer` command before recycling.
+`attachPoolTerminal` fetches the PTY's current dimensions and replay buffer from the daemon, creates xterm at those exact dimensions, and writes the buffer directly. This avoids two pitfalls:
 
-`reportTerminalDims` reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash).
+1. **xterm.js reflow garbling**: Writing an 80×24 buffer into a 200×50 terminal causes xterm to reflow lines, corrupting TUI cursor positioning.
+2. **macOS SIGWINCH suppression**: macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets the same dimensions (`bcmp` check in `tty_ioctl`). If the PTY already matches the window size, relying on SIGWINCH for a redraw silently fails.
+
+`reportTerminalDims` still reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash), but it's no longer required for correctness.
 
 ## TUI reflow prevention
 
@@ -22,15 +25,9 @@ xterm.js reflow on resize treats all content as reflowable text, re-wrapping lin
 
 Shell terminals are unaffected — reflow is acceptable for normal text output.
 
-**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Write the buffer at matching dimensions (initial attach) or clear before resize (ongoing resizes).
+**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Either write the buffer at matching dimensions (initial attach) or clear before resize (ongoing resizes).
 
-## Reconnect handling
-
-When reconnecting to a session after app restart, `reconnectTerminal()` writes the PTY's saved buffer at matching dimensions. If the window has since changed size, `fitAddon.fit()` would reflow the buffer, garbling TUI content. To prevent this, entries are flagged with `_hasReconnectBuffer` — on the first resize, `setupTerminalResize` clears the buffer and lets SIGWINCH trigger a full redraw.
-
-## API-created tabs
-
-Tabs created via `cockpit-cli term open` or the `session-term-open` API are discovered by the renderer via `discoverExtraTerminals()`, which queries the daemon for all terminals belonging to the session and attaches any that aren't already tracked. The renderer is notified via the `api-term-opened` IPC event.
+**macOS-specific**: macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets the same dimensions (`bcmp` check in `tty_ioctl`). This is why `attachPoolTerminal` fetches PTY dims and writes the buffer at matching dimensions rather than skipping the buffer and relying on SIGWINCH — if the PTY already matches the window size, SIGWINCH never fires.
 
 ## Programmatic terminal access
 

@@ -2,7 +2,6 @@ import {
   showNotification,
   STATUS_CLASSES,
   escapeHtml,
-  debugLog,
 } from "./renderer-state.js";
 import { STATUS, POOL_STATUS, UPDATE_STATUS } from "./session-statuses.js";
 import { FitAddon } from "@xterm/addon-fit";
@@ -113,11 +112,7 @@ async function openSlotTerminalPopup(slot) {
           otherEntry.term.rows,
         );
       } else {
-        window.api
-          .ptyDetach(slot.termId)
-          .catch((e) =>
-            debugLog("pool", `detach failed termId=${slot.termId}`, e.message),
-          );
+        window.api.ptyDetach(slot.termId).catch(() => {});
       }
       term.dispose();
     },
@@ -995,40 +990,6 @@ function renderPoolTab(health, flags, minFresh) {
   `;
 }
 
-/**
- * Wire a settings input: save on blur, save+notify on Enter, stopPropagation on keydown.
- * Optionally debounce on input events.
- */
-function wireSettingsInput(
-  overlay,
-  selector,
-  saveFn,
-  { notification, debounceMs } = {},
-) {
-  const input = overlay.querySelector(selector);
-  if (!input) return;
-  let timer;
-  const save = () => {
-    clearTimeout(timer);
-    saveFn(input);
-  };
-  input.addEventListener("blur", save);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      save();
-      if (notification) showNotification(notification);
-    }
-    e.stopPropagation();
-  });
-  if (debounceMs) {
-    input.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(save, debounceMs);
-    });
-  }
-}
-
 function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
   // Poll for health updates while pool tab is active
   poolSettingsInterval = setInterval(async () => {
@@ -1071,25 +1032,49 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
     });
   }
 
-  // Flags input — save on blur, Enter, or after typing stops
-  wireSettingsInput(
-    overlay,
-    ".pool-flags-input",
-    (input) => window.api.poolSetFlags(input.value),
-    { notification: "Session flags saved", debounceMs: 1000 },
-  );
+  // Flags input — save on blur or Enter
+  const flagsInput = overlay.querySelector(".pool-flags-input");
+  if (flagsInput) {
+    let flagsSaveTimeout = null;
+    const saveFlags = () => {
+      clearTimeout(flagsSaveTimeout);
+      window.api.poolSetFlags(flagsInput.value);
+    };
+    flagsInput.addEventListener("blur", saveFlags);
+    flagsInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveFlags();
+        showNotification("Session flags saved");
+      }
+      // Stop propagation so keyboard nav doesn't interfere with typing
+      e.stopPropagation();
+    });
+    // Also auto-save after typing stops
+    flagsInput.addEventListener("input", () => {
+      clearTimeout(flagsSaveTimeout);
+      flagsSaveTimeout = setTimeout(saveFlags, 1000);
+    });
+  }
 
-  // Min fresh slots input — save on blur or Enter
-  wireSettingsInput(
-    overlay,
-    ".pool-min-fresh-input",
-    (input) => {
-      const val = parseInt(input.value, 10);
+  // Min fresh slots input — save on change
+  const minFreshInput = overlay.querySelector(".pool-min-fresh-input");
+  if (minFreshInput) {
+    const saveMinFresh = () => {
+      const val = parseInt(minFreshInput.value, 10);
       if (isNaN(val) || val < 0 || val > 10) return;
       window.api.poolSetMinFresh(val);
-    },
-    { notification: "Min fresh slots saved" },
-  );
+    };
+    minFreshInput.addEventListener("blur", saveMinFresh);
+    minFreshInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveMinFresh();
+        showNotification("Min fresh slots saved");
+      }
+      e.stopPropagation();
+    });
+  }
 
   // Init button
   const initBtn = overlay.querySelector(".pool-init-btn");

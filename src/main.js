@@ -124,7 +124,7 @@ function createWindow() {
 
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.key === "Escape" && !input.meta && !input.control && !input.alt) {
-      if (!dialogOpen) mainWindow.webContents.send("focus-terminal");
+      mainWindow.webContents.send("focus-terminal");
       return;
     }
 
@@ -301,11 +301,6 @@ function buildMenu() {
           accelerator: accel("archive-current-session"),
           click: () => send("archive-current-session"),
         },
-        {
-          label: "Resume Session",
-          accelerator: accel("resume-session"),
-          click: () => send("resume-session"),
-        },
         { type: "separator" },
         {
           label: "Search Sessions",
@@ -379,9 +374,11 @@ let ownsApiSocket = false;
 app.whenReady().then(async () => {
   debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
 
-  // Read app version from package.json (plugin.json has the plugin version)
-  const packageJson = readJsonSync(path.join(__dirname, "..", "package.json"));
-  const cachedAppVersion = packageJson?.version || PLUGIN_VERSION.UNKNOWN;
+  // Read app version once from plugin.json
+  const pluginJson = readJsonSync(
+    path.join(__dirname, "..", ".claude-plugin", "plugin.json"),
+  );
+  const cachedAppVersion = pluginJson?.version || PLUGIN_VERSION.UNKNOWN;
 
   // Start watching installed_plugins.json for version changes
   startPluginVersionWatch();
@@ -555,12 +552,7 @@ app.whenReady().then(async () => {
 
   // Poll fresh terminal buffers for input detection (ground truth)
   setInterval(
-    () =>
-      sessionDiscovery
-        .pollTerminalInput()
-        .catch((err) =>
-          debugLog("main", "pollTerminalInput failed", err.message),
-        ),
+    () => sessionDiscovery.pollTerminalInput().catch(() => {}),
     10_000,
   );
 
@@ -659,7 +651,6 @@ app.whenReady().then(async () => {
   });
   // --- Layout persistence ---
   ipcMain.handle("save-layout", (_e, sessionId, layout) => {
-    poolManager.validateSessionId(sessionId);
     try {
       secureMkdirSync(LAYOUTS_DIR);
       const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
@@ -668,12 +659,10 @@ app.whenReady().then(async () => {
       /* best-effort — layout save failure is non-fatal */
     }
   });
-  ipcMain.handle("load-layout", (_e, sessionId) => {
-    poolManager.validateSessionId(sessionId);
-    return readJsonSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));
-  });
+  ipcMain.handle("load-layout", (_e, sessionId) =>
+    readJsonSync(path.join(LAYOUTS_DIR, `${sessionId}.json`)),
+  );
   ipcMain.handle("delete-layout", (_e, sessionId) => {
-    poolManager.validateSessionId(sessionId);
     try {
       fs.unlinkSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));
     } catch {

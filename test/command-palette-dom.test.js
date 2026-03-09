@@ -40,22 +40,18 @@ describe("Command palette HTML", () => {
 });
 
 describe("Command palette CSS", () => {
-  it("palette uses shared overlay-picker class", () => {
-    expect(htmlSource).toContain('class="overlay-picker"');
-  });
-
-  it("overlay picker is hidden by default (display: none)", () => {
-    expect(cssSource).toContain(".overlay-picker {");
+  it("palette is hidden by default (display: none)", () => {
+    expect(cssSource).toContain("#command-palette {");
     expect(cssSource).toContain("display: none;");
   });
 
-  it("overlay picker shows when .visible class applied", () => {
-    expect(cssSource).toContain(".overlay-picker.visible {");
+  it("palette shows when .visible class applied", () => {
+    expect(cssSource).toContain("#command-palette.visible {");
     expect(cssSource).toContain("display: flex;");
   });
 
   it("has styling for selected items", () => {
-    expect(cssSource).toContain(".overlay-picker-item.selected");
+    expect(cssSource).toContain(".command-palette-item.selected");
   });
 
   it("has z-index for overlay", () => {

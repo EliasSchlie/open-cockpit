@@ -85,16 +85,12 @@ export function setupTerminalResize(entry) {
       // buffer before resizing so there's nothing to reflow. The subsequent
       // ptyResize sends SIGWINCH, which triggers Claude's full redraw at the
       // correct dimensions.
-      //
-      // Also clear on reconnect: if a buffer was written at the PTY's saved
-      // dimensions but the window has since changed size, reflow would garble
-      // the replayed content. Clear once and let SIGWINCH trigger a redraw.
-      const dimsChanging =
-        proposed.cols !== prevCols || proposed.rows !== prevRows;
-      if (dimsChanging && (entry.isPoolTui || entry._hasReconnectBuffer)) {
+      if (
+        entry.isPoolTui &&
+        (proposed.cols !== prevCols || proposed.rows !== prevRows)
+      ) {
         entry.term.clear();
         entry.term.write("\x1b[2J\x1b[H");
-        delete entry._hasReconnectBuffer;
       }
       entry.fitAddon.fit();
       const { cols, rows } = entry.term;

@@ -6,14 +6,11 @@ import {
   TAB_EDITOR,
   TAB_SNAPSHOT,
 } from "./dock-helpers.js";
-import { createPickerOverlay } from "./picker-overlay.js";
 
 // --- Cross-module dependencies (set via initCommandPalette) ---
 let _actions = {};
 let shortcutConfig = {};
 let COMMANDS = [];
-let filteredCommands = [];
-let picker;
 
 export function initCommandPalette(actions) {
   _actions = actions;
@@ -103,12 +100,6 @@ export function initCommandPalette(actions) {
       label: "Archive Current Session",
       shortcutAction: "archive-current-session",
       action: () => _actions.archiveCurrentSession(),
-    },
-    {
-      id: "resume-session",
-      label: "Resume Session",
-      shortcutAction: "resume-session",
-      action: () => _actions.resumeCurrentSession(),
     },
     {
       id: "toggle-sidebar",
@@ -234,25 +225,49 @@ export function initCommandPalette(actions) {
     COMMANDS.push({
       id: `tab-${i + 1}`,
       label: `Switch to Tab ${i + 1}`,
-      shortcut: `\u2318${i + 1}`,
+      shortcut: `⌘${i + 1}`,
       action: () => {
         if (i < state.terminals.length) _actions.switchToTerminal(i);
       },
     });
   }
 
-  // Create picker overlay
-  picker = createPickerOverlay({
-    overlayEl: dom.commandPalette,
-    inputEl: dom.commandPaletteInput,
-    listEl: dom.commandPaletteList,
-    onInput: (query) => renderPaletteList(query),
-    onSelect: (index) => {
-      filteredCommands[index].action();
-    },
-    onOpen: () => renderPaletteList(""),
-    onClose: () => _actions.focusTerminal(),
-    getItemCount: () => filteredCommands.length,
+  // Wire palette input events
+  dom.commandPaletteInput.addEventListener("input", () => {
+    paletteSelectedIndex = 0;
+    renderPaletteList(dom.commandPaletteInput.value);
+  });
+
+  dom.commandPaletteInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeCommandPalette();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      updatePaletteSelection(
+        Math.min(paletteSelectedIndex + 1, filteredCommands.length - 1),
+      );
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      updatePaletteSelection(Math.max(paletteSelectedIndex - 1, 0));
+      return;
+    }
+    if (e.key === "Enter" && filteredCommands.length > 0) {
+      e.preventDefault();
+      const cmd = filteredCommands[paletteSelectedIndex];
+      closeCommandPalette();
+      cmd.action();
+      return;
+    }
+  });
+
+  // Click outside palette to close
+  dom.commandPalette.addEventListener("click", (e) => {
+    if (e.target === dom.commandPalette) closeCommandPalette();
   });
 }
 
@@ -261,17 +276,17 @@ export function initCommandPalette(actions) {
 export function formatShortcutDisplay(accel) {
   if (!accel) return "";
   return accel
-    .replace(/CmdOrCtrl\+/gi, "\u2318")
-    .replace(/Cmd\+/gi, "\u2318")
-    .replace(/Ctrl\+/gi, "\u2303")
-    .replace(/Shift\+/gi, "\u21E7")
-    .replace(/Alt\+/gi, "\u2325")
+    .replace(/CmdOrCtrl\+/gi, "⌘")
+    .replace(/Cmd\+/gi, "⌘")
+    .replace(/Ctrl\+/gi, "⌃")
+    .replace(/Shift\+/gi, "⇧")
+    .replace(/Alt\+/gi, "⌥")
     .replace(/\+/g, "")
-    .replace(/Tab/gi, "\u21E5")
-    .replace(/Up/gi, "\u2191")
-    .replace(/Down/gi, "\u2193")
-    .replace(/Left/gi, "\u2190")
-    .replace(/Right/gi, "\u2192");
+    .replace(/Tab/gi, "⇥")
+    .replace(/Up/gi, "↑")
+    .replace(/Down/gi, "↓")
+    .replace(/Left/gi, "←")
+    .replace(/Right/gi, "→");
 }
 
 export function setShortcutConfig(config) {
@@ -332,10 +347,31 @@ function splitFocusedTab(direction) {
   state.dock.moveTabToSplit(focusedTabId, direction);
 }
 
-// --- Palette UI ---
+// --- Palette state ---
+let paletteSelectedIndex = 0;
+let filteredCommands = [];
 
 export function toggleCommandPalette() {
-  picker.toggle();
+  if (dom.commandPalette.classList.contains("visible")) {
+    closeCommandPalette();
+  } else {
+    openCommandPalette();
+  }
+}
+
+function openCommandPalette() {
+  dom.commandPalette.classList.add("visible");
+  dom.commandPaletteInput.value = "";
+  paletteSelectedIndex = 0;
+  renderPaletteList("");
+  dom.commandPaletteInput.focus();
+}
+
+function closeCommandPalette() {
+  dom.commandPalette.classList.remove("visible");
+  dom.commandPaletteInput.value = "";
+  // Return focus to terminal
+  _actions.focusTerminal();
 }
 
 // Get display shortcut for a command (dynamic from config)
@@ -354,17 +390,35 @@ function renderPaletteList(query) {
       )
     : COMMANDS.filter((c) => !c.id.startsWith("tab-")); // Hide tab-N from unfiltered list
 
-  const clamped = picker.clampSelection();
+  paletteSelectedIndex = Math.min(
+    paletteSelectedIndex,
+    Math.max(0, filteredCommands.length - 1),
+  );
 
   dom.commandPaletteList.innerHTML = "";
   filteredCommands.forEach((cmd, i) => {
     const item = document.createElement("div");
-    item.className = `overlay-picker-item command-palette-item${i === clamped ? " selected" : ""}`;
+    item.className = `command-palette-item${i === paletteSelectedIndex ? " selected" : ""}`;
     const shortcut = getCommandShortcut(cmd);
     item.innerHTML = `<span class="command-palette-label">${cmd.label}</span><span class="command-palette-shortcut">${shortcut}</span>`;
-    item.addEventListener("mouseenter", () => picker.updateSelection(i));
+    item.addEventListener("click", () => {
+      closeCommandPalette();
+      cmd.action();
+    });
+    item.addEventListener("mouseenter", () => updatePaletteSelection(i));
     dom.commandPaletteList.appendChild(item);
   });
+}
+
+function updatePaletteSelection(newIndex) {
+  const items = dom.commandPaletteList.children;
+  if (items[paletteSelectedIndex])
+    items[paletteSelectedIndex].classList.remove("selected");
+  paletteSelectedIndex = newIndex;
+  if (items[paletteSelectedIndex]) {
+    items[paletteSelectedIndex].classList.add("selected");
+    items[paletteSelectedIndex].scrollIntoView({ block: "nearest" });
+  }
 }
 
 export { COMMANDS, cyclePane, focusAdjacentPane, splitFocusedTab };

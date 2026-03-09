@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
@@ -7,12 +6,7 @@ const {
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
 } = require("./pool");
-const {
-  STATUS,
-  POOL_STATUS,
-  INITIATOR,
-  sessionToPoolStatus,
-} = require("./session-statuses");
+const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 const { IDLE_SIGNALS_DIR } = require("./paths");
 const { secureWriteFileSync } = require("./secure-fs");
 const {
@@ -57,7 +51,6 @@ const {
   writeIntention,
   getCachedClaudePath,
   acceptTrustPrompt,
-  getTerminalDims,
 } = require("./pool-manager");
 
 let _getMainWindow = () => null;
@@ -121,7 +114,11 @@ async function getEffectiveSlotStatus(slot) {
   const sessions = await getSessions();
   const session = sessions.find((s) => s.sessionId === slot.sessionId);
   if (!session) return slot.status;
-  return sessionToPoolStatus(session.status) ?? slot.status;
+  if (session.status === STATUS.IDLE) return POOL_STATUS.IDLE;
+  if (session.status === STATUS.PROCESSING) return POOL_STATUS.BUSY;
+  if (session.status === STATUS.FRESH) return POOL_STATUS.FRESH;
+  if (session.status === STATUS.TYPING) return POOL_STATUS.TYPING;
+  return slot.status;
 }
 
 function waitForSessionIdle(sessionId, timeoutMs = 300000) {
@@ -176,16 +173,13 @@ const sharedHandlers = {
     validateSessionId(sessionId);
     return writeIntention(sessionId, content);
   },
-  "pty-spawn": async ({ cwd, cmd, args, sessionId, cols, rows }) => {
-    // Use renderer-provided dims, fall back to last-known terminal dims
-    const dims = cols && rows ? { cols, rows } : getTerminalDims() || {};
+  "pty-spawn": async ({ cwd, cmd, args, sessionId }) => {
     const resp = await daemonRequest({
       type: "spawn",
       cwd,
       cmd,
       args,
       sessionId,
-      ...dims,
     });
     return { termId: resp.termId, pid: resp.pid };
   },
@@ -235,14 +229,12 @@ const sharedHandlers = {
     if (resolvedCwd.startsWith("~")) {
       resolvedCwd = path.join(os.homedir(), resolvedCwd.slice(1));
     }
-    const dims = getTerminalDims() || {};
     const resp = await daemonRequest({
       type: "spawn",
       cwd: resolvedCwd,
       cmd: claudePath,
       args,
       env: { OPEN_COCKPIT_CUSTOM: "1" },
-      ...dims,
     });
     // Accept trust prompt in background (non-blocking)
     acceptTrustPrompt(resp.termId);
@@ -596,12 +588,10 @@ function buildApiHandlers() {
       const existing = await getSessionTerminals(msg.sessionId);
       if (existing.length > 0) cwd = existing[0].cwd;
     }
-    const dims = getTerminalDims() || {};
     const resp = await daemonRequest({
       type: "spawn",
       cwd: cwd || os.homedir(),
       sessionId: msg.sessionId,
-      ...dims,
     });
     const terminals = await getSessionTerminals(msg.sessionId);
     const newTab = terminals.find((t) => t.termId === resp.termId);
@@ -629,46 +619,39 @@ function buildApiHandlers() {
     const tab = terminals[msg.tabIndex];
     if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
     if (tab.isTui) throw new Error("Cannot run commands in the Claude TUI tab");
-    const marker = `__COCKPIT_${crypto.randomBytes(8).toString("hex")}__`;
-    const startMarker = `START_${marker}`;
-    const endMarker = `END_${marker}`;
-    const wrapped = `echo ${startMarker}; ${msg.command}; echo ${endMarker}`;
-
-    const extractOutput = (buf) => {
-      const clean = stripAnsi(buf);
-      const startIdx = clean.lastIndexOf(startMarker);
-      if (startIdx < 0) return null;
-      const endIdx = clean.indexOf(endMarker, startIdx);
-      const raw = clean.slice(
-        startIdx + startMarker.length,
-        endIdx >= 0 ? endIdx : undefined,
-      );
-      return { output: raw.trim(), complete: endIdx >= 0 };
-    };
-
+    const beforeBuffer = tab.buffer;
     daemonSendSafe({
       type: "write",
       termId: tab.termId,
-      data: wrapped + "\r",
+      data: msg.command + "\r",
     });
+    const promptRe = /[\$\u276F%#>] *$/;
     const deadline = Date.now() + timeoutMs;
     await new Promise((r) => setTimeout(r, 300));
     while (Date.now() < deadline) {
       const buf = await readTerminalBuffer(tab.termId);
-      const result = extractOutput(buf);
-      if (result?.complete) {
-        return {
-          type: "output",
-          output: result.output,
-          termId: tab.termId,
-        };
+      if (buf.length > beforeBuffer.length) {
+        const newContent = buf.slice(beforeBuffer.length);
+        const clean = stripAnsi(newContent);
+        const lines = clean.split("\n").filter((l) => l.trim());
+        if (lines.length > 1) {
+          const lastLine = lines[lines.length - 1].trimEnd();
+          if (promptRe.test(lastLine)) {
+            const outputLines = lines.slice(1, -1);
+            return {
+              type: "output",
+              output: outputLines.join("\n"),
+              termId: tab.termId,
+            };
+          }
+        }
       }
       await new Promise((r) => setTimeout(r, 200));
     }
     const finalBuf = await readTerminalBuffer(tab.termId);
-    const result = extractOutput(finalBuf);
+    const delta = finalBuf.slice(beforeBuffer.length);
     throw new Error(
-      `Command timed out after ${timeoutMs}ms. Partial output: ${result?.output || ""}`,
+      `Command timed out after ${timeoutMs}ms. Partial output: ${stripAnsi(delta).trim()}`,
     );
   };
 

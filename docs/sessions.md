@@ -18,14 +18,13 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 - **dead** — Claude process exited unexpectedly
 - **archived** — stored session (meta.json `archived: true`), shown in Archive section, resumable
 
-## Idle detection
+## Idle detection invariants
 
-See [idle-signals.md](idle-signals.md) for the full lifecycle, actors, `.pending` mechanism, stale fallback, activation tracking, and failure modes.
-
-Key invariants:
-- **Idle signal = idle.** The app trusts the signal file directly — no mtime/size cross-checks.
-- **No false positives.** Premature "idle" is worse than delayed — triggers notifications.
-- **Activation tracking** prevents fresh/typing misclassification after `/resume` or `/clear`.
+- **Idle signal = idle.** The app trusts the signal file directly — no mtime/size cross-checks against the JSONL transcript.
+- **Why:** Local commands (`/model`, `/help`, etc.) write to the JSONL without triggering hooks, which would cause false "processing" if we compared transcript mtime with signal mtime.
+- **Safety:** `UserPromptSubmit` always clears the signal before processing begins. Stop-hook re-prompts happen within an already-cleared cycle, so no stale signal persists during processing.
+- **No false idle positives.** The app may trigger notifications on idle transitions — a premature "idle" is worse than a delayed one.
+- **Activation tracking:** Sessions with a non-`pool-init` idle signal trigger are marked "activated" in an in-memory Set. Activated sessions always classify as `idle`/`processing`, never `fresh`/`typing` — prevents misclassification when transcript checks fail (e.g. after `/resume` or `/clear`).
 
 ## Archiving
 
@@ -63,16 +62,13 @@ Pool slots can be pinned to prevent LRU offloading:
 
 ## Origin tags
 
-Sessions in the sidebar display an origin tag (constants defined in `src/session-statuses.js` as `ORIGIN`):
+Sessions in the sidebar display an origin tag:
+- **pool** (green) — spawned by the pool manager (`OPEN_COCKPIT_POOL=1` env var)
+- **custom** (cyan) — standalone sessions spawned via Cmd+Shift+N (`OPEN_COCKPIT_CUSTOM=1` env var)
+- **sub-claude** (purple) — spawned by sub-claude (`SUB_CLAUDE=1` env var)
+- **ext** (gray) — external sessions (no known env markers)
 
-| Origin | Color | Env var | Description |
-|--------|-------|---------|-------------|
-| `pool` | green | `OPEN_COCKPIT_POOL=1` | Spawned by pool manager |
-| `custom` | cyan | `OPEN_COCKPIT_CUSTOM=1` | Standalone via Cmd+Shift+N |
-| `sub-claude` | purple | `SUB_CLAUDE=1` | Spawned by sub-claude plugin |
-| `ext` | gray | *(none)* | External sessions |
-
-Detection logic is in `src/parse-origins.js` — reads process environment via `ps eww <PID>`. Results are cached by PID in `src/session-discovery.js`.
+Detection uses `ps eww <PID>` to read process environment. Results are cached by PID.
 
 ## Custom sessions
 

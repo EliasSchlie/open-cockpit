@@ -10,12 +10,7 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import {
-  STATUS,
-  ORIGIN,
-  isInactiveStatus,
-  isPoolOrigin,
-} from "./session-statuses.js";
+import { STATUS } from "./session-statuses.js";
 import { disposeTerminalEntry } from "./dock-helpers.js";
 import { createEditor, setOnDocChange } from "./editor.js";
 import { createOverlayDialog } from "./overlay-dialog.js";
@@ -56,7 +51,6 @@ import {
   dockRegisterTerminal,
   cycleTabInFocusedLeaf,
   applyLayoutOrDefault,
-  discoverExtraTerminals,
 } from "./terminal-manager.js";
 import { initPoolUi, showSettings, updatePoolHealthBadge } from "./pool-ui.js";
 import { openSessionInfo } from "./stats-ui.js";
@@ -70,7 +64,6 @@ import {
   splitFocusedTab,
 } from "./command-palette.js";
 import { initSessionSearch, toggleSessionSearch } from "./session-search.js";
-import { createPickerOverlay } from "./picker-overlay.js";
 
 // --- Populate DOM refs ---
 dom.sessionList = document.getElementById("session-list");
@@ -86,9 +79,6 @@ dom.commandPaletteList = document.getElementById("command-palette-list");
 dom.sessionSearch = document.getElementById("session-search");
 dom.sessionSearchInput = document.getElementById("session-search-input");
 dom.sessionSearchList = document.getElementById("session-search-list");
-dom.setupScriptPicker = document.getElementById("setup-script-picker");
-dom.setupScriptInput = document.getElementById("setup-script-input");
-dom.setupScriptList = document.getElementById("setup-script-list");
 
 // --- Focus management ---
 
@@ -146,16 +136,19 @@ async function selectSession(session) {
     dom.sessionView.classList.remove("colored");
   }
 
-  // Inactive sessions: show snapshot inline instead of a terminal
-  if (isInactiveStatus(session.status)) {
+  // Offloaded/archived: show snapshot inline instead of a terminal
+  if (
+    session.status === STATUS.OFFLOADED ||
+    session.status === STATUS.ARCHIVED
+  ) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
     initDockLayout();
 
-    // Resolve the daemon terminal ID for pool/custom/sub-agent sessions
+    // Resolve the daemon terminal ID for pool/custom sessions
     let daemonTermId = null;
-    if (isPoolOrigin(session.origin)) {
+    if (session.origin === "pool") {
       const pool = await window.api.poolRead();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at poolRead`);
@@ -163,7 +156,7 @@ async function selectSession(session) {
       }
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
       daemonTermId = slot?.termId || null;
-    } else if (session.origin === ORIGIN.CUSTOM) {
+    } else if (session.origin === "custom") {
       const allPtys = await window.api.ptyList();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at customPtyList`);
@@ -196,22 +189,7 @@ async function selectSession(session) {
           return;
         }
       }
-
-      // Discover and attach any extra shell terminals (e.g. opened via API)
-      try {
-        await discoverExtraTerminals(session.sessionId, daemonTermId);
-        if (gen !== state.sessionGeneration) {
-          debugLog("session", `race abort gen=${gen} at extraPtyList`);
-          destroySessionTerminals(session.sessionId);
-          return;
-        }
-      } catch (err) {
-        debugLog("session", `extra terminal discovery failed: ${err.message}`);
-      }
-    } else if (
-      isPoolOrigin(session.origin) ||
-      session.origin === ORIGIN.CUSTOM
-    ) {
+    } else if (session.origin === "pool" || session.origin === "custom") {
       // Daemon session but no terminal found — fallback to shell
       await spawnTerminal(session.cwd);
       if (gen !== state.sessionGeneration) {
@@ -250,7 +228,7 @@ async function selectSession(session) {
 
 function isFreshPoolSlot(s) {
   return (
-    s.origin === ORIGIN.POOL &&
+    s.origin === "pool" &&
     (s.status === STATUS.FRESH || s.poolStatus === STATUS.FRESH)
   );
 }
@@ -265,14 +243,14 @@ async function acquireFreshSlot() {
   if (freshSession) return freshSession;
 
   // No pool sessions at all — nothing to acquire from
-  if (!sessions.some((s) => s.origin === ORIGIN.POOL)) return null;
+  if (!sessions.some((s) => s.origin === "pool")) return null;
 
   // 2. Offload the longest-unused idle session (LRU)
   const idleSessions = sessions
     .filter(
       (s) =>
         s.status === STATUS.IDLE &&
-        s.origin === ORIGIN.POOL &&
+        s.origin === "pool" &&
         s.sessionId !== state.currentSessionId,
     )
     .sort((a, b) => a.idleTs - b.idleTs);
@@ -341,9 +319,6 @@ async function resumeOffloadedSession(session) {
 
   // Transition: cache previous session's terminals, set up fresh dock, attach terminal
   hideCurrentTerminals();
-  // Clear currentSessionId so attachPoolTerminal → syncSessionCache() doesn't
-  // cache the resumed terminal under the previously-viewed session's ID.
-  state.currentSessionId = null;
   initDockLayout();
 
   try {
@@ -373,11 +348,7 @@ async function resumeOffloadedSession(session) {
     if (oldCached) {
       for (const entry of oldCached.terminals) {
         if (activeTermIds.has(entry.termId)) continue;
-        window.api
-          .ptyDetach(entry.termId)
-          .catch((e) =>
-            debugLog("term", `detach failed termId=${entry.termId}`, e.message),
-          );
+        window.api.ptyDetach(entry.termId).catch(() => {});
         disposeTerminalEntry(entry, state.dock);
       }
     }
@@ -385,7 +356,25 @@ async function resumeOffloadedSession(session) {
 
     // Re-attach orphaned extra terminals from daemon (re-tagged by main.js)
     try {
-      await discoverExtraTerminals(newSession.sessionId, result.termId);
+      const allPtys = await window.api.ptyList();
+      const extraPtys = allPtys.filter(
+        (p) =>
+          p.sessionId === newSession.sessionId &&
+          !p.exited &&
+          p.termId !== result.termId,
+      );
+      for (const p of extraPtys) {
+        const entry = await reconnectTerminal(p);
+        state.terminals.push(entry);
+        dockRegisterTerminal(entry);
+        if (state.dock) {
+          const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
+          const leaf =
+            (tuiTab && state.dock.getTabLeafId(tuiTab)) ||
+            state.dock.getFirstLeafId();
+          state.dock.addTab(entry.dockTabId, leaf);
+        }
+      }
     } catch (err) {
       debugLog("pool", `re-attach orphaned terminals failed: ${err.message}`);
     }
@@ -497,11 +486,11 @@ function switchSession(direction) {
   const ordered = buildVisualOrder(maps);
   const navigable = ordered.filter(
     (s) =>
-      isInactiveStatus(s.status) ||
       (s.alive &&
         (s.status === STATUS.IDLE ||
           s.status === STATUS.PROCESSING ||
-          s.status === STATUS.TYPING)),
+          s.status === STATUS.TYPING)) ||
+      s.status === STATUS.ARCHIVED,
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
@@ -607,21 +596,9 @@ async function focusCurrentExternalTerminal() {
   const session = state.cachedSessions.find(
     (s) => s.sessionId === state.currentSessionId,
   );
-  if (!session || !session.alive || session.origin === ORIGIN.POOL) return;
+  if (!session || !session.alive || session.origin === "pool") return;
   const result = await window.api.focusExternalTerminal(session.pid);
   if (result.focused) showNotification(`Focused ${result.app}`);
-}
-
-// --- Resume current session ---
-
-async function resumeCurrentSession() {
-  if (!state.currentSessionId) return;
-  const session = state.cachedSessions.find(
-    (s) => s.sessionId === state.currentSessionId,
-  );
-  if (!session) return;
-  if (!isInactiveStatus(session.status)) return;
-  await resumeOffloadedSession(session);
 }
 
 // --- Archive current session (then jump to recent idle) ---
@@ -649,30 +626,17 @@ async function archiveCurrentSession() {
     selectSession(idle);
   }
 
-  if (session.origin === ORIGIN.CUSTOM && session.alive) {
+  if (session.origin === "custom" && session.alive) {
     // Custom session: kill the daemon PTY (fully kill, not offload)
     const allPtys = await window.api.ptyList();
     const pty = allPtys.find(
       (p) => p.sessionId === session.sessionId && !p.exited,
     );
-    if (pty)
-      window.api
-        .ptyKill(pty.termId)
-        .catch((e) =>
-          debugLog("term", `kill failed termId=${pty.termId}`, e.message),
-        );
+    if (pty) window.api.ptyKill(pty.termId).catch(() => {});
     destroySessionTerminals(session.sessionId);
-  } else if (session.origin !== ORIGIN.POOL && session.alive && session.pid) {
+  } else if (session.origin !== "pool" && session.alive && session.pid) {
     // External/sub-claude session: close external terminal
-    window.api
-      .closeExternalTerminal(session.pid)
-      .catch((e) =>
-        debugLog(
-          "term",
-          `closeExternalTerminal failed pid=${session.pid}`,
-          e.message,
-        ),
-      );
+    window.api.closeExternalTerminal(session.pid).catch(() => {});
   }
 
   // Archive in background (with child check + confirmation if needed)
@@ -682,61 +646,90 @@ async function archiveCurrentSession() {
 
 // --- Setup script picker ---
 
-let setupScriptResolve = null;
-let setupScriptOptions = [];
-
-const setupScriptPicker = createPickerOverlay({
-  overlayEl: dom.setupScriptPicker,
-  inputEl: dom.setupScriptInput,
-  listEl: dom.setupScriptList,
-  itemClass: "overlay-picker-item",
-  onInput(query) {
-    renderSetupScriptItems(query);
-  },
-  onSelect(index) {
-    if (!setupScriptResolve) return;
-    const filtered = filterSetupScriptOptions(dom.setupScriptInput.value);
-    const option = filtered[index];
-    setupScriptResolve(option === "None" ? null : option);
-    setupScriptResolve = null;
-  },
-  onOpen() {},
-  onClose() {
-    if (setupScriptResolve) {
-      setupScriptResolve(null);
-      setupScriptResolve = null;
-    }
-  },
-  getItemCount() {
-    return dom.setupScriptList.querySelectorAll(".overlay-picker-item").length;
-  },
-});
-
-function filterSetupScriptOptions(query) {
-  if (!query) return setupScriptOptions;
-  const q = query.toLowerCase();
-  return setupScriptOptions.filter((o) => o.toLowerCase().includes(q));
-}
-
-function renderSetupScriptItems(query) {
-  const filtered = filterSetupScriptOptions(query);
-  dom.setupScriptList.innerHTML = "";
-  for (let i = 0; i < filtered.length; i++) {
-    const item = document.createElement("div");
-    item.className = "overlay-picker-item";
-    if (i === 0) item.classList.add("selected");
-    item.textContent = filtered[i];
-    dom.setupScriptList.appendChild(item);
-  }
-  setupScriptPicker.clampSelection();
-}
-
 function showSetupScriptPicker(scripts) {
   return new Promise((resolve) => {
-    setupScriptOptions = ["None", ...scripts];
-    setupScriptResolve = resolve;
-    renderSetupScriptItems("");
-    setupScriptPicker.open();
+    const overlay = document.createElement("div");
+    overlay.className = "setup-script-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "setup-script-dialog";
+
+    const title = document.createElement("div");
+    title.className = "setup-script-title";
+    title.textContent = "Setup Script";
+    dialog.appendChild(title);
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "setup-script-subtitle";
+    subtitle.textContent = "Run a script in the new session";
+    dialog.appendChild(subtitle);
+
+    const list = document.createElement("div");
+    list.className = "setup-script-list";
+
+    let selectedIndex = 0;
+    const items = [];
+
+    // "None" option first
+    const allOptions = ["None", ...scripts];
+
+    for (let i = 0; i < allOptions.length; i++) {
+      const item = document.createElement("div");
+      item.className = "setup-script-item";
+      if (i === 0) item.classList.add("selected");
+      item.textContent = allOptions[i];
+      item.addEventListener("click", () => {
+        cleanup();
+        resolve(i === 0 ? null : allOptions[i]);
+      });
+      list.appendChild(item);
+      items.push(item);
+    }
+
+    dialog.appendChild(list);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function updateSelection() {
+      items.forEach((el, i) =>
+        el.classList.toggle("selected", i === selectedIndex),
+      );
+      items[selectedIndex].scrollIntoView({ block: "nearest" });
+    }
+
+    function cleanup() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+    }
+
+    function onKey(e) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % allOptions.length;
+        updateSelection();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        selectedIndex =
+          (selectedIndex - 1 + allOptions.length) % allOptions.length;
+        updateSelection();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        cleanup();
+        resolve(selectedIndex === 0 ? null : allOptions[selectedIndex]);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup();
+        resolve(null);
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(null);
+      }
+    });
   });
 }
 
@@ -783,7 +776,6 @@ initCommandPalette({
   cycleTabInFocusedLeaf,
   jumpToRecentIdle,
   archiveCurrentSession,
-  resumeCurrentSession,
   toggleSidebar,
   togglePaneFocus,
   focusEditor,
@@ -1040,7 +1032,6 @@ window.api.onSplitDown(() => splitFocusedTab("down"));
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
-window.api.onResumeSession(resumeCurrentSession);
 window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });
@@ -1113,9 +1104,7 @@ loadDirColors().then(async () => {
   try {
     const shortcuts = await window.api.getShortcuts();
     setShortcutConfig(shortcuts);
-  } catch (err) {
-    debugLog("startup", "getShortcuts failed", err.message);
-  }
+  } catch {}
 
   await reconnectAllPtys();
   const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh

@@ -29,14 +29,8 @@ const {
   findSlotByIndex: findSlotByIndexInPool,
   resolveSlot: resolveSlotInPool,
   findOffloadTarget,
-  findOffloadTargets,
 } = require("./pool");
-const {
-  STATUS,
-  POOL_STATUS,
-  INITIATOR,
-  ORIGIN,
-} = require("./session-statuses");
+const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 const {
   daemonSend,
   daemonSendSafe,
@@ -84,10 +78,6 @@ let _terminalDims = null;
 
 function setTerminalDims(cols, rows) {
   _terminalDims = { cols, rows };
-}
-
-function getTerminalDims() {
-  return _terminalDims;
 }
 
 const { withPoolLock } = createPoolLock(POOL_FILE);
@@ -171,10 +161,6 @@ function createFreshIdleSignal(pid, sessionId) {
       trigger: "pool-init",
     }),
   );
-  _debugLog(
-    "main",
-    `Created pool-init idle signal for PID ${pid} (session ${sessionId})`,
-  );
 }
 
 // Sort: recent (idle+offloaded, limit 10) → processing → fresh/dead hidden
@@ -184,7 +170,7 @@ async function offloadSession(
   sessionId,
   termId,
   claudeSessionId,
-  { cwd, gitRoot, pid, origin } = {},
+  { cwd, gitRoot, pid } = {},
 ) {
   // Get terminal buffer and render to readable text
   let snapshot = null;
@@ -205,7 +191,7 @@ async function offloadSession(
     gitRoot,
     claudeSessionId,
     snapshot,
-    origin: origin || ORIGIN.POOL,
+    origin: "pool",
   });
   // Clean up terminal input cache for the offloaded slot
   const { terminalHasInputCache } = getSessionDiscovery();
@@ -219,9 +205,6 @@ async function offloadSession(
       `[offload] Failed to send /clear for session ${sessionId}: ${err.message}`,
     );
   }
-  // Clear the daemon's replay buffer so the next attach doesn't replay
-  // old session content. The new session's output will build a fresh buffer.
-  daemonSendSafe({ type: "clear-buffer", termId });
 
   // 3. Remove idle signal so session re-detects as fresh after /clear
   if (pid) {
@@ -350,15 +333,6 @@ function enrichSessionsWithGraphData(sessions) {
     }
   }
   if (graphChanged) writeSessionGraph(graph);
-
-  // Override origin for sessions with a parent (sub-agents).
-  // Env-based detection assigns POOL/CUSTOM because sub-agents inherit
-  // their parent's env vars. The graph is the source of truth.
-  for (const s of sessions) {
-    if (s.parentSessionId) {
-      s.origin = ORIGIN.SUB_AGENT;
-    }
-  }
 }
 
 // Render raw PTY buffer into readable screen text using a headless terminal.
@@ -456,7 +430,7 @@ async function saveExternalClearOffload(oldSessionId, pid) {
   await writeOffloadMeta(oldSessionId, {
     cwd,
     externalClear: true,
-    origin: ORIGIN.EXT,
+    origin: "ext",
   });
 }
 
@@ -921,8 +895,6 @@ function cleanupStaleIdleSignals() {
   const sessionPids = new Set(
     fs.existsSync(SESSION_PIDS_DIR) ? fs.readdirSync(SESSION_PIDS_DIR) : [],
   );
-  let removed = 0;
-  let kept = 0;
   for (const filename of fs.readdirSync(IDLE_SIGNALS_DIR)) {
     const pid = Number(filename);
     if (isNaN(pid)) continue;
@@ -934,15 +906,11 @@ function cleanupStaleIdleSignals() {
           `[main] Removed stale idle signal for PID ${pid}` +
             (!alive ? " (dead)" : " (no session-pids entry)"),
         );
-        removed++;
       } catch {
         // ignore removal errors
       }
-    } else {
-      kept++;
     }
   }
-  _debugLog("main", `cleanupStaleIdleSignals: removed=${removed} kept=${kept}`);
 }
 
 // Reconcile pool.json with reality on startup.
@@ -1103,40 +1071,29 @@ async function executeOffload(target) {
     cwd: target.cwd,
     gitRoot: target.gitRoot,
     pid: target.pid,
-    origin: target.origin,
   });
 }
 
 // Pre-warm the pool by offloading idle sessions to maintain minFreshSlots.
 // Runs after reconcilePool on the same 30s interval.
-// Collects all offload targets in a single locked pass, then executes outside the lock.
 async function preWarmPool() {
-  const { getSessions } = getSessionDiscovery();
   const minFresh = getMinFreshSlots();
   if (minFresh === 0) return;
 
-  // Phase 1: collect all offload targets in a single lock acquisition
-  let targets;
-  try {
-    targets = await withPoolLock(async () => {
-      const pool = readPool();
-      if (!pool) return false;
-      const sessions = await getSessions();
-      enrichSessionsWithGraphData(sessions);
-      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-      return findOffloadTargets(pool, sessionMap, minFresh);
-    });
-  } catch (err) {
-    if (!err.message?.includes("No fresh or idle")) {
-      _debugLog("main", `Pre-warm check failed: ${err.message}`);
+  // May need to offload multiple sessions to reach minFresh
+  for (let i = 0; i < minFresh; i++) {
+    let target;
+    try {
+      target = await checkOffloadNeeded(minFresh);
+    } catch (err) {
+      // "No fresh or idle slots available" is expected — anything else is a bug
+      if (!err.message?.includes("No fresh or idle")) {
+        _debugLog("main", `Pre-warm check failed: ${err.message}`);
+      }
+      return;
     }
-    return;
-  }
-  if (targets === false) return; // Pool not initialized
-  if (targets.length === 0) return; // Enough fresh slots
-
-  // Phase 2: execute offloads outside the lock (each acquires its own lock internally)
-  for (const target of targets) {
+    if (target === false) return; // Pool not initialized
+    if (!target) return; // Enough fresh slots
     _debugLog(
       "main",
       `Pre-warming pool: offloading session ${target.sessionId}`,
@@ -1250,7 +1207,7 @@ async function syncPoolStatuses(sessions) {
   return withPoolLock(() => {
     const pool = readPool();
     if (!pool) return null;
-    const updated = syncStatuses(pool, sessions, _debugLog);
+    const updated = syncStatuses(pool, sessions);
     if (updated) writePool(updated);
     return updated || pool;
   });
@@ -1280,46 +1237,13 @@ async function killSlotProcess(slot) {
   }
 }
 
-// Destroy pool: archive live sessions, kill all slots, and remove pool.json
+// Destroy pool: kill all slots and remove pool.json
 async function poolDestroy() {
   return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) return;
-    const { terminalHasInputCache, getOffloadedSessions, getSessions } =
+    const { terminalHasInputCache, getOffloadedSessions } =
       getSessionDiscovery();
-
-    // Archive all live pool sessions before killing processes.
-    // We snapshot + write archive meta directly instead of using offloadSession()
-    // because offload sends /clear and tracks new slots — pointless during destroy.
-    const sessions = await getSessions();
-    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    for (const slot of pool.slots) {
-      if (!slot.sessionId) continue;
-      // Skip if already offloaded/archived
-      if (readOffloadMeta(slot.sessionId)) continue;
-      let snapshot = null;
-      try {
-        const resp = await daemonRequest({ type: "list" });
-        const pty = resp.ptys.find((p) => p.termId === slot.termId);
-        if (pty && pty.buffer) snapshot = await renderBufferToText(pty.buffer);
-      } catch (err) {
-        _debugLog(
-          "main",
-          `poolDestroy: failed to snapshot session ${slot.sessionId}:`,
-          err.message,
-        );
-      }
-      const session = sessionMap.get(slot.sessionId);
-      await writeOffloadMeta(slot.sessionId, {
-        cwd: session?.cwd,
-        gitRoot: session?.gitRoot,
-        claudeSessionId: slot.sessionId,
-        snapshot,
-        origin: "pool",
-        archived: true,
-      });
-    }
-
     for (const slot of pool.slots) {
       await killSlotProcess(slot);
       // Clean up idle-signal and session-pid files so destroyed slots
@@ -1398,25 +1322,11 @@ async function poolClean() {
   return cleaned;
 }
 
-// Serialize withFreshSlot calls so concurrent callers can't double-offload
-// the same session or race into the claim phase simultaneously.
-// Separate from withPoolLock because offloadSession acquires it internally.
-let _freshSlotQueue = Promise.resolve();
-
 // Ensure a fresh slot exists, then atomically claim and return it.
 // The claimFn receives (pool, slot) inside the lock and should perform
 // the slot-specific work (send prompt / resume command, mark busy, etc.).
 // Returns whatever claimFn returns.
-function withFreshSlot(claimFn) {
-  const p = _freshSlotQueue.then(() => _withFreshSlotInner(claimFn));
-  _freshSlotQueue = p.then(
-    () => {},
-    () => {},
-  ); // keep chain alive
-  return p;
-}
-
-async function _withFreshSlotInner(claimFn) {
+async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
   // Phase 1: check if offload is needed (inside lock)
   const needsOffload = await checkOffloadNeeded();
@@ -1480,24 +1390,6 @@ async function poolResume(sessionId) {
         skipTrustPrompt: true,
         skipFreshSignal: true,
         onResolved: async (newSessionId) => {
-          // Write an idle signal so the resumed session appears as idle/recent
-          // immediately. The Stop hook won't fire after /resume (no assistant
-          // turn), so without this the session stays stuck in "processing".
-          // Trigger "resume" is not in FRESH_TRIGGERS, so session-discovery
-          // will mark it as activated and show it as IDLE.
-          if (newSessionId) {
-            secureMkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
-            secureWriteFileSync(
-              path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
-              JSON.stringify({
-                cwd: os.homedir(),
-                session_id: newSessionId,
-                transcript: "",
-                ts: Math.floor(Date.now() / 1000),
-                trigger: "resume",
-              }),
-            );
-          }
           // Re-tag orphaned extra terminals from old session to new session
           if (newSessionId) {
             try {
@@ -1754,5 +1646,4 @@ module.exports = {
   focusExternalTerminal,
   closeExternalTerminal,
   setTerminalDims,
-  getTerminalDims,
 };

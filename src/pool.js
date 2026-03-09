@@ -4,12 +4,7 @@
  */
 const path = require("path");
 const fs = require("fs");
-const {
-  STATUS,
-  POOL_STATUS,
-  INITIATOR,
-  sessionToPoolStatus,
-} = require("./session-statuses");
+const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
 const { readJsonSync } = require("./secure-fs");
 
 /**
@@ -144,74 +139,34 @@ function computePoolHealth(pool, sessions, isProcessAlive) {
   };
 }
 
-/** How long a slot may remain STARTING before being marked ERROR. */
-const STARTING_TIMEOUT_MS = 90_000;
-
 /**
  * Sync pool slot statuses with live session data.
  * Returns updated pool (or null if no changes).
- * @param {Function} [log] — optional debug logger (tag, message)
  */
-function syncStatuses(pool, sessions, log) {
+function syncStatuses(pool, sessions) {
   if (!pool) return null;
 
   const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
   let changed = false;
 
   for (const slot of pool.slots) {
-    if (slot.status === POOL_STATUS.STARTING) {
-      // If session discovery already knows the real status, transition immediately
-      const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
-      if (session) {
-        const resolved = sessionToPoolStatus(session.status);
-        if (resolved) {
-          if (log)
-            log(
-              "main",
-              `Slot ${slot.index} STARTING→${resolved} (session ${slot.sessionId} is ${session.status})`,
-            );
-          slot.status = resolved;
-          changed = true;
-        } else {
-          // Session is dead/offloaded/archived — no point staying STARTING
-          if (log)
-            log(
-              "main",
-              `Slot ${slot.index} STARTING→error (session ${slot.sessionId} is ${session.status})`,
-            );
-          slot.status = POOL_STATUS.ERROR;
-          changed = true;
-        }
-      } else {
-        // No session yet — timeout guard so slots don't stay STARTING forever
-        const age = Date.now() - new Date(slot.createdAt || 0).getTime();
-        if (age > STARTING_TIMEOUT_MS) {
-          if (log)
-            log(
-              "main",
-              `Slot ${slot.index} STARTING timed out after ${Math.round(age / 1000)}s → ERROR (termId=${slot.termId} pid=${slot.pid})`,
-            );
-          slot.status = POOL_STATUS.ERROR;
-          changed = true;
-        }
-      }
-      continue;
-    }
-
+    if (slot.status === POOL_STATUS.STARTING) continue;
     const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
     if (!session) continue;
 
     // Allow dead slots to recover if their process came back alive
     if (slot.status === POOL_STATUS.DEAD && !session.alive) continue;
 
-    const newStatus = sessionToPoolStatus(session.status) ?? slot.status;
+    let newStatus = slot.status;
+    if (session.status === STATUS.IDLE) newStatus = POOL_STATUS.IDLE;
+    else if (session.status === STATUS.PROCESSING) newStatus = POOL_STATUS.BUSY;
+    else if (session.status === STATUS.FRESH) {
+      newStatus = POOL_STATUS.FRESH;
+    } else if (session.status === STATUS.TYPING) {
+      newStatus = POOL_STATUS.TYPING;
+    }
 
     if (newStatus !== slot.status) {
-      if (log)
-        log(
-          "main",
-          `Slot ${slot.index} ${slot.status}→${newStatus} (session ${slot.sessionId})`,
-        );
       slot.status = newStatus;
       changed = true;
     }
@@ -258,20 +213,19 @@ function resolveSlot(pool, msg) {
 }
 
 /**
- * Find up to N idle slots to offload so fresh slots become available.
- * Returns array of offload targets (may be empty if enough fresh slots exist).
- * Throws if offloads are needed but no idle slots are available.
+ * Find an idle slot to offload so a fresh slot becomes available.
+ * Returns offload info { sessionId, termId, pid, cwd, gitRoot } or null
+ * if enough fresh slots already exist. Throws if no fresh or idle slots.
  * @param {number} [minFresh=1] — minimum number of fresh slots to maintain
  */
-function findOffloadTargets(pool, sessionMap, minFresh = 1) {
+function findOffloadTarget(pool, sessionMap, minFresh = 1) {
   const freshCount = pool.slots.filter((s) => {
     // Typing slots don't count as fresh — they're protected
     if (s.status === POOL_STATUS.FRESH) return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
     return session && session.status === STATUS.FRESH;
   }).length;
-  const needed = minFresh - freshCount;
-  if (needed <= 0) return [];
+  if (freshCount >= minFresh) return null;
 
   const idleSlots = pool.slots.filter((s) => {
     if (isSlotPinned(s)) return false;
@@ -289,28 +243,15 @@ function findOffloadTargets(pool, sessionMap, minFresh = 1) {
     if (ia !== ib) return ia - ib;
     return (sa?.idleTs || 0) - (sb?.idleTs || 0);
   });
-  return idleSlots.slice(0, needed).map((slot) => {
-    const vs = sessionMap.get(slot.sessionId);
-    return {
-      sessionId: slot.sessionId,
-      termId: slot.termId,
-      pid: slot.pid,
-      cwd: vs?.cwd,
-      gitRoot: vs?.gitRoot,
-      origin: vs?.origin,
-    };
-  });
-}
-
-/**
- * Find a single idle slot to offload (convenience wrapper around findOffloadTargets).
- * Returns offload info or null if enough fresh slots exist.
- * Throws if offloads are needed but no idle slots are available.
- * @param {number} [minFresh=1] — minimum number of fresh slots to maintain
- */
-function findOffloadTarget(pool, sessionMap, minFresh = 1) {
-  const targets = findOffloadTargets(pool, sessionMap, minFresh);
-  return targets.length > 0 ? targets[0] : null;
+  const victim = idleSlots[0];
+  const vs = sessionMap.get(victim.sessionId);
+  return {
+    sessionId: victim.sessionId,
+    termId: victim.termId,
+    pid: victim.pid,
+    cwd: vs?.cwd,
+    gitRoot: vs?.gitRoot,
+  };
 }
 
 module.exports = {
@@ -322,10 +263,8 @@ module.exports = {
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,
-  STARTING_TIMEOUT_MS,
   findSlotBySessionId,
   findSlotByIndex,
   resolveSlot,
   findOffloadTarget,
-  findOffloadTargets,
 };

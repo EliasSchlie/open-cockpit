@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/idle-signal.sh clear post-tool"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/idle-signal.sh clear"
           }
         ]
       }

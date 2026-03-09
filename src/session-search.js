@@ -1,7 +1,6 @@
 // Session search: fuzzy search overlay for quickly jumping to sessions
 import { state, dom, STATUS_CLASSES, escapeHtml } from "./renderer-state.js";
-import { STATUS, ORIGIN, isInactiveStatus } from "./session-statuses.js";
-import { createPickerOverlay } from "./picker-overlay.js";
+import { STATUS } from "./session-statuses.js";
 
 // Hoisted regex for word boundary detection in fuzzy scoring
 const BOUNDARY_RE = /[\s/\-_.]/;
@@ -9,29 +8,49 @@ const BOUNDARY_RE = /[\s/\-_.]/;
 // --- Cross-module dependencies (set via initSessionSearch) ---
 let _actions = {};
 let _displayPath = (s) => s.cwd || "~";
-let filteredSessions = [];
-let picker;
 
 export function initSessionSearch(actions) {
   _actions = actions;
   if (actions.displayPath) _displayPath = actions.displayPath;
 
-  picker = createPickerOverlay({
-    overlayEl: dom.sessionSearch,
-    inputEl: dom.sessionSearchInput,
-    listEl: dom.sessionSearchList,
-    onInput: (query) => renderResults(query),
-    onSelect: (index) => {
-      _actions.selectSession(filteredSessions[index]);
-    },
-    onOpen: () => renderResults(""),
-    onClose: () => {
-      filteredSessions = [];
-      _actions.focusTerminal();
-    },
-    getItemCount: () => filteredSessions.length,
+  dom.sessionSearchInput.addEventListener("input", () => {
+    selectedIndex = 0;
+    renderResults(dom.sessionSearchInput.value);
+  });
+
+  dom.sessionSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeSessionSearch();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      updateSelection(Math.min(selectedIndex + 1, filteredSessions.length - 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      updateSelection(Math.max(selectedIndex - 1, 0));
+      return;
+    }
+    if (e.key === "Enter" && filteredSessions.length > 0) {
+      e.preventDefault();
+      const session = filteredSessions[selectedIndex];
+      closeSessionSearch();
+      _actions.selectSession(session);
+      return;
+    }
+  });
+
+  dom.sessionSearch.addEventListener("click", (e) => {
+    if (e.target === dom.sessionSearch) closeSessionSearch();
   });
 }
+
+// --- State ---
+let selectedIndex = 0;
+let filteredSessions = [];
 
 // --- Fuzzy matching ---
 
@@ -102,7 +121,28 @@ function recencyBonus(session, now) {
 // --- Open/close ---
 
 export function toggleSessionSearch() {
-  picker.toggle();
+  if (dom.sessionSearch.classList.contains("visible")) {
+    closeSessionSearch();
+  } else {
+    openSessionSearch();
+  }
+}
+
+function openSessionSearch() {
+  dom.sessionSearch.classList.add("visible");
+  dom.sessionSearchInput.value = "";
+  selectedIndex = 0;
+  renderResults("");
+  dom.sessionSearchInput.focus();
+  window.api.setDialogOpen(true);
+}
+
+function closeSessionSearch() {
+  dom.sessionSearch.classList.remove("visible");
+  dom.sessionSearchInput.value = "";
+  filteredSessions = [];
+  window.api.setDialogOpen(false);
+  _actions.focusTerminal();
 }
 
 // --- Rendering ---
@@ -129,7 +169,10 @@ function renderResults(query) {
     filteredSessions = scored.map((s) => s.session);
   }
 
-  const clamped = picker.clampSelection();
+  selectedIndex = Math.min(
+    selectedIndex,
+    Math.max(0, filteredSessions.length - 1),
+  );
 
   const list = dom.sessionSearchList;
   list.innerHTML = "";
@@ -145,7 +188,7 @@ function renderResults(query) {
   for (let i = 0; i < filteredSessions.length; i++) {
     const s = filteredSessions[i];
     const item = document.createElement("div");
-    item.className = `overlay-picker-item session-search-item${i === clamped ? " selected" : ""}`;
+    item.className = `session-search-item${i === selectedIndex ? " selected" : ""}`;
 
     const statusClass = STATUS_CLASSES[s.status] || "dead";
     const headingText = s.intentionHeading || s.intentionPreview || null;
@@ -156,11 +199,12 @@ function renderResults(query) {
     const headingClass = isPreview ? " preview" : "";
     const path = escapeHtml(_displayPath(s));
 
-    // Show origin for live sessions, status label for inactive
-    const inactive = isInactiveStatus(s.status);
-    const tagText = inactive ? s.status : s.origin || ORIGIN.EXT;
-    const safeOrigin = (s.origin || ORIGIN.EXT).replace(/[^a-z0-9-]/gi, "-");
-    const tagClass = inactive
+    // Show origin for live sessions, status label for offloaded/archived
+    const isOffloadedOrArchived =
+      s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED;
+    const tagText = isOffloadedOrArchived ? s.status : s.origin || "ext";
+    const safeOrigin = (s.origin || "ext").replace(/[^a-z0-9-]/gi, "-");
+    const tagClass = isOffloadedOrArchived
       ? `status-${statusClass}`
       : `origin-${safeOrigin}`;
 
@@ -173,7 +217,21 @@ function renderResults(query) {
       <div class="session-search-meta">${path}</div>
     `;
 
-    item.addEventListener("mouseenter", () => picker.updateSelection(i));
+    item.addEventListener("click", () => {
+      closeSessionSearch();
+      _actions.selectSession(s);
+    });
+    item.addEventListener("mouseenter", () => updateSelection(i));
     list.appendChild(item);
+  }
+}
+
+function updateSelection(newIndex) {
+  const items = dom.sessionSearchList.querySelectorAll(".session-search-item");
+  if (items[selectedIndex]) items[selectedIndex].classList.remove("selected");
+  selectedIndex = newIndex;
+  if (items[selectedIndex]) {
+    items[selectedIndex].classList.add("selected");
+    items[selectedIndex].scrollIntoView({ block: "nearest" });
   }
 }

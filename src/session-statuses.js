@@ -3,14 +3,6 @@
  * Import these instead of using raw string literals to catch typos at reference time.
  */
 
-const ORIGIN = {
-  POOL: "pool",
-  CUSTOM: "custom",
-  SUB_CLAUDE: "sub-claude",
-  SUB_AGENT: "sub-agent",
-  EXT: "ext",
-};
-
 const STATUS = {
   FRESH: "fresh",
   TYPING: "typing",
@@ -51,51 +43,10 @@ const PLUGIN_VERSION = {
   UNKNOWN: "unknown",
 };
 
-/** Session is no longer active (offloaded, archived, or dead). */
-function isInactiveStatus(status) {
-  return (
-    status === STATUS.OFFLOADED ||
-    status === STATUS.ARCHIVED ||
-    status === STATUS.DEAD
-  );
-}
-
-/** Origin is managed by the pool daemon (pool slots, sub-agents, sub-claude). */
-function isPoolOrigin(origin) {
-  return (
-    origin === ORIGIN.POOL ||
-    origin === ORIGIN.SUB_AGENT ||
-    origin === ORIGIN.SUB_CLAUDE
-  );
-}
-
-/**
- * Map a live session status to the corresponding pool slot status.
- * Returns null if the session status has no pool equivalent (caller decides fallback).
- */
-function sessionToPoolStatus(sessionStatus) {
-  switch (sessionStatus) {
-    case STATUS.IDLE:
-      return POOL_STATUS.IDLE;
-    case STATUS.PROCESSING:
-      return POOL_STATUS.BUSY;
-    case STATUS.FRESH:
-      return POOL_STATUS.FRESH;
-    case STATUS.TYPING:
-      return POOL_STATUS.TYPING;
-    default:
-      return null;
-  }
-}
-
 module.exports = {
   STATUS,
   POOL_STATUS,
   INITIATOR,
-  ORIGIN,
   UPDATE_STATUS,
   PLUGIN_VERSION,
-  isInactiveStatus,
-  isPoolOrigin,
-  sessionToPoolStatus,
 };

@@ -1,9 +1,6 @@
 const { contextBridge, ipcRenderer } = require("electron");
 const { PLUGIN_VERSION } = require("./session-statuses");
 
-// Maps original callbacks to their wrapped IPC handlers for proper removal
-const listenerRegistry = new WeakMap();
-
 // Remove stale listeners from previous renderer loads (Cmd+R)
 const channels = [
   "intention-changed",
@@ -38,7 +35,6 @@ const channels = [
   "split-down",
   "jump-recent-idle",
   "archive-current-session",
-  "resume-session",
   "open-in-cursor",
   "open-pool-settings",
   "session-info",
@@ -157,13 +153,16 @@ contextBridge.exposeInMainWorld("api", {
   onUpdateStatusChanged: (callback) => {
     const wrapped = (_e, state) => callback(state);
     ipcRenderer.on("update-status-changed", wrapped);
-    listenerRegistry.set(callback, wrapped);
+    // Store wrapped ref on the callback for removal
+    callback._wrappedUpdateHandler = wrapped;
   },
   offUpdateStatusChanged: (callback) => {
-    const wrapped = listenerRegistry.get(callback);
-    if (wrapped) {
-      ipcRenderer.removeListener("update-status-changed", wrapped);
-      listenerRegistry.delete(callback);
+    if (callback._wrappedUpdateHandler) {
+      ipcRenderer.removeListener(
+        "update-status-changed",
+        callback._wrappedUpdateHandler,
+      );
+      delete callback._wrappedUpdateHandler;
     }
   },
 
@@ -240,8 +239,6 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("jump-recent-idle", () => callback()),
   onArchiveCurrentSession: (callback) =>
     ipcRenderer.on("archive-current-session", () => callback()),
-  onResumeSession: (callback) =>
-    ipcRenderer.on("resume-session", () => callback()),
   onOpenInCursor: (callback) =>
     ipcRenderer.on("open-in-cursor", () => callback()),
   onOpenPoolSettings: (callback) =>

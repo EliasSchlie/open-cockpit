@@ -15,7 +15,7 @@ const {
   checkTerminalInputs,
 } = require("./terminal-input");
 const { readPool: readPoolFile, isSlotUncommitted } = require("./pool");
-const { STATUS, POOL_STATUS, ORIGIN } = require("./session-statuses");
+const { STATUS, POOL_STATUS } = require("./session-statuses");
 const {
   secureMkdirSync,
   secureWriteFileSync,
@@ -293,15 +293,15 @@ async function batchDetectOrigins(pids) {
       } else {
         // Windows/unavailable: default to ext
         for (const pid of uncached) {
-          originCache.set(pid, ORIGIN.EXT);
-          results.set(pid, ORIGIN.EXT);
+          originCache.set(pid, "ext");
+          results.set(pid, "ext");
         }
       }
     } catch (err) {
       console.error("[main] Failed to detect session origins:", err.message);
       for (const pid of uncached) {
-        originCache.set(pid, ORIGIN.EXT);
-        results.set(pid, ORIGIN.EXT);
+        originCache.set(pid, "ext");
+        results.set(pid, "ext");
       }
     }
   }
@@ -804,7 +804,13 @@ async function getSessionsUncached() {
   // Archive dead sessions (save as archived without snapshot)
   // Child sessions (sub-agents) are NOT independently archived — they stay
   // grouped under their parent and only get archived when the parent is archived.
-  // Reuse poolSlotMap from the readPool() call above (no writes in between).
+  const poolForArchive = readPool();
+  const poolSessionIdsForArchive = new Set();
+  if (poolForArchive) {
+    for (const slot of poolForArchive.slots) {
+      if (slot.sessionId) poolSessionIdsForArchive.add(slot.sessionId);
+    }
+  }
   const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
   const sessionIdSet = new Set(sessions.map((s) => s.sessionId));
   for (let i = sessions.length - 1; i >= 0; i--) {
@@ -850,9 +856,9 @@ async function getSessionsUncached() {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
-      const origin = poolSlotMap.has(s.sessionId)
-        ? ORIGIN.POOL
-        : originCache.get(String(s.pid)) || ORIGIN.EXT;
+      const origin = poolSessionIdsForArchive.has(s.sessionId)
+        ? "pool"
+        : originCache.get(String(s.pid)) || "ext";
 
       secureMkdirSync(offloadDir, { recursive: true });
       const meta = {
@@ -895,19 +901,24 @@ async function getSessionsUncached() {
   }
 
   // Tag sessions with origin: pool, sub-claude, or ext
-  // Reuse poolSlotMap (same pool data, no writes in between).
+  const poolSessionIds = new Set();
+  if (pool) {
+    for (const slot of pool.slots) {
+      if (slot.sessionId) poolSessionIds.add(slot.sessionId);
+    }
+  }
   // Batch detect origins for all alive non-pool sessions in one ps call
   const needOriginPids = sessions
-    .filter((s) => s.alive && !poolSlotMap.has(s.sessionId))
+    .filter((s) => s.alive && !poolSessionIds.has(s.sessionId))
     .map((s) => s.pid);
   const originMap = await batchDetectOrigins(needOriginPids);
   for (const s of sessions) {
-    if (poolSlotMap.has(s.sessionId)) {
-      s.origin = ORIGIN.POOL;
+    if (poolSessionIds.has(s.sessionId)) {
+      s.origin = "pool";
     } else if (s.alive) {
-      s.origin = originMap.get(String(s.pid)) || ORIGIN.EXT;
+      s.origin = originMap.get(String(s.pid)) || "ext";
     } else {
-      s.origin = ORIGIN.EXT;
+      s.origin = "ext";
     }
   }
 
@@ -932,7 +943,7 @@ async function getSessionsUncached() {
   // the same UUID), remove the stale offload data from disk.
   for (const offloaded of await getOffloadedSessions()) {
     if (!liveIds.has(offloaded.sessionId)) {
-      if (!offloaded.origin) offloaded.origin = ORIGIN.POOL;
+      if (!offloaded.origin) offloaded.origin = "pool";
       sessions.push(offloaded);
     } else if (!offloaded.archived) {
       // Live session supersedes non-archived offload data — clean up
