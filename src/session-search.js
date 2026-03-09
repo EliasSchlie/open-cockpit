@@ -174,10 +174,6 @@ function renderResults(query) {
       <div class="session-search-meta">${path}</div>
     `;
 
-    item.addEventListener("click", () => {
-      picker.close();
-      _actions.selectSession(s);
-    });
     item.addEventListener("mouseenter", () => picker.updateSelection(i));
     list.appendChild(item);
   }

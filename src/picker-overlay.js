@@ -113,6 +113,18 @@ export function createPickerOverlay({
     if (e.target === overlayEl) close();
   });
 
+  // Click on list item to select
+  listEl.addEventListener("click", (e) => {
+    const item = e.target.closest(`.${itemClass}`);
+    if (!item) return;
+    const items = listEl.querySelectorAll(`.${itemClass}`);
+    const index = Array.from(items).indexOf(item);
+    if (index !== -1) {
+      close();
+      onSelect(index);
+    }
+  });
+
   return {
     open,
     close,
