@@ -339,6 +339,7 @@ export async function attachPoolTerminal(poolTermId) {
 
   // Skip the daemon's replay event — the buffer may contain old session
   // content from before /clear (the PTY persists across session recycling).
+  // Request a SIGWINCH redraw once the terminal becomes visible (doFit).
   const hasBuffer = !!ptyInfo?.buffer;
 
   const entry = {
@@ -349,6 +350,7 @@ export async function attachPoolTerminal(poolTermId) {
     container,
     isPoolTui: true,
     skipReplay: hasBuffer,
+    _needsRedraw: true,
     dockTabId: null,
     _resizeHandler: null,
   };
@@ -371,17 +373,6 @@ export async function attachPoolTerminal(poolTermId) {
 
   wireTerminalInput(term, poolTermId);
   setupTerminalResize(entry);
-
-  // Force SIGWINCH AFTER attach so Claude's redraw output reaches our terminal.
-  // Jiggle dimensions because macOS kernel skips SIGWINCH for identical dims.
-  if (hasBuffer && ptyInfo.cols && ptyInfo.rows) {
-    window.api.ptyResize(
-      poolTermId,
-      Math.max(1, ptyInfo.cols - 1),
-      ptyInfo.rows,
-    );
-    await window.api.ptyResize(poolTermId, ptyInfo.cols, ptyInfo.rows);
-  }
 
   // Register with dock
   dockRegisterTerminal(entry);
@@ -658,8 +649,9 @@ export async function reconnectTerminal(ptyInfo) {
 
   if (ptyInfo.buffer) {
     if (entry.isPoolTui) {
-      // Pool TUI: skip stale buffer, will jiggle SIGWINCH after attach
+      // Pool TUI: skip stale buffer, doFit will jiggle SIGWINCH when visible
       entry.skipReplay = true;
+      entry._needsRedraw = true;
     } else {
       // Shell: write buffer to restore scrollback
       term.write(ptyInfo.buffer);
@@ -687,16 +679,6 @@ export async function reconnectTerminal(ptyInfo) {
 
   wireTerminalInput(term, ptyInfo.termId);
   setupTerminalResize(entry);
-
-  // Force SIGWINCH AFTER attach so Claude's redraw reaches our terminal
-  if (entry.isPoolTui && ptyInfo.buffer && ptyInfo.cols && ptyInfo.rows) {
-    window.api.ptyResize(
-      ptyInfo.termId,
-      Math.max(1, ptyInfo.cols - 1),
-      ptyInfo.rows,
-    );
-    await window.api.ptyResize(ptyInfo.termId, ptyInfo.cols, ptyInfo.rows);
-  }
 
   return entry;
 }
