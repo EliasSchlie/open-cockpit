@@ -362,7 +362,11 @@ async function loadSessions() {
 function createSessionItem(s, depth = 0) {
   const li = document.createElement("li");
   const isChild = depth > 0;
-  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED ? " offloaded" : ""}${isChild ? " session-child" : ""}`;
+  const dimmed =
+    s.status === STATUS.OFFLOADED ||
+    s.status === STATUS.ARCHIVED ||
+    s.status === STATUS.DEAD;
+  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${dimmed ? " offloaded" : ""}${isChild ? " session-child" : ""}`;
   li.dataset.sessionId = s.sessionId;
   if (isChild) li.style.paddingLeft = `${12 + depth * 18}px`;
   const heading = s.intentionHeading || s.intentionPreview || null;
@@ -372,8 +376,7 @@ function createSessionItem(s, depth = 0) {
   const indicatorStyle = dirColor
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
     : "background: transparent";
-  const showOrigin =
-    s.origin && s.status !== STATUS.OFFLOADED && s.status !== STATUS.ARCHIVED;
+  const showOrigin = !!s.origin;
   const originTag = showOrigin
     ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
     : "";
@@ -577,7 +580,8 @@ function showSnapshotViewer(session, snapshotText) {
 // Show snapshot content inline as a dock tab for offloaded/archived sessions
 async function showInlineSnapshot(session, gen) {
   const isArchived = session.status === STATUS.ARCHIVED;
-  const btnLabel = isArchived ? "Restart" : "Resume";
+  const isDead = session.status === STATUS.DEAD;
+  const statusLabel = isArchived ? "Archived" : isDead ? "Ended" : "Offloaded";
 
   let snapshotText = null;
   if (session.hasSnapshot) {
@@ -592,33 +596,39 @@ async function showInlineSnapshot(session, gen) {
   // Create snapshot content element
   const container = document.createElement("div");
   container.className = "dock-snapshot-content";
+
+  // Dead sessions can't be resumed — no button
+  const showResumeBtn = !isDead;
+  const btnLabel = isArchived ? "Restart" : "Resume";
   container.innerHTML = `
     <div class="inline-snapshot-header">
-      <span class="inline-snapshot-label">${isArchived ? "Archived" : "Offloaded"} Session</span>
-      <button class="inline-snapshot-restart">${btnLabel}</button>
+      <span class="inline-snapshot-label">${statusLabel} Session</span>
+      ${showResumeBtn ? `<button class="inline-snapshot-restart">${btnLabel}</button>` : ""}
     </div>
     <pre class="snapshot-content inline-snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
   `;
 
-  container
-    .querySelector(".inline-snapshot-restart")
-    .addEventListener("click", async () => {
-      if (isArchived) {
-        try {
-          await window.api.unarchiveSession(session.sessionId);
-        } catch (err) {
-          debugLog("snapshot", `unarchive failed: ${err.message}`);
+  if (showResumeBtn) {
+    container
+      .querySelector(".inline-snapshot-restart")
+      .addEventListener("click", async () => {
+        if (isArchived) {
+          try {
+            await window.api.unarchiveSession(session.sessionId);
+          } catch (err) {
+            debugLog("snapshot", `unarchive failed: ${err.message}`);
+          }
         }
-      }
-      await _actions.resumeOffloadedSession(session);
-    });
+        await _actions.resumeOffloadedSession(session);
+      });
+  }
 
   // Register snapshot as a dock tab
   _actions.ensureEditorContainer();
   _actions.ensureDock();
   state.dock.registerTab(TAB_SNAPSHOT, {
     type: TAB_SNAPSHOT,
-    label: isArchived ? "Archived" : "Snapshot",
+    label: isDead ? "Ended" : isArchived ? "Archived" : "Snapshot",
     closable: false,
     contentEl: container,
   });

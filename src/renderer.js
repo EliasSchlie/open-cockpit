@@ -141,11 +141,12 @@ async function selectSession(session) {
     dom.sessionView.classList.remove("colored");
   }
 
-  // Offloaded/archived: show snapshot inline instead of a terminal
-  if (
+  // Offloaded/archived/dead: show snapshot inline instead of a terminal
+  const showSnapshot =
     session.status === STATUS.OFFLOADED ||
-    session.status === STATUS.ARCHIVED
-  ) {
+    session.status === STATUS.ARCHIVED ||
+    session.status === STATUS.DEAD;
+  if (showSnapshot) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
@@ -495,7 +496,9 @@ function switchSession(direction) {
         (s.status === STATUS.IDLE ||
           s.status === STATUS.PROCESSING ||
           s.status === STATUS.TYPING)) ||
-      s.status === STATUS.ARCHIVED,
+      s.status === STATUS.ARCHIVED ||
+      s.status === STATUS.OFFLOADED ||
+      s.status === STATUS.DEAD,
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(

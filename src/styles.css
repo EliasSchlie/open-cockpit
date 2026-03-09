@@ -213,13 +213,18 @@ body {
   height: 5px;
 }
 
-/* Offloaded/archived sessions are dimmed */
+/* Offloaded/archived/dead sessions are dimmed */
 .session-item.offloaded {
   opacity: 0.65;
 }
 
 .session-item.offloaded:hover {
   opacity: 0.85;
+}
+
+/* Origin tags on dimmed sessions get muted colors */
+.session-item.offloaded .session-origin-tag {
+  opacity: 0.5;
 }
 
 /* Directory color indicator */
