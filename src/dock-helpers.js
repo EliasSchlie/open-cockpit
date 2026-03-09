@@ -104,6 +104,14 @@ export function setupTerminalResize(entry) {
         window.api.ptyResize(entry.termId, cols, rows);
         // Report dims so future pool spawns use actual terminal size
         window.api.reportTerminalDims(cols, rows);
+        // Dims changed → SIGWINCH delivered naturally, redraw satisfied
+        delete entry._needsRedraw;
+      } else if (entry._needsRedraw) {
+        // Pool TUI needs a SIGWINCH but dims match. Jiggle to force delivery
+        // (macOS kernel skips SIGWINCH when ioctl sets identical dimensions).
+        delete entry._needsRedraw;
+        window.api.ptyResize(entry.termId, Math.max(1, cols - 1), rows);
+        window.api.ptyResize(entry.termId, cols, rows);
       } else {
         // Dimensions unchanged — force repaint for DOM reattachment cases
         // where the canvas renderer is stale. Skipped when dimensions changed
