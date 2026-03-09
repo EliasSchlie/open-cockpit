@@ -63,13 +63,16 @@ Pool slots can be pinned to prevent LRU offloading:
 
 ## Origin tags
 
-Sessions in the sidebar display an origin tag:
-- **pool** (green) — spawned by the pool manager (`OPEN_COCKPIT_POOL=1` env var)
-- **custom** (cyan) — standalone sessions spawned via Cmd+Shift+N (`OPEN_COCKPIT_CUSTOM=1` env var)
-- **sub-claude** (purple) — spawned by sub-claude (`SUB_CLAUDE=1` env var)
-- **ext** (gray) — external sessions (no known env markers)
+Sessions in the sidebar display an origin tag (constants defined in `src/session-statuses.js` as `ORIGIN`):
 
-Detection uses `ps eww <PID>` to read process environment. Results are cached by PID.
+| Origin | Color | Env var | Description |
+|--------|-------|---------|-------------|
+| `pool` | green | `OPEN_COCKPIT_POOL=1` | Spawned by pool manager |
+| `custom` | cyan | `OPEN_COCKPIT_CUSTOM=1` | Standalone via Cmd+Shift+N |
+| `sub-claude` | purple | `SUB_CLAUDE=1` | Spawned by sub-claude plugin |
+| `ext` | gray | *(none)* | External sessions |
+
+Detection logic is in `src/parse-origins.js` — reads process environment via `ps eww <PID>`. Results are cached by PID in `src/session-discovery.js`.
 
 ## Custom sessions
 
