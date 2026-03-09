@@ -29,6 +29,14 @@ Shell terminals are unaffected — reflow is acceptable for normal text output.
 
 **macOS-specific**: macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets the same dimensions (`bcmp` check in `tty_ioctl`). This is why `attachPoolTerminal` fetches PTY dims and writes the buffer at matching dimensions rather than skipping the buffer and relying on SIGWINCH — if the PTY already matches the window size, SIGWINCH never fires.
 
+## Reconnect handling
+
+When reconnecting to a session after app restart, `reconnectTerminal()` writes the PTY's saved buffer at matching dimensions. If the window has since changed size, `fitAddon.fit()` would reflow the buffer, garbling TUI content. To prevent this, entries are flagged with `_hasReconnectBuffer` — on the first resize, `setupTerminalResize` clears the buffer and lets SIGWINCH trigger a full redraw.
+
+## API-created tabs
+
+Tabs created via `cockpit-cli term open` or the `session-term-open` API are discovered by the renderer via `discoverExtraTerminals()`, which queries the daemon for all terminals belonging to the session and attaches any that aren't already tracked. The renderer is notified via the `api-term-opened` IPC event.
+
 ## Programmatic terminal access
 
 Sessions can discover and interact with their own terminal tabs via the `session-terminals` API and `cockpit-cli term` commands. All `term` subcommands auto-detect the caller's session ID by walking PID ancestry (checks `~/.open-cockpit/session-pids/<PID>`), so no target is needed when calling from within a Claude session.

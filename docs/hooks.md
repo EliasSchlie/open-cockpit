@@ -24,4 +24,10 @@ Resolves the session ID via the PID mapping written by `session-pid-map.sh`.
 
 ## Idle signal hooks → `idle-signal.sh`
 
-Detects when sessions become idle (waiting for user input) or start processing. Writes signal files to `~/.open-cockpit/idle-signals/<PID>`. See [idle-signals.md](idle-signals.md) for full lifecycle details, the `.pending` deferred-write mechanism, all actors, and failure modes.
+Detects when sessions become idle (waiting for user input) or start processing. Writes signal files to `~/.open-cockpit/idle-signals/<PID>`.
+
+- **Stop** hook: writes idle signal after a 5s deferred verify (`.pending` file PID mechanism prevents false positives on re-prompts)
+- **UserPromptSubmit** hook: clears idle signal unconditionally (session is now processing)
+- **PostToolUse** hook: clears idle signal but preserves `pool-init`/`session-clear` triggers (these mark genuinely idle sessions that shouldn't lose their signal during Claude's initial tool-use turn)
+
+See [idle-signals.md](idle-signals.md) for full lifecycle details, all actors, and failure modes.
