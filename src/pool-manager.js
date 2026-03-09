@@ -1390,6 +1390,24 @@ async function poolResume(sessionId) {
         skipTrustPrompt: true,
         skipFreshSignal: true,
         onResolved: async (newSessionId) => {
+          // Write an idle signal so the resumed session appears as idle/recent
+          // immediately. The Stop hook won't fire after /resume (no assistant
+          // turn), so without this the session stays stuck in "processing".
+          // Trigger "resume" is not in FRESH_TRIGGERS, so session-discovery
+          // will mark it as activated and show it as IDLE.
+          if (newSessionId) {
+            secureMkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
+            secureWriteFileSync(
+              path.join(IDLE_SIGNALS_DIR, String(slot.pid)),
+              JSON.stringify({
+                cwd: os.homedir(),
+                session_id: newSessionId,
+                transcript: "",
+                ts: Math.floor(Date.now() / 1000),
+                trigger: "resume",
+              }),
+            );
+          }
           // Re-tag orphaned extra terminals from old session to new session
           if (newSessionId) {
             try {
