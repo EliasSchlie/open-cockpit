@@ -65,6 +65,7 @@ import {
   splitFocusedTab,
 } from "./command-palette.js";
 import { initSessionSearch, toggleSessionSearch } from "./session-search.js";
+import { createPickerOverlay } from "./picker-overlay.js";
 
 // --- Populate DOM refs ---
 dom.sessionList = document.getElementById("session-list");
@@ -80,6 +81,9 @@ dom.commandPaletteList = document.getElementById("command-palette-list");
 dom.sessionSearch = document.getElementById("session-search");
 dom.sessionSearchInput = document.getElementById("session-search-input");
 dom.sessionSearchList = document.getElementById("session-search-list");
+dom.setupScriptPicker = document.getElementById("setup-script-picker");
+dom.setupScriptInput = document.getElementById("setup-script-input");
+dom.setupScriptList = document.getElementById("setup-script-list");
 
 // --- Focus management ---
 
@@ -647,90 +651,61 @@ async function archiveCurrentSession() {
 
 // --- Setup script picker ---
 
+let setupScriptResolve = null;
+let setupScriptOptions = [];
+
+const setupScriptPicker = createPickerOverlay({
+  overlayEl: dom.setupScriptPicker,
+  inputEl: dom.setupScriptInput,
+  listEl: dom.setupScriptList,
+  itemClass: "overlay-picker-item",
+  onInput(query) {
+    renderSetupScriptItems(query);
+  },
+  onSelect(index) {
+    if (!setupScriptResolve) return;
+    const filtered = filterSetupScriptOptions(dom.setupScriptInput.value);
+    const option = filtered[index];
+    setupScriptResolve(option === "None" ? null : option);
+    setupScriptResolve = null;
+  },
+  onOpen() {},
+  onClose() {
+    if (setupScriptResolve) {
+      setupScriptResolve(null);
+      setupScriptResolve = null;
+    }
+  },
+  getItemCount() {
+    return dom.setupScriptList.querySelectorAll(".overlay-picker-item").length;
+  },
+});
+
+function filterSetupScriptOptions(query) {
+  if (!query) return setupScriptOptions;
+  const q = query.toLowerCase();
+  return setupScriptOptions.filter((o) => o.toLowerCase().includes(q));
+}
+
+function renderSetupScriptItems(query) {
+  const filtered = filterSetupScriptOptions(query);
+  dom.setupScriptList.innerHTML = "";
+  for (let i = 0; i < filtered.length; i++) {
+    const item = document.createElement("div");
+    item.className = "overlay-picker-item";
+    if (i === 0) item.classList.add("selected");
+    item.textContent = filtered[i];
+    dom.setupScriptList.appendChild(item);
+  }
+  setupScriptPicker.clampSelection();
+}
+
 function showSetupScriptPicker(scripts) {
   return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "setup-script-overlay";
-
-    const dialog = document.createElement("div");
-    dialog.className = "setup-script-dialog";
-
-    const title = document.createElement("div");
-    title.className = "setup-script-title";
-    title.textContent = "Setup Script";
-    dialog.appendChild(title);
-
-    const subtitle = document.createElement("div");
-    subtitle.className = "setup-script-subtitle";
-    subtitle.textContent = "Run a script in the new session";
-    dialog.appendChild(subtitle);
-
-    const list = document.createElement("div");
-    list.className = "setup-script-list";
-
-    let selectedIndex = 0;
-    const items = [];
-
-    // "None" option first
-    const allOptions = ["None", ...scripts];
-
-    for (let i = 0; i < allOptions.length; i++) {
-      const item = document.createElement("div");
-      item.className = "setup-script-item";
-      if (i === 0) item.classList.add("selected");
-      item.textContent = allOptions[i];
-      item.addEventListener("click", () => {
-        cleanup();
-        resolve(i === 0 ? null : allOptions[i]);
-      });
-      list.appendChild(item);
-      items.push(item);
-    }
-
-    dialog.appendChild(list);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    function updateSelection() {
-      items.forEach((el, i) =>
-        el.classList.toggle("selected", i === selectedIndex),
-      );
-      items[selectedIndex].scrollIntoView({ block: "nearest" });
-    }
-
-    function cleanup() {
-      document.removeEventListener("keydown", onKey);
-      overlay.remove();
-    }
-
-    function onKey(e) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        selectedIndex = (selectedIndex + 1) % allOptions.length;
-        updateSelection();
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        selectedIndex =
-          (selectedIndex - 1 + allOptions.length) % allOptions.length;
-        updateSelection();
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        cleanup();
-        resolve(selectedIndex === 0 ? null : allOptions[selectedIndex]);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        cleanup();
-        resolve(null);
-      }
-    }
-
-    document.addEventListener("keydown", onKey);
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) {
-        cleanup();
-        resolve(null);
-      }
-    });
+    setupScriptOptions = ["None", ...scripts];
+    setupScriptResolve = resolve;
+    renderSetupScriptItems("");
+    setupScriptPicker.open();
   });
 }
 

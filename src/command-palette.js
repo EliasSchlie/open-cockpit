@@ -356,11 +356,6 @@ function renderPaletteList(query) {
     item.className = `overlay-picker-item command-palette-item${i === clamped ? " selected" : ""}`;
     const shortcut = getCommandShortcut(cmd);
     item.innerHTML = `<span class="command-palette-label">${cmd.label}</span><span class="command-palette-shortcut">${shortcut}</span>`;
-    item.addEventListener("click", () => {
-      picker.close();
-      cmd.action();
-    });
-
     item.addEventListener("mouseenter", () => picker.updateSelection(i));
     dom.commandPaletteList.appendChild(item);
   });
