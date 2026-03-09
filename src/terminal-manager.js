@@ -651,9 +651,6 @@ export async function reconnectTerminal(ptyInfo) {
   if (ptyInfo.buffer) {
     term.write(ptyInfo.buffer);
     entry.skipReplay = true;
-    // Flag so setupTerminalResize clears on first fit if dims changed,
-    // preventing reflow garbling of cursor-positioned content.
-    entry._hasReconnectBuffer = true;
   }
 
   pendingTerminals.set(ptyInfo.termId, entry);

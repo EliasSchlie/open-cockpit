@@ -279,61 +279,8 @@ describe("replay after clear-buffer", () => {
   });
 });
 
-describe("ANSI-aware buffer trim", () => {
-  it("does not corrupt terminal state with truncated escape sequences", async () => {
-    const sock = await connect();
-    try {
-      // Spawn a shell
-      const spawnResp = await request(sock, {
-        type: "spawn",
-        cmd: "/bin/sh",
-        cols: 80,
-        rows: 24,
-      });
-      const termId = spawnResp.termId;
-      await request(sock, { type: "attach", termId });
-
-      // Produce enough output to trigger buffer trim (>200KB).
-      // Include ANSI escapes that could be split at the trim boundary.
-      // Each line is ~110 chars, need ~2000 lines for 200KB.
-      const ansiLine =
-        "\x1b[32mGREEN\x1b[0m \x1b[?25h\x1b[1;1H" + "X".repeat(80) + "\n";
-      const batch = ansiLine.repeat(100);
-      for (let i = 0; i < 25; i++) {
-        send(sock, { type: "write", termId, data: batch });
-      }
-      await new Promise((r) => setTimeout(r, 500));
-
-      // Read the trimmed buffer
-      const buf = await request(sock, { type: "read-buffer", termId });
-
-      // Verify trim actually fired — buffer should be <= BUFFER_SIZE (100KB)
-      // We wrote ~275KB, so it must have been trimmed
-      expect(buf.buffer.length).toBeLessThanOrEqual(100_000);
-      expect(buf.buffer.length).toBeGreaterThan(0);
-
-      // The buffer should not start with a partial escape sequence.
-      // A partial would be \x1b followed by [ but no final letter.
-      const firstEsc = buf.buffer.indexOf("\x1b");
-      if (firstEsc >= 0 && firstEsc < 40) {
-        const seq = buf.buffer.substring(firstEsc, firstEsc + 20);
-        // If it starts with ESC[, there must be a final byte (letter) before the next ESC or content
-        if (seq.startsWith("\x1b[")) {
-          const finalMatch = seq.match(/^\x1b\[[\x20-\x3f]*([\x40-\x7e])/);
-          expect(
-            finalMatch,
-            `Buffer starts with incomplete CSI sequence: ${JSON.stringify(seq.slice(0, 15))}`,
-          ).toBeTruthy();
-        }
-      }
-
-      await request(sock, { type: "kill", termId });
-    } finally {
-      sock.destroy();
-    }
-  });
-
-  it("handles DEC private mode sequences correctly", async () => {
+describe("buffer compaction", () => {
+  it("trims buffer to ~100KB when output exceeds 200KB", async () => {
     const sock = await connect();
     try {
       const spawnResp = await request(sock, {
@@ -345,21 +292,20 @@ describe("ANSI-aware buffer trim", () => {
       const termId = spawnResp.termId;
       await request(sock, { type: "attach", termId });
 
-      // Fill buffer past trim threshold with DEC private mode sequences
-      // These use ? prefix which naive regex would misparse
-      const decLine = "\x1b[?25h\x1b[?1049h\x1b[?25l" + "Y".repeat(80) + "\n";
-      const batch = decLine.repeat(100);
-      for (let i = 0; i < 25; i++) {
+      // Produce >200KB of output to trigger compaction
+      const line = "X".repeat(80) + "\n";
+      const batch = line.repeat(100);
+      for (let i = 0; i < 30; i++) {
         send(sock, { type: "write", termId, data: batch });
       }
       await new Promise((r) => setTimeout(r, 500));
 
       const buf = await request(sock, { type: "read-buffer", termId });
 
-      // Verify trim fired and content is valid
+      // Buffer should be compacted to ~100KB
       expect(buf.buffer.length).toBeLessThanOrEqual(100_000);
       expect(buf.buffer.length).toBeGreaterThan(0);
-      expect(buf.buffer).toContain("YYYYY");
+      expect(buf.buffer).toContain("XXXX");
 
       await request(sock, { type: "kill", termId });
     } finally {

@@ -23,26 +23,12 @@ const {
   chmodSync,
 } = require("./platform");
 
-const { sanitizeBufferStart, BUFFER_SIZE } = require("./buffer-sanitize");
-
 const OPEN_COCKPIT_DIR =
   process.env.OPEN_COCKPIT_DIR || path.join(os.homedir(), ".open-cockpit");
 const SOCKET_PATH =
   process.env.PTY_DAEMON_SOCK || path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
-
-/**
- * Materialize a terminal's buffer for reading. Skips sanitization when the
- * buffer hasn't been truncated (joined length <= BUFFER_SIZE).
- */
-function getBuffer(entry) {
-  if (entry.chunks.length === 1 && entry.chunksLen <= BUFFER_SIZE) {
-    return entry.chunks[0];
-  }
-  const joined = entry.chunks.join("");
-  if (joined.length <= BUFFER_SIZE) return joined;
-  return sanitizeBufferStart(joined.slice(-BUFFER_SIZE));
-}
 
 const ALLOWED_SHELLS = getAllowedShells();
 const EXTRA_PATH_DIRS = getExtraPathDirs();
@@ -186,7 +172,16 @@ function handleSpawn(socket, msg) {
       entry.chunks.push(data);
       entry.chunksLen += data.length;
       if (entry.chunksLen > BUFFER_SIZE * 2) {
-        const joined = getBuffer(entry);
+        let joined = entry.chunks.join("").slice(-BUFFER_SIZE);
+        // Skip leading UTF-8 continuation bytes (0x80-0xBF) to avoid starting
+        // mid-character if the slice split a multi-byte sequence
+        while (
+          joined.length > 0 &&
+          joined.charCodeAt(0) >= 0x80 &&
+          joined.charCodeAt(0) <= 0xbf
+        ) {
+          joined = joined.slice(1);
+        }
         entry.chunks = [joined];
         entry.chunksLen = joined.length;
       }
@@ -275,7 +270,7 @@ function handleKill(socket, msg) {
 function handleList(socket, msg) {
   const ptys = [];
   for (const [, entry] of terminals) {
-    const buffer = getBuffer(entry);
+    const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
     ptys.push({
       ...entry.meta,
       buffer,
@@ -296,7 +291,7 @@ function handleReadBuffer(socket, msg) {
     });
     return;
   }
-  const buffer = getBuffer(entry);
+  const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
   sendTo(socket, {
     type: "read-buffer-result",
     id: msg.id,
@@ -323,7 +318,7 @@ function handleAttach(socket, msg) {
 
   // Then replay buffered output (no id — goes through push event path)
   if (entry.chunksLen > 0) {
-    const buffer = getBuffer(entry);
+    const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
     sendTo(socket, { type: "replay", termId: msg.termId, data: buffer });
   }
   if (entry.meta.exited) {

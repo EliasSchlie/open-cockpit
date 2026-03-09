@@ -78,24 +78,6 @@ export function setupTerminalResize(entry) {
         requestAnimationFrame(() => doFit());
         return;
       }
-      // Pool TUI terminals (Claude's Ink-based TUI) use absolute cursor
-      // positioning. xterm.js reflow on resize treats content as reflowable
-      // text and re-wraps lines, garbling cursor-positioned UI elements
-      // (e.g. the input bar shifts to the middle of the screen). Clear the
-      // buffer before resizing so there's nothing to reflow. The subsequent
-      // ptyResize sends SIGWINCH, which triggers Claude's full redraw at the
-      // correct dimensions.
-      //
-      // Also clear on reconnect: if a buffer was written at the PTY's saved
-      // dimensions but the window has since changed size, reflow would garble
-      // the replayed content. Clear once and let SIGWINCH trigger a redraw.
-      const dimsChanging =
-        proposed.cols !== prevCols || proposed.rows !== prevRows;
-      if (dimsChanging && (entry.isPoolTui || entry._hasReconnectBuffer)) {
-        entry.term.clear();
-        entry.term.write("\x1b[2J\x1b[H");
-        delete entry._hasReconnectBuffer;
-      }
       entry.fitAddon.fit();
       const { cols, rows } = entry.term;
       if (cols !== prevCols || rows !== prevRows) {

@@ -14,19 +14,15 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 `reportTerminalDims` reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash).
 
-## TUI reflow prevention
+## Resize behavior
 
-xterm.js reflow on resize treats all content as reflowable text, re-wrapping lines at the new column width. Claude's Ink-based TUI uses absolute cursor positioning (ANSI CSI sequences like `\e[row;colH`), which reflow garbles: the input bar shifts to the middle of the screen, UI elements overlay each other, and content appears at wrong positions.
+When the terminal container resizes (window resize, split drag, tab switch), `fitAddon.fit()` adjusts xterm dimensions and sends `ptyResize` → SIGWINCH to the PTY process. Claude's TUI redraws fully on SIGWINCH, so any momentary reflow garbling self-corrects immediately.
 
-`setupTerminalResize` in `dock-helpers.js` handles this: before `fitAddon.fit()` resizes a pool TUI terminal, it checks if dimensions will change. If so, it clears the xterm buffer (scrollback + visible screen via `\x1b[2J\x1b[H`) so there's nothing to reflow. The subsequent `ptyResize` sends SIGWINCH, triggering Claude's full redraw at the correct dimensions.
-
-Shell terminals are unaffected — reflow is acceptable for normal text output.
-
-**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Write the buffer at matching dimensions (initial attach) or clear before resize (ongoing resizes).
+Previous approaches tried clearing the xterm buffer before resize to prevent reflow artifacts, but this caused blank terminals because the clear-to-SIGWINCH-redraw path is inherently racy. The simpler approach (let reflow happen, trust SIGWINCH redraw) is more reliable.
 
 ## Reconnect handling
 
-When reconnecting to a session after app restart, `reconnectTerminal()` writes the PTY's saved buffer at matching dimensions. If the window has since changed size, `fitAddon.fit()` would reflow the buffer, garbling TUI content. To prevent this, entries are flagged with `_hasReconnectBuffer` — on the first resize, `setupTerminalResize` clears the buffer and lets SIGWINCH trigger a full redraw.
+When reconnecting to a session after app restart, `reconnectTerminal()` writes the PTY's saved buffer at matching dimensions. If the window has since changed size, `fitAddon.fit()` will trigger a SIGWINCH, and Claude redraws at the correct dimensions.
 
 ## API-created tabs
 

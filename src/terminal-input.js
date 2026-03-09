@@ -8,9 +8,9 @@
  */
 
 const { Terminal } = require("@xterm/headless");
-const { ALT_SCREEN_ON } = require("./buffer-sanitize");
 
 const PROMPT_CHAR = "❯";
+const ALT_SCREEN_ON = "\x1b[?1049h";
 
 // TUI decoration characters that can bleed into the prompt line when the
 // 100KB PTY buffer is truncated mid-escape-sequence, causing xterm.js replay
