@@ -219,6 +219,9 @@ async function offloadSession(
       `[offload] Failed to send /clear for session ${sessionId}: ${err.message}`,
     );
   }
+  // Clear the daemon's replay buffer so the next attach doesn't replay
+  // old session content. The new session's output will build a fresh buffer.
+  daemonSendSafe({ type: "clear-buffer", termId });
 
   // 3. Remove idle signal so session re-detects as fresh after /clear
   if (pid) {
