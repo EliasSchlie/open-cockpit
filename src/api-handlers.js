@@ -233,12 +233,14 @@ const sharedHandlers = {
     if (resolvedCwd.startsWith("~")) {
       resolvedCwd = path.join(os.homedir(), resolvedCwd.slice(1));
     }
+    const dims = getTerminalDims() || {};
     const resp = await daemonRequest({
       type: "spawn",
       cwd: resolvedCwd,
       cmd: claudePath,
       args,
       env: { OPEN_COCKPIT_CUSTOM: "1" },
+      ...dims,
     });
     // Accept trust prompt in background (non-blocking)
     acceptTrustPrompt(resp.termId);
