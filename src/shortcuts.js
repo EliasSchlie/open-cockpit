@@ -47,6 +47,8 @@ const DEFAULT_SHORTCUTS = {
   "new-custom-session": "CmdOrCtrl+Shift+N",
   // Bell
   "toggle-bell": "CmdOrCtrl+Shift+B",
+  // Session actions
+  "resume-session": "CmdOrCtrl+R",
   // Session search
   "session-search": "CmdOrCtrl+K",
   // Session info

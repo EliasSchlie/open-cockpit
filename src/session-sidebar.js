@@ -597,31 +597,27 @@ async function showInlineSnapshot(session, gen) {
   const container = document.createElement("div");
   container.className = "dock-snapshot-content";
 
-  // Dead sessions can't be resumed — no button
-  const showResumeBtn = !isDead;
-  const btnLabel = isArchived ? "Restart" : "Resume";
+  const btnLabel = isArchived || isDead ? "Restart" : "Resume";
   container.innerHTML = `
     <div class="inline-snapshot-header">
       <span class="inline-snapshot-label">${statusLabel} Session</span>
-      ${showResumeBtn ? `<button class="inline-snapshot-restart">${btnLabel}</button>` : ""}
+      <button class="inline-snapshot-restart">${btnLabel}</button>
     </div>
     <pre class="snapshot-content inline-snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
   `;
 
-  if (showResumeBtn) {
-    container
-      .querySelector(".inline-snapshot-restart")
-      .addEventListener("click", async () => {
-        if (isArchived) {
-          try {
-            await window.api.unarchiveSession(session.sessionId);
-          } catch (err) {
-            debugLog("snapshot", `unarchive failed: ${err.message}`);
-          }
+  container
+    .querySelector(".inline-snapshot-restart")
+    .addEventListener("click", async () => {
+      if (isArchived || isDead) {
+        try {
+          await window.api.unarchiveSession(session.sessionId);
+        } catch (err) {
+          debugLog("snapshot", `unarchive failed: ${err.message}`);
         }
-        await _actions.resumeOffloadedSession(session);
-      });
-  }
+      }
+      await _actions.resumeOffloadedSession(session);
+    });
 
   // Register snapshot as a dock tab
   _actions.ensureEditorContainer();

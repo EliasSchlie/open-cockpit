@@ -152,9 +152,13 @@ async function selectSession(session) {
     // No cached terminals — set up fresh dock + terminals
     initDockLayout();
 
-    // Resolve the daemon terminal ID for pool/custom sessions
+    // Resolve the daemon terminal ID for pool/custom/sub-agent sessions
     let daemonTermId = null;
-    if (session.origin === ORIGIN.POOL) {
+    const isPoolOrigin =
+      session.origin === ORIGIN.POOL ||
+      session.origin === ORIGIN.SUB_AGENT ||
+      session.origin === ORIGIN.SUB_CLAUDE;
+    if (isPoolOrigin) {
       const pool = await window.api.poolRead();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at poolRead`);
@@ -207,10 +211,7 @@ async function selectSession(session) {
       } catch (err) {
         debugLog("session", `extra terminal discovery failed: ${err.message}`);
       }
-    } else if (
-      session.origin === ORIGIN.POOL ||
-      session.origin === ORIGIN.CUSTOM
-    ) {
+    } else if (isPoolOrigin || session.origin === ORIGIN.CUSTOM) {
       // Daemon session but no terminal found — fallback to shell
       await spawnTerminal(session.cwd);
       if (gen !== state.sessionGeneration) {
@@ -609,6 +610,24 @@ async function focusCurrentExternalTerminal() {
   if (result.focused) showNotification(`Focused ${result.app}`);
 }
 
+// --- Resume current session ---
+
+async function resumeCurrentSession() {
+  if (!state.currentSessionId) return;
+  const session = state.cachedSessions.find(
+    (s) => s.sessionId === state.currentSessionId,
+  );
+  if (!session) return;
+  // Only resume offloaded/archived/dead sessions
+  if (
+    session.status !== STATUS.OFFLOADED &&
+    session.status !== STATUS.ARCHIVED &&
+    session.status !== STATUS.DEAD
+  )
+    return;
+  await resumeOffloadedSession(session);
+}
+
 // --- Archive current session (then jump to recent idle) ---
 
 async function archiveCurrentSession() {
@@ -755,6 +774,7 @@ initCommandPalette({
   cycleTabInFocusedLeaf,
   jumpToRecentIdle,
   archiveCurrentSession,
+  resumeCurrentSession,
   toggleSidebar,
   togglePaneFocus,
   focusEditor,
@@ -1011,6 +1031,7 @@ window.api.onSplitDown(() => splitFocusedTab("down"));
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
+window.api.onResumeSession(resumeCurrentSession);
 window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });
