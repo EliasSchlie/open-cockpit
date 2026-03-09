@@ -624,6 +624,19 @@ function buildApiHandlers() {
     const startMarker = `START_${marker}`;
     const endMarker = `END_${marker}`;
     const wrapped = `echo ${startMarker}; ${msg.command}; echo ${endMarker}`;
+
+    const extractOutput = (buf) => {
+      const clean = stripAnsi(buf);
+      const startIdx = clean.lastIndexOf(startMarker);
+      if (startIdx < 0) return null;
+      const endIdx = clean.indexOf(endMarker, startIdx);
+      const raw = clean.slice(
+        startIdx + startMarker.length,
+        endIdx >= 0 ? endIdx : undefined,
+      );
+      return { output: raw.trim(), complete: endIdx >= 0 };
+    };
+
     daemonSendSafe({
       type: "write",
       termId: tab.termId,
@@ -633,29 +646,20 @@ function buildApiHandlers() {
     await new Promise((r) => setTimeout(r, 300));
     while (Date.now() < deadline) {
       const buf = await readTerminalBuffer(tab.termId);
-      const clean = stripAnsi(buf);
-      const startIdx = clean.lastIndexOf(startMarker);
-      const endIdx = startIdx >= 0 ? clean.indexOf(endMarker, startIdx) : -1;
-      if (startIdx >= 0 && endIdx >= 0) {
-        const between = clean.slice(startIdx + startMarker.length, endIdx);
-        const output = between.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+      const result = extractOutput(buf);
+      if (result?.complete) {
         return {
           type: "output",
-          output,
+          output: result.output,
           termId: tab.termId,
         };
       }
       await new Promise((r) => setTimeout(r, 200));
     }
     const finalBuf = await readTerminalBuffer(tab.termId);
-    const clean = stripAnsi(finalBuf);
-    const startIdx = clean.lastIndexOf(startMarker);
-    let partial = "";
-    if (startIdx >= 0) {
-      partial = clean.slice(startIdx + startMarker.length).trim();
-    }
+    const result = extractOutput(finalBuf);
     throw new Error(
-      `Command timed out after ${timeoutMs}ms. Partial output: ${partial}`,
+      `Command timed out after ${timeoutMs}ms. Partial output: ${result?.output || ""}`,
     );
   };
 
