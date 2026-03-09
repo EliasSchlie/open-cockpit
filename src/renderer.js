@@ -10,7 +10,12 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS, ORIGIN } from "./session-statuses.js";
+import {
+  STATUS,
+  ORIGIN,
+  isInactiveStatus,
+  isPoolOrigin,
+} from "./session-statuses.js";
 import { disposeTerminalEntry } from "./dock-helpers.js";
 import { createEditor, setOnDocChange } from "./editor.js";
 import { createOverlayDialog } from "./overlay-dialog.js";
@@ -141,12 +146,8 @@ async function selectSession(session) {
     dom.sessionView.classList.remove("colored");
   }
 
-  // Offloaded/archived/dead: show snapshot inline instead of a terminal
-  const showSnapshot =
-    session.status === STATUS.OFFLOADED ||
-    session.status === STATUS.ARCHIVED ||
-    session.status === STATUS.DEAD;
-  if (showSnapshot) {
+  // Inactive sessions: show snapshot inline instead of a terminal
+  if (isInactiveStatus(session.status)) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
@@ -154,11 +155,7 @@ async function selectSession(session) {
 
     // Resolve the daemon terminal ID for pool/custom/sub-agent sessions
     let daemonTermId = null;
-    const isPoolOrigin =
-      session.origin === ORIGIN.POOL ||
-      session.origin === ORIGIN.SUB_AGENT ||
-      session.origin === ORIGIN.SUB_CLAUDE;
-    if (isPoolOrigin) {
+    if (isPoolOrigin(session.origin)) {
       const pool = await window.api.poolRead();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at poolRead`);
@@ -211,7 +208,10 @@ async function selectSession(session) {
       } catch (err) {
         debugLog("session", `extra terminal discovery failed: ${err.message}`);
       }
-    } else if (isPoolOrigin || session.origin === ORIGIN.CUSTOM) {
+    } else if (
+      isPoolOrigin(session.origin) ||
+      session.origin === ORIGIN.CUSTOM
+    ) {
       // Daemon session but no terminal found — fallback to shell
       await spawnTerminal(session.cwd);
       if (gen !== state.sessionGeneration) {
@@ -493,13 +493,11 @@ function switchSession(direction) {
   const ordered = buildVisualOrder(maps);
   const navigable = ordered.filter(
     (s) =>
+      isInactiveStatus(s.status) ||
       (s.alive &&
         (s.status === STATUS.IDLE ||
           s.status === STATUS.PROCESSING ||
-          s.status === STATUS.TYPING)) ||
-      s.status === STATUS.ARCHIVED ||
-      s.status === STATUS.OFFLOADED ||
-      s.status === STATUS.DEAD,
+          s.status === STATUS.TYPING)),
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
@@ -618,13 +616,7 @@ async function resumeCurrentSession() {
     (s) => s.sessionId === state.currentSessionId,
   );
   if (!session) return;
-  // Only resume offloaded/archived/dead sessions
-  if (
-    session.status !== STATUS.OFFLOADED &&
-    session.status !== STATUS.ARCHIVED &&
-    session.status !== STATUS.DEAD
-  )
-    return;
+  if (!isInactiveStatus(session.status)) return;
   await resumeOffloadedSession(session);
 }
 

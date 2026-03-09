@@ -51,6 +51,24 @@ const PLUGIN_VERSION = {
   UNKNOWN: "unknown",
 };
 
+/** Session is no longer active (offloaded, archived, or dead). */
+function isInactiveStatus(status) {
+  return (
+    status === STATUS.OFFLOADED ||
+    status === STATUS.ARCHIVED ||
+    status === STATUS.DEAD
+  );
+}
+
+/** Origin is managed by the pool daemon (pool slots, sub-agents, sub-claude). */
+function isPoolOrigin(origin) {
+  return (
+    origin === ORIGIN.POOL ||
+    origin === ORIGIN.SUB_AGENT ||
+    origin === ORIGIN.SUB_CLAUDE
+  );
+}
+
 /**
  * Map a live session status to the corresponding pool slot status.
  * Returns null if the session status has no pool equivalent (caller decides fallback).
@@ -77,5 +95,7 @@ module.exports = {
   ORIGIN,
   UPDATE_STATUS,
   PLUGIN_VERSION,
+  isInactiveStatus,
+  isPoolOrigin,
   sessionToPoolStatus,
 };

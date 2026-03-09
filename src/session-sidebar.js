@@ -11,7 +11,12 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS, INITIATOR, ORIGIN } from "./session-statuses.js";
+import {
+  STATUS,
+  INITIATOR,
+  ORIGIN,
+  isInactiveStatus,
+} from "./session-statuses.js";
 import {
   createDefaultLayout,
   TAB_EDITOR,
@@ -362,11 +367,8 @@ async function loadSessions() {
 function createSessionItem(s, depth = 0) {
   const li = document.createElement("li");
   const isChild = depth > 0;
-  const dimmed =
-    s.status === STATUS.OFFLOADED ||
-    s.status === STATUS.ARCHIVED ||
-    s.status === STATUS.DEAD;
-  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${dimmed ? " offloaded" : ""}${isChild ? " session-child" : ""}`;
+  const inactive = isInactiveStatus(s.status);
+  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${inactive ? " inactive" : ""}${isChild ? " session-child" : ""}`;
   li.dataset.sessionId = s.sessionId;
   if (isChild) li.style.paddingLeft = `${12 + depth * 18}px`;
   const heading = s.intentionHeading || s.intentionPreview || null;

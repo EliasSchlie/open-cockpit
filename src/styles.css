@@ -213,17 +213,16 @@ body {
   height: 5px;
 }
 
-/* Offloaded/archived/dead sessions are dimmed */
-.session-item.offloaded {
+/* Inactive sessions (offloaded/archived/dead) are dimmed */
+.session-item.inactive {
   opacity: 0.65;
 }
 
-.session-item.offloaded:hover {
+.session-item.inactive:hover {
   opacity: 0.85;
 }
 
-/* Origin tags on dimmed sessions get muted colors */
-.session-item.offloaded .session-origin-tag {
+.session-item.inactive .session-origin-tag {
   opacity: 0.5;
 }
 
