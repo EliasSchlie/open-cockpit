@@ -649,6 +649,7 @@ app.whenReady().then(async () => {
   });
   // --- Layout persistence ---
   ipcMain.handle("save-layout", (_e, sessionId, layout) => {
+    poolManager.validateSessionId(sessionId);
     try {
       secureMkdirSync(LAYOUTS_DIR);
       const filePath = path.join(LAYOUTS_DIR, `${sessionId}.json`);
@@ -657,10 +658,12 @@ app.whenReady().then(async () => {
       /* best-effort — layout save failure is non-fatal */
     }
   });
-  ipcMain.handle("load-layout", (_e, sessionId) =>
-    readJsonSync(path.join(LAYOUTS_DIR, `${sessionId}.json`)),
-  );
+  ipcMain.handle("load-layout", (_e, sessionId) => {
+    poolManager.validateSessionId(sessionId);
+    return readJsonSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));
+  });
   ipcMain.handle("delete-layout", (_e, sessionId) => {
+    poolManager.validateSessionId(sessionId);
     try {
       fs.unlinkSync(path.join(LAYOUTS_DIR, `${sessionId}.json`));
     } catch {
