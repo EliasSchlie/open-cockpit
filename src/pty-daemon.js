@@ -245,14 +245,22 @@ function handleSpawn(socket, msg) {
 
 function handleWrite(msg) {
   const entry = terminals.get(msg.termId);
-  if (entry && !entry.meta.exited) {
+  if (!entry) {
+    console.error(`[pty-daemon] write: unknown termId=${msg.termId}`);
+    return;
+  }
+  if (!entry.meta.exited) {
     entry.proc.write(msg.data);
   }
 }
 
 function handleResize(msg) {
   const entry = terminals.get(msg.termId);
-  if (entry && !entry.meta.exited) {
+  if (!entry) {
+    console.error(`[pty-daemon] resize: unknown termId=${msg.termId}`);
+    return;
+  }
+  if (!entry.meta.exited) {
     entry.proc.resize(msg.cols, msg.rows);
     entry.meta.cols = msg.cols;
     entry.meta.rows = msg.rows;
@@ -340,19 +348,23 @@ function handleAttach(socket, msg) {
 
 function handleDetach(socket, msg) {
   const entry = terminals.get(msg.termId);
-  if (entry) {
-    entry.clients.delete(socket);
-    // Clean up exited terminals with no attached clients
-    if (entry.meta.exited && entry.clients.size === 0) {
-      terminals.delete(msg.termId);
-      resetIdleTimer();
-    }
+  if (!entry) {
+    console.error(`[pty-daemon] detach: unknown termId=${msg.termId}`);
+    return;
+  }
+  entry.clients.delete(socket);
+  // Clean up exited terminals with no attached clients
+  if (entry.meta.exited && entry.clients.size === 0) {
+    terminals.delete(msg.termId);
+    resetIdleTimer();
   }
 }
 
 function handleClearBuffer(socket, msg) {
   const entry = terminals.get(msg.termId);
-  if (entry) {
+  if (!entry) {
+    console.error(`[pty-daemon] clear-buffer: unknown termId=${msg.termId}`);
+  } else {
     entry.chunks = [];
     entry.chunksLen = 0;
   }
@@ -365,7 +377,9 @@ function handleClearBuffer(socket, msg) {
 
 function handleSetSession(socket, msg) {
   const entry = terminals.get(msg.termId);
-  if (entry) {
+  if (!entry) {
+    console.error(`[pty-daemon] set-session: unknown termId=${msg.termId}`);
+  } else {
     entry.meta.sessionId = msg.sessionId;
   }
   sendTo(socket, {

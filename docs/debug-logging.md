@@ -40,9 +40,9 @@ Log rotates at 2 MB. Previous log is kept as `debug.log.1`. Only one generation 
 |-----|--------------|
 | `renderer:session` | Session selection, race-condition aborts (with generation counter) |
 | `renderer:pool` | Offload attempts, fresh-slot polling, poll timeouts, resume failures |
-| `renderer:term` | Terminal attach failures |
+| `renderer:term` | Terminal attach/detach/kill failures |
 | `renderer:editor` | Intention save failures |
-| `renderer:startup` | PTY reconnection count, orphaned PTY detach |
+| `renderer:startup` | PTY reconnection count, orphaned PTY detach, shortcut config failures |
 
 ### Main (`main`)
 

@@ -2,6 +2,7 @@ import {
   showNotification,
   STATUS_CLASSES,
   escapeHtml,
+  debugLog,
 } from "./renderer-state.js";
 import { STATUS, POOL_STATUS, UPDATE_STATUS } from "./session-statuses.js";
 import { FitAddon } from "@xterm/addon-fit";
@@ -112,7 +113,11 @@ async function openSlotTerminalPopup(slot) {
           otherEntry.term.rows,
         );
       } else {
-        window.api.ptyDetach(slot.termId).catch(() => {});
+        window.api
+          .ptyDetach(slot.termId)
+          .catch((e) =>
+            debugLog("pool", `detach failed termId=${slot.termId}`, e.message),
+          );
       }
       term.dispose();
     },

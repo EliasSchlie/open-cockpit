@@ -550,7 +550,12 @@ app.whenReady().then(async () => {
 
   // Poll fresh terminal buffers for input detection (ground truth)
   setInterval(
-    () => sessionDiscovery.pollTerminalInput().catch(() => {}),
+    () =>
+      sessionDiscovery
+        .pollTerminalInput()
+        .catch((err) =>
+          debugLog("main", "pollTerminalInput failed", err.message),
+        ),
     10_000,
   );
 

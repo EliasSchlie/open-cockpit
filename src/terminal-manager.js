@@ -463,7 +463,11 @@ export async function closeTerminal(index) {
     ? state.dock.getTabLeafId(entry.dockTabId)
     : null;
 
-  await window.api.ptyDetach(entry.termId).catch(() => {});
+  await window.api
+    .ptyDetach(entry.termId)
+    .catch((e) =>
+      debugLog("term", `detach failed termId=${entry.termId}`, e.message),
+    );
   await window.api.ptyKill(entry.termId);
   disposeTerminalEntry(entry, state.dock);
   state.terminals.splice(index, 1);
@@ -527,11 +531,19 @@ export function destroySessionTerminals(sessionId, { keepAlive = false } = {}) {
   const cached = sessionTerminals.get(sessionId);
   if (!cached) return;
   for (const entry of cached.terminals) {
-    window.api.ptyDetach(entry.termId).catch(() => {});
+    window.api
+      .ptyDetach(entry.termId)
+      .catch((e) =>
+        debugLog("term", `detach failed termId=${entry.termId}`, e.message),
+      );
     // Don't kill pool TUI terminals — the Claude process must stay alive.
     // With keepAlive, also skip killing extra shells (they survive in daemon).
     if (!entry.isPoolTui && !keepAlive) {
-      window.api.ptyKill(entry.termId).catch(() => {});
+      window.api
+        .ptyKill(entry.termId)
+        .catch((e) =>
+          debugLog("term", `kill failed termId=${entry.termId}`, e.message),
+        );
     }
     const activeDock = sessionId === state.currentSessionId ? state.dock : null;
     disposeTerminalEntry(entry, activeDock);
@@ -545,9 +557,17 @@ export function killAllTerminals() {
     destroySessionTerminals(sid);
   }
   for (const entry of state.terminals) {
-    window.api.ptyDetach(entry.termId).catch(() => {});
+    window.api
+      .ptyDetach(entry.termId)
+      .catch((e) =>
+        debugLog("term", `detach failed termId=${entry.termId}`, e.message),
+      );
     if (!entry.isPoolTui) {
-      window.api.ptyKill(entry.termId).catch(() => {});
+      window.api
+        .ptyKill(entry.termId)
+        .catch((e) =>
+          debugLog("term", `kill failed termId=${entry.termId}`, e.message),
+        );
     }
     disposeTerminalEntry(entry, state.dock);
   }
@@ -694,7 +714,15 @@ export async function reconnectAllPtys() {
     if (sid === "__none__") {
       debugLog("startup", `detaching ${sessionPtys.length} orphaned PTYs`);
       for (const p of sessionPtys) {
-        window.api.ptyDetach(p.termId).catch(() => {});
+        window.api
+          .ptyDetach(p.termId)
+          .catch((e) =>
+            debugLog(
+              "startup",
+              `orphan detach failed termId=${p.termId}`,
+              e.message,
+            ),
+          );
       }
       continue;
     }
@@ -825,7 +853,11 @@ window.api.onApiTermClosed((sessionId, termId) => {
   if (idx === -1) return;
 
   const entry = state.terminals[idx];
-  window.api.ptyDetach(entry.termId).catch(() => {});
+  window.api
+    .ptyDetach(entry.termId)
+    .catch((e) =>
+      debugLog("term", `detach failed termId=${entry.termId}`, e.message),
+    );
   disposeTerminalEntry(entry, state.dock);
   state.terminals.splice(idx, 1);
 
