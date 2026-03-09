@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
@@ -620,39 +621,46 @@ function buildApiHandlers() {
     const tab = terminals[msg.tabIndex];
     if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
     if (tab.isTui) throw new Error("Cannot run commands in the Claude TUI tab");
-    const beforeBuffer = tab.buffer;
+    const marker = `__COCKPIT_${crypto.randomBytes(8).toString("hex")}__`;
+    const startMarker = `START_${marker}`;
+    const endMarker = `END_${marker}`;
+    const wrapped = `echo ${startMarker}; ${msg.command}; echo ${endMarker}`;
+
+    const extractOutput = (buf) => {
+      const clean = stripAnsi(buf);
+      const startIdx = clean.lastIndexOf(startMarker);
+      if (startIdx < 0) return null;
+      const endIdx = clean.indexOf(endMarker, startIdx);
+      const raw = clean.slice(
+        startIdx + startMarker.length,
+        endIdx >= 0 ? endIdx : undefined,
+      );
+      return { output: raw.trim(), complete: endIdx >= 0 };
+    };
+
     daemonSendSafe({
       type: "write",
       termId: tab.termId,
-      data: msg.command + "\r",
+      data: wrapped + "\r",
     });
-    const promptRe = /[\$\u276F%#>] *$/;
     const deadline = Date.now() + timeoutMs;
     await new Promise((r) => setTimeout(r, 300));
     while (Date.now() < deadline) {
       const buf = await readTerminalBuffer(tab.termId);
-      if (buf.length > beforeBuffer.length) {
-        const newContent = buf.slice(beforeBuffer.length);
-        const clean = stripAnsi(newContent);
-        const lines = clean.split("\n").filter((l) => l.trim());
-        if (lines.length > 1) {
-          const lastLine = lines[lines.length - 1].trimEnd();
-          if (promptRe.test(lastLine)) {
-            const outputLines = lines.slice(1, -1);
-            return {
-              type: "output",
-              output: outputLines.join("\n"),
-              termId: tab.termId,
-            };
-          }
-        }
+      const result = extractOutput(buf);
+      if (result?.complete) {
+        return {
+          type: "output",
+          output: result.output,
+          termId: tab.termId,
+        };
       }
       await new Promise((r) => setTimeout(r, 200));
     }
     const finalBuf = await readTerminalBuffer(tab.termId);
-    const delta = finalBuf.slice(beforeBuffer.length);
+    const result = extractOutput(finalBuf);
     throw new Error(
-      `Command timed out after ${timeoutMs}ms. Partial output: ${stripAnsi(delta).trim()}`,
+      `Command timed out after ${timeoutMs}ms. Partial output: ${result?.output || ""}`,
     );
   };
 
