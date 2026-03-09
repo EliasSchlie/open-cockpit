@@ -23,12 +23,27 @@ const {
   chmodSync,
 } = require("./platform");
 
+const { sanitizeBufferStart, BUFFER_SIZE } = require("./buffer-sanitize");
+
 const OPEN_COCKPIT_DIR =
   process.env.OPEN_COCKPIT_DIR || path.join(os.homedir(), ".open-cockpit");
 const SOCKET_PATH =
   process.env.PTY_DAEMON_SOCK || path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
-const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
+
+/**
+ * Materialize a terminal's buffer for reading. Skips sanitization when the
+ * buffer hasn't been truncated (joined length <= BUFFER_SIZE).
+ */
+function getBuffer(entry) {
+  if (entry.chunks.length === 1 && entry.chunksLen <= BUFFER_SIZE) {
+    return entry.chunks[0];
+  }
+  const joined = entry.chunks.join("");
+  if (joined.length <= BUFFER_SIZE) return joined;
+  return sanitizeBufferStart(joined.slice(-BUFFER_SIZE));
+}
+
 const ALLOWED_SHELLS = getAllowedShells();
 const EXTRA_PATH_DIRS = getExtraPathDirs();
 
@@ -171,35 +186,7 @@ function handleSpawn(socket, msg) {
       entry.chunks.push(data);
       entry.chunksLen += data.length;
       if (entry.chunksLen > BUFFER_SIZE * 2) {
-        let joined = entry.chunks.join("").slice(-BUFFER_SIZE);
-        // Skip leading UTF-8 continuation bytes (0x80-0xBF) to avoid starting
-        // mid-character if the slice split a multi-byte sequence (#90)
-        while (
-          joined.length > 0 &&
-          joined.charCodeAt(0) >= 0x80 &&
-          joined.charCodeAt(0) <= 0xbf
-        ) {
-          joined = joined.slice(1);
-        }
-        // Skip a partial ANSI escape sequence at the start of the buffer.
-        // If the slice cut mid-escape (e.g. "\x1b[32" without "m"), the
-        // truncated sequence would corrupt terminal state on replay.
-        const escIdx = joined.indexOf("\x1b");
-        if (escIdx >= 0 && escIdx < 40) {
-          // ECMA-48: CSI = ESC [ <parameter bytes 0x30-3F>* <intermediate 0x20-2F>* <final 0x40-7E>
-          // Also handles OSC (ESC ]), charset (ESC ( / ) ), and single-char escapes.
-          const afterEsc = joined.substring(escIdx, escIdx + 40);
-          const complete =
-            /^\x1b(?:\[[\x20-\x3f]*[\x40-\x7e]|\].*?(?:\x07|\x1b\\)|[()][0-9A-Za-z]|.)/.test(
-              afterEsc,
-            );
-          if (!complete) {
-            // Incomplete escape — skip past it
-            const nextEsc = joined.indexOf("\x1b", escIdx + 1);
-            joined =
-              nextEsc > 0 ? joined.slice(nextEsc) : joined.slice(escIdx + 1);
-          }
-        }
+        const joined = getBuffer(entry);
         entry.chunks = [joined];
         entry.chunksLen = joined.length;
       }
@@ -288,7 +275,7 @@ function handleKill(socket, msg) {
 function handleList(socket, msg) {
   const ptys = [];
   for (const [, entry] of terminals) {
-    const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
+    const buffer = getBuffer(entry);
     ptys.push({
       ...entry.meta,
       buffer,
@@ -309,7 +296,7 @@ function handleReadBuffer(socket, msg) {
     });
     return;
   }
-  const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
+  const buffer = getBuffer(entry);
   sendTo(socket, {
     type: "read-buffer-result",
     id: msg.id,
@@ -336,7 +323,7 @@ function handleAttach(socket, msg) {
 
   // Then replay buffered output (no id — goes through push event path)
   if (entry.chunksLen > 0) {
-    const buffer = entry.chunks.join("").slice(-BUFFER_SIZE);
+    const buffer = getBuffer(entry);
     sendTo(socket, { type: "replay", termId: msg.termId, data: buffer });
   }
   if (entry.meta.exited) {

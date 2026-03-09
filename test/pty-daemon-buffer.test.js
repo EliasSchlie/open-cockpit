@@ -48,6 +48,15 @@ function request(sock, msg) {
         if (parsed.id === id) {
           clearTimeout(timeout);
           sock.off("data", onData);
+          // Drain any remaining lines in buf (e.g. replay event coalesced
+          // with attach response in the same TCP chunk)
+          while ((idx = buf.indexOf("\n")) !== -1) {
+            const extra = buf.slice(0, idx);
+            buf = buf.slice(idx + 1);
+            if (!extra.trim()) continue;
+            if (!sock._stash) sock._stash = [];
+            sock._stash.push(JSON.parse(extra));
+          }
           resolve(parsed);
           return;
         }
