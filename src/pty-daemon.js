@@ -179,6 +179,25 @@ function handleSpawn(socket, msg) {
         ) {
           joined = joined.slice(1);
         }
+        // Skip a partial ANSI escape sequence at the start of the buffer.
+        // If the slice cut mid-escape (e.g. "\x1b[32" without "m"), the
+        // truncated sequence would corrupt terminal state on replay.
+        const escIdx = joined.indexOf("\x1b");
+        if (escIdx >= 0 && escIdx < 40) {
+          // ECMA-48: CSI = ESC [ <parameter bytes 0x30-3F>* <intermediate 0x20-2F>* <final 0x40-7E>
+          // Also handles OSC (ESC ]), charset (ESC ( / ) ), and single-char escapes.
+          const afterEsc = joined.substring(escIdx, escIdx + 40);
+          const complete =
+            /^\x1b(?:\[[\x20-\x3f]*[\x40-\x7e]|\].*?(?:\x07|\x1b\\)|[()][0-9A-Za-z]|.)/.test(
+              afterEsc,
+            );
+          if (!complete) {
+            // Incomplete escape — skip past it
+            const nextEsc = joined.indexOf("\x1b", escIdx + 1);
+            joined =
+              nextEsc > 0 ? joined.slice(nextEsc) : joined.slice(escIdx + 1);
+          }
+        }
         entry.chunks = [joined];
         entry.chunksLen = joined.length;
       }
@@ -331,6 +350,19 @@ function handleDetach(socket, msg) {
   }
 }
 
+function handleClearBuffer(socket, msg) {
+  const entry = terminals.get(msg.termId);
+  if (entry) {
+    entry.chunks = [];
+    entry.chunksLen = 0;
+  }
+  sendTo(socket, {
+    type: "buffer-cleared",
+    id: msg.id,
+    termId: msg.termId,
+  });
+}
+
 function handleSetSession(socket, msg) {
   const entry = terminals.get(msg.termId);
   if (entry) {
@@ -363,6 +395,8 @@ function handleMessage(socket, msg) {
       return handleAttach(socket, msg);
     case "detach":
       return handleDetach(socket, msg);
+    case "clear-buffer":
+      return handleClearBuffer(socket, msg);
     case "set-session":
       return handleSetSession(socket, msg);
     case "ping":
