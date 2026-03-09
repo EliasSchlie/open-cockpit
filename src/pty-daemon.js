@@ -25,8 +25,10 @@ const {
 
 const { sanitizeBufferStart, BUFFER_SIZE } = require("./buffer-sanitize");
 
-const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
-const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const OPEN_COCKPIT_DIR =
+  process.env.OPEN_COCKPIT_DIR || path.join(os.homedir(), ".open-cockpit");
+const SOCKET_PATH =
+  process.env.PTY_DAEMON_SOCK || path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
 
 /**

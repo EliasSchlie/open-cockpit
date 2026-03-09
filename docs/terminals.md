@@ -10,7 +10,7 @@ Tab labeled "Claude" for pool TUI, "Terminal N" for shells. Pool TUI tabs detach
 
 ## Pool TUI attach strategy
 
-`attachPoolTerminal` skips the daemon's replay buffer entirely — recycled pool slots' buffers contain old session content from before `/clear`. Instead, it forces a SIGWINCH to trigger Claude's clean redraw. macOS's XNU kernel skips SIGWINCH when `ioctl(TIOCSWINSZ)` sets identical dimensions, so the code "jiggles" the PTY (shrinks by 1 column, then restores) to guarantee delivery.
+`attachPoolTerminal` fetches the PTY's current dimensions and replay buffer from the daemon, creates xterm at those exact dimensions, and writes the buffer directly. This avoids xterm.js reflow garbling (writing an 80×24 buffer into a 200×50 terminal causes line re-wrapping that corrupts cursor-positioned content). The buffer is clean because `offloadSession` clears it via the daemon's `clear-buffer` command before recycling.
 
 `reportTerminalDims` reports window size to pool-manager so new pool slots spawn at the correct dimensions from the start (reduces initial resize flash).
 
@@ -22,14 +22,11 @@ xterm.js reflow on resize treats all content as reflowable text, re-wrapping lin
 
 Shell terminals are unaffected — reflow is acceptable for normal text output.
 
-**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Skip the buffer entirely (initial attach) or clear before resize (ongoing resizes).
+**Key invariant**: Pool TUI terminals must never have cursor-positioned content in xterm's buffer when a resize occurs. Write the buffer at matching dimensions (initial attach) or clear before resize (ongoing resizes).
 
 ## Reconnect handling
 
-When reconnecting to a session after app restart, `reconnectTerminal()` handles pool TUI and shell terminals differently:
-
-- **Pool TUI**: Skips the daemon buffer entirely (may contain stale content) and forces a SIGWINCH via dimension jiggle, same as `attachPoolTerminal`.
-- **Shell**: Writes the buffer at matching dimensions to restore scrollback. Flagged with `_hasReconnectBuffer` so `setupTerminalResize` clears on first resize if dims changed, preventing reflow garbling.
+When reconnecting to a session after app restart, `reconnectTerminal()` writes the PTY's saved buffer at matching dimensions. If the window has since changed size, `fitAddon.fit()` would reflow the buffer, garbling TUI content. To prevent this, entries are flagged with `_hasReconnectBuffer` — on the first resize, `setupTerminalResize` clears the buffer and lets SIGWINCH trigger a full redraw.
 
 ## API-created tabs
 

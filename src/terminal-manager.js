@@ -337,10 +337,12 @@ export async function attachPoolTerminal(poolTermId) {
   term.loadAddon(fitAddon);
   term.open(container);
 
-  // Skip the daemon's replay event — the buffer may contain old session
-  // content from before /clear (the PTY persists across session recycling).
-  // Request a SIGWINCH redraw once the terminal becomes visible (doFit).
-  const hasBuffer = !!ptyInfo?.buffer;
+  // Write the buffer directly at matching dimensions (no reflow).
+  // Then skip the daemon's replay event to avoid writing it twice.
+  // The buffer is clean because offloadSession clears it via clear-buffer.
+  if (ptyInfo?.buffer) {
+    term.write(ptyInfo.buffer);
+  }
 
   const entry = {
     termId: poolTermId,
@@ -349,8 +351,7 @@ export async function attachPoolTerminal(poolTermId) {
     fitAddon,
     container,
     isPoolTui: true,
-    skipReplay: hasBuffer,
-    _needsRedraw: true,
+    skipReplay: !!ptyInfo?.buffer,
     dockTabId: null,
     _resizeHandler: null,
   };
@@ -648,18 +649,11 @@ export async function reconnectTerminal(ptyInfo) {
   };
 
   if (ptyInfo.buffer) {
-    if (entry.isPoolTui) {
-      // Pool TUI: skip stale buffer, doFit will jiggle SIGWINCH when visible
-      entry.skipReplay = true;
-      entry._needsRedraw = true;
-    } else {
-      // Shell: write buffer to restore scrollback
-      term.write(ptyInfo.buffer);
-      entry.skipReplay = true;
-      // Flag so setupTerminalResize clears on first fit if dims changed,
-      // preventing reflow garbling of cursor-positioned content.
-      entry._hasReconnectBuffer = true;
-    }
+    term.write(ptyInfo.buffer);
+    entry.skipReplay = true;
+    // Flag so setupTerminalResize clears on first fit if dims changed,
+    // preventing reflow garbling of cursor-positioned content.
+    entry._hasReconnectBuffer = true;
   }
 
   pendingTerminals.set(ptyInfo.termId, entry);
