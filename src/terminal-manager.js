@@ -553,6 +553,15 @@ export function cleanupStaleTerminals(liveSessions) {
   }
 }
 
+// Place a terminal tab in the same leaf as the Claude TUI (or the first leaf).
+function addTabNearTui(entry) {
+  if (!state.dock) return;
+  const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
+  const leaf =
+    (tuiTab && state.dock.getTabLeafId(tuiTab)) || state.dock.getFirstLeafId();
+  state.dock.addTab(entry.dockTabId, leaf);
+}
+
 // Discover and attach extra daemon terminals for a session (e.g. opened via API).
 // Skips the primary terminal (excludeTermId) which is already attached.
 export async function discoverExtraTerminals(sessionId, excludeTermId) {
@@ -564,13 +573,7 @@ export async function discoverExtraTerminals(sessionId, excludeTermId) {
     const entry = await reconnectTerminal(p);
     state.terminals.push(entry);
     dockRegisterTerminal(entry);
-    if (state.dock) {
-      const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
-      const leaf =
-        (tuiTab && state.dock.getTabLeafId(tuiTab)) ||
-        state.dock.getFirstLeafId();
-      state.dock.addTab(entry.dockTabId, leaf);
-    }
+    addTabNearTui(entry);
   }
   if (extraPtys.length > 0) syncSessionCache();
   return extraPtys.length;
@@ -790,13 +793,7 @@ window.api.onApiTermOpened(async (sessionId, termId) => {
   setupTerminalResize(entry);
 
   dockRegisterTerminal(entry);
-  if (state.dock) {
-    const tuiTab = state.terminals.find((t) => t.isPoolTui)?.dockTabId;
-    const leaf =
-      (tuiTab && state.dock.getTabLeafId(tuiTab)) ||
-      state.dock.getFirstLeafId();
-    state.dock.addTab(entry.dockTabId, leaf);
-  }
+  addTabNearTui(entry);
   syncSessionCache();
 });
 
