@@ -21,7 +21,7 @@ const {
   secureWriteFileSync,
   readJsonSync,
 } = require("./secure-fs");
-const { daemonRequest } = require("./daemon-client");
+const { daemonRequest, daemonSend } = require("./daemon-client");
 const {
   SESSION_PIDS_DIR,
   CLAUDE_PROJECTS_DIR,
@@ -168,6 +168,37 @@ function freshOrTyping(hasIntentionContent, hasTermInput) {
   return hasIntentionContent || hasTermInput ? STATUS.TYPING : STATUS.FRESH;
 }
 
+// Force a clean TUI redraw by jittering the terminal width.
+// Claude Code's TUI redraws on SIGWINCH, flushing any mid-frame artifacts
+// from the PTY buffer. A short delay lets the TUI finish writing its clean
+// frame before we re-read.
+const JITTER_SETTLE_MS = 50;
+
+async function jitterRedraw(ptys, freshTermIds) {
+  const targets = ptys.filter((p) => freshTermIds.has(p.termId) && p.cols);
+  if (targets.length === 0) return;
+  // Resize all fresh terminals: cols+1, then back to cols.
+  // Daemon resize is fire-and-forget (no response), so use daemonSend.
+  for (const p of targets) {
+    daemonSend({
+      type: "resize",
+      termId: p.termId,
+      cols: p.cols + 1,
+      rows: p.rows,
+    });
+  }
+  for (const p of targets) {
+    daemonSend({
+      type: "resize",
+      termId: p.termId,
+      cols: p.cols,
+      rows: p.rows,
+    });
+  }
+  // Let the TUI process SIGWINCH and write its clean frame
+  await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
+}
+
 async function pollTerminalInput() {
   if (pollInFlight) return;
   pollInFlight = true;
@@ -178,7 +209,7 @@ async function pollTerminalInput() {
     const freshSlots = pool.slots.filter((s) => isSlotUncommitted(s.status));
     if (freshSlots.length === 0) return;
 
-    // Single daemon call to get all terminal buffers
+    // Get current terminal state to learn cols/rows for jitter
     let ptys;
     try {
       const resp = await daemonRequest({ type: "list" });
@@ -189,6 +220,20 @@ async function pollTerminalInput() {
     }
 
     const freshTermIds = new Set(freshSlots.map((s) => s.termId));
+
+    // Jitter-resize fresh terminals to force a clean TUI redraw, then re-read
+    try {
+      await jitterRedraw(ptys, freshTermIds);
+      const resp2 = await daemonRequest({ type: "list" });
+      ptys = resp2.ptys || [];
+    } catch (err) {
+      _debugLog(
+        "main",
+        "pollTerminalInput: jitter failed, using original buffers",
+        err.message,
+      );
+    }
+
     const ptyTermIds = new Set(ptys.map((p) => p.termId));
     const results = await checkTerminalInputs(ptys, freshTermIds);
 
