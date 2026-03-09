@@ -144,18 +144,51 @@ function computePoolHealth(pool, sessions, isProcessAlive) {
   };
 }
 
+/** How long a slot may remain STARTING before being marked ERROR. */
+const STARTING_TIMEOUT_MS = 90_000;
+
 /**
  * Sync pool slot statuses with live session data.
  * Returns updated pool (or null if no changes).
+ * @param {Function} [log] — optional debug logger (tag, message)
  */
-function syncStatuses(pool, sessions) {
+function syncStatuses(pool, sessions, log) {
   if (!pool) return null;
 
   const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
   let changed = false;
 
   for (const slot of pool.slots) {
-    if (slot.status === POOL_STATUS.STARTING) continue;
+    if (slot.status === POOL_STATUS.STARTING) {
+      // If session discovery already knows the real status, transition immediately
+      const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
+      if (session) {
+        const resolved = sessionToPoolStatus(session.status);
+        if (resolved) {
+          if (log)
+            log(
+              "main",
+              `Slot ${slot.index} STARTING→${resolved} (session ${slot.sessionId} is ${session.status})`,
+            );
+          slot.status = resolved;
+          changed = true;
+        }
+      } else if (slot.createdAt) {
+        // Timeout guard: STARTING too long → ERROR so reconcilePool restarts it
+        const age = Date.now() - new Date(slot.createdAt).getTime();
+        if (age > STARTING_TIMEOUT_MS) {
+          if (log)
+            log(
+              "main",
+              `Slot ${slot.index} STARTING timed out after ${Math.round(age / 1000)}s → ERROR (termId=${slot.termId} pid=${slot.pid})`,
+            );
+          slot.status = POOL_STATUS.ERROR;
+          changed = true;
+        }
+      }
+      continue;
+    }
+
     const session = slot.sessionId ? sessionMap.get(slot.sessionId) : null;
     if (!session) continue;
 
@@ -165,6 +198,11 @@ function syncStatuses(pool, sessions) {
     const newStatus = sessionToPoolStatus(session.status) ?? slot.status;
 
     if (newStatus !== slot.status) {
+      if (log)
+        log(
+          "main",
+          `Slot ${slot.index} ${slot.status}→${newStatus} (session ${slot.sessionId})`,
+        );
       slot.status = newStatus;
       changed = true;
     }
@@ -275,6 +313,7 @@ module.exports = {
   selectShrinkCandidates,
   computePoolHealth,
   syncStatuses,
+  STARTING_TIMEOUT_MS,
   findSlotBySessionId,
   findSlotByIndex,
   resolveSlot,

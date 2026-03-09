@@ -1250,7 +1250,7 @@ async function syncPoolStatuses(sessions) {
   return withPoolLock(() => {
     const pool = readPool();
     if (!pool) return null;
-    const updated = syncStatuses(pool, sessions);
+    const updated = syncStatuses(pool, sessions, _debugLog);
     if (updated) writePool(updated);
     return updated || pool;
   });

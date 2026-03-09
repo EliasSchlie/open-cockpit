@@ -51,6 +51,8 @@ Log rotates at 2 MB. Previous log is kept as `debug.log.1`. Only one generation 
 | App startup (dev/prod mode, PID) |
 | Pool slot init/resume failures (termId, pid, reason) |
 | Pool slot tracking errors (termId, pid, error message) |
+| Pool slot status transitions (slot index, old→new status, session ID) |
+| STARTING slot timeout → ERROR (slot index, age, termId, pid) |
 | Trust prompt detection failures (termId) |
 
 ## Reading logs
