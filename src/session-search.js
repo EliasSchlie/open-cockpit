@@ -2,6 +2,7 @@
 import { state, dom, STATUS_CLASSES, escapeHtml } from "./renderer-state.js";
 import { STATUS, ORIGIN } from "./session-statuses.js";
 import { createPickerOverlay } from "./picker-overlay.js";
+import { expandParentChain } from "./session-sidebar.js";
 
 // Hoisted regex for word boundary detection in fuzzy scoring
 const BOUNDARY_RE = /[\s/\-_.]/;
@@ -22,11 +23,15 @@ export function initSessionSearch(actions) {
     listEl: dom.sessionSearchList,
     onInput: (query) => renderResults(query),
     onSelect: (index) => {
-      _actions.selectSession(filteredSessions[index]);
+      const session = filteredSessions[index];
+      if (!session) return;
+      expandParentChain(session.sessionId);
+      _actions.selectSession(session);
     },
     onOpen: () => renderResults(""),
     onClose: () => {
-      filteredSessions = [];
+      // Don't clear filteredSessions here — onSelect runs after close
+      // and needs the array intact. It's rebuilt on next open anyway.
       _actions.focusTerminal();
     },
     getItemCount: () => filteredSessions.length,

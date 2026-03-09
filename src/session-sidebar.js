@@ -705,6 +705,23 @@ function hasSessionChildren(sessionId) {
   return childrenMap.has(sessionId);
 }
 
+// Expand all ancestors of a session so it becomes visible in the sidebar
+function expandParentChain(sessionId) {
+  const session = state.cachedSessions.find((s) => s.sessionId === sessionId);
+  if (!session?.parentSessionId) return;
+  let parentId = session.parentSessionId;
+  let changed = false;
+  while (parentId) {
+    if (!childrenExpanded.has(parentId)) {
+      childrenExpanded.add(parentId);
+      changed = true;
+    }
+    const parent = state.cachedSessions.find((s) => s.sessionId === parentId);
+    parentId = parent?.parentSessionId || null;
+  }
+  if (changed) invalidateSidebar();
+}
+
 export {
   loadDirColors,
   getDirColor,
@@ -720,5 +737,6 @@ export {
   toggleChildrenExpanded,
   isChildrenExpanded,
   hasSessionChildren,
+  expandParentChain,
   archiveWithChildCheck,
 };
