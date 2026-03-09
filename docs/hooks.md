@@ -26,13 +26,13 @@ Resolves the session ID via the PID mapping written by `session-pid-map.sh`.
 
 Detects when sessions become idle (waiting for user input) or start processing. Writes signal files to `~/.open-cockpit/idle-signals/<PID>`.
 
-**No false positives.** Idle signals must only appear when a session is truly waiting for user input. The app may trigger notifications (e.g. a bell) on idle, so a premature signal is worse than a delayed one. The `stop` trigger defers writing for a few seconds and verifies the transcript hasn't changed (which would indicate a re-prompt from another hook).
+**No false positives.** Idle signals must only appear when a session is truly waiting for user input. The app may trigger notifications (e.g. a bell) on idle, so a premature signal is worse than a delayed one. The `stop` trigger defers writing for 5 seconds and verifies via a `.pending` file that no re-prompt occurred (UserPromptSubmit clears it, new Stop hooks overwrite it).
 
 ### Signal lifecycle
 
 | Hook Event | Matcher | Action | Meaning |
 |------------|---------|--------|---------|
-| `Stop` | — | deferred write (stop) | Claude finished responding (verified after 3s) |
+| `Stop` | — | deferred write (stop) | Claude finished responding (verified after 5s) |
 | `PreToolUse` | `AskUserQuestion\|ExitPlanMode` | write (tool) | Claude is asking for input |
 | `PermissionRequest` | — | write (permission) | Waiting for permission approval |
 | `PostToolUse` | — | clear | Processing resumed after tool use |
