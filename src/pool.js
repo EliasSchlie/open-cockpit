@@ -250,6 +250,7 @@ function findOffloadTargets(pool, sessionMap, minFresh = 1) {
       pid: slot.pid,
       cwd: vs?.cwd,
       gitRoot: vs?.gitRoot,
+      origin: vs?.origin,
     };
   });
 }
