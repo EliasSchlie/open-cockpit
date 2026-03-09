@@ -337,20 +337,9 @@ export async function attachPoolTerminal(poolTermId) {
   term.loadAddon(fitAddon);
   term.open(container);
 
-  // Skip the daemon's replay event — the buffer contains old session content
-  // from before /clear (the PTY persists across session recycling). Instead of
-  // writing stale content, force a SIGWINCH so Claude redraws cleanly.
+  // Skip the daemon's replay event — the buffer may contain old session
+  // content from before /clear (the PTY persists across session recycling).
   const hasBuffer = !!ptyInfo?.buffer;
-  if (hasBuffer && ptyInfo.cols && ptyInfo.rows) {
-    // Jiggle PTY dimensions to force SIGWINCH delivery. macOS kernel skips
-    // SIGWINCH when ioctl(TIOCSWINSZ) sets identical dimensions.
-    window.api.ptyResize(
-      poolTermId,
-      Math.max(1, ptyInfo.cols - 1),
-      ptyInfo.rows,
-    );
-    await window.api.ptyResize(poolTermId, ptyInfo.cols, ptyInfo.rows);
-  }
 
   const entry = {
     termId: poolTermId,
@@ -382,6 +371,17 @@ export async function attachPoolTerminal(poolTermId) {
 
   wireTerminalInput(term, poolTermId);
   setupTerminalResize(entry);
+
+  // Force SIGWINCH AFTER attach so Claude's redraw output reaches our terminal.
+  // Jiggle dimensions because macOS kernel skips SIGWINCH for identical dims.
+  if (hasBuffer && ptyInfo.cols && ptyInfo.rows) {
+    window.api.ptyResize(
+      poolTermId,
+      Math.max(1, ptyInfo.cols - 1),
+      ptyInfo.rows,
+    );
+    await window.api.ptyResize(poolTermId, ptyInfo.cols, ptyInfo.rows);
+  }
 
   // Register with dock
   dockRegisterTerminal(entry);
@@ -658,17 +658,8 @@ export async function reconnectTerminal(ptyInfo) {
 
   if (ptyInfo.buffer) {
     if (entry.isPoolTui) {
-      // Pool TUI: skip stale buffer (may contain old session content from
-      // before /clear). Force SIGWINCH via dimension jiggle so Claude redraws.
+      // Pool TUI: skip stale buffer, will jiggle SIGWINCH after attach
       entry.skipReplay = true;
-      if (ptyInfo.cols && ptyInfo.rows) {
-        window.api.ptyResize(
-          ptyInfo.termId,
-          Math.max(1, ptyInfo.cols - 1),
-          ptyInfo.rows,
-        );
-        await window.api.ptyResize(ptyInfo.termId, ptyInfo.cols, ptyInfo.rows);
-      }
     } else {
       // Shell: write buffer to restore scrollback
       term.write(ptyInfo.buffer);
@@ -696,6 +687,16 @@ export async function reconnectTerminal(ptyInfo) {
 
   wireTerminalInput(term, ptyInfo.termId);
   setupTerminalResize(entry);
+
+  // Force SIGWINCH AFTER attach so Claude's redraw reaches our terminal
+  if (entry.isPoolTui && ptyInfo.buffer && ptyInfo.cols && ptyInfo.rows) {
+    window.api.ptyResize(
+      ptyInfo.termId,
+      Math.max(1, ptyInfo.cols - 1),
+      ptyInfo.rows,
+    );
+    await window.api.ptyResize(ptyInfo.termId, ptyInfo.cols, ptyInfo.rows);
+  }
 
   return entry;
 }
