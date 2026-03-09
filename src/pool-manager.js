@@ -1267,13 +1267,46 @@ async function killSlotProcess(slot) {
   }
 }
 
-// Destroy pool: kill all slots and remove pool.json
+// Destroy pool: archive live sessions, kill all slots, and remove pool.json
 async function poolDestroy() {
   return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) return;
-    const { terminalHasInputCache, getOffloadedSessions } =
+    const { terminalHasInputCache, getOffloadedSessions, getSessions } =
       getSessionDiscovery();
+
+    // Archive all live pool sessions before killing processes.
+    // We snapshot + write archive meta directly instead of using offloadSession()
+    // because offload sends /clear and tracks new slots — pointless during destroy.
+    const sessions = await getSessions();
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+    for (const slot of pool.slots) {
+      if (!slot.sessionId) continue;
+      // Skip if already offloaded/archived
+      if (readOffloadMeta(slot.sessionId)) continue;
+      let snapshot = null;
+      try {
+        const resp = await daemonRequest({ type: "list" });
+        const pty = resp.ptys.find((p) => p.termId === slot.termId);
+        if (pty && pty.buffer) snapshot = await renderBufferToText(pty.buffer);
+      } catch (err) {
+        _debugLog(
+          "main",
+          `poolDestroy: failed to snapshot session ${slot.sessionId}:`,
+          err.message,
+        );
+      }
+      const session = sessionMap.get(slot.sessionId);
+      await writeOffloadMeta(slot.sessionId, {
+        cwd: session?.cwd,
+        gitRoot: session?.gitRoot,
+        claudeSessionId: slot.sessionId,
+        snapshot,
+        origin: "pool",
+        archived: true,
+      });
+    }
+
     for (const slot of pool.slots) {
       await killSlotProcess(slot);
       // Clean up idle-signal and session-pid files so destroyed slots
