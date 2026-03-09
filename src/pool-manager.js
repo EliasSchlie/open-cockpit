@@ -81,6 +81,10 @@ function setTerminalDims(cols, rows) {
   _terminalDims = { cols, rows };
 }
 
+function getTerminalDims() {
+  return _terminalDims;
+}
+
 const { withPoolLock } = createPoolLock(POOL_FILE);
 
 // Poll a condition until it returns a truthy value, with timeout.
@@ -1685,4 +1689,5 @@ module.exports = {
   focusExternalTerminal,
   closeExternalTerminal,
   setTerminalDims,
+  getTerminalDims,
 };

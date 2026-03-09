@@ -57,6 +57,7 @@ const {
   writeIntention,
   getCachedClaudePath,
   acceptTrustPrompt,
+  getTerminalDims,
 } = require("./pool-manager");
 
 let _getMainWindow = () => null;
@@ -175,13 +176,16 @@ const sharedHandlers = {
     validateSessionId(sessionId);
     return writeIntention(sessionId, content);
   },
-  "pty-spawn": async ({ cwd, cmd, args, sessionId }) => {
+  "pty-spawn": async ({ cwd, cmd, args, sessionId, cols, rows }) => {
+    // Use renderer-provided dims, fall back to last-known terminal dims
+    const dims = cols && rows ? { cols, rows } : getTerminalDims() || {};
     const resp = await daemonRequest({
       type: "spawn",
       cwd,
       cmd,
       args,
       sessionId,
+      ...dims,
     });
     return { termId: resp.termId, pid: resp.pid };
   },
@@ -231,12 +235,14 @@ const sharedHandlers = {
     if (resolvedCwd.startsWith("~")) {
       resolvedCwd = path.join(os.homedir(), resolvedCwd.slice(1));
     }
+    const dims = getTerminalDims() || {};
     const resp = await daemonRequest({
       type: "spawn",
       cwd: resolvedCwd,
       cmd: claudePath,
       args,
       env: { OPEN_COCKPIT_CUSTOM: "1" },
+      ...dims,
     });
     // Accept trust prompt in background (non-blocking)
     acceptTrustPrompt(resp.termId);
@@ -590,10 +596,12 @@ function buildApiHandlers() {
       const existing = await getSessionTerminals(msg.sessionId);
       if (existing.length > 0) cwd = existing[0].cwd;
     }
+    const dims = getTerminalDims() || {};
     const resp = await daemonRequest({
       type: "spawn",
       cwd: cwd || os.homedir(),
       sessionId: msg.sessionId,
+      ...dims,
     });
     const terminals = await getSessionTerminals(msg.sessionId);
     const newTab = terminals.find((t) => t.termId === resp.termId);

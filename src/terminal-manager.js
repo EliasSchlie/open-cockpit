@@ -235,6 +235,14 @@ export function syncSessionCache() {
   }
 }
 
+// Get current terminal dimensions from the first active terminal (if any).
+// Used to spawn PTYs at the actual window size instead of the 80×24 default.
+function getCurrentDims() {
+  const first = state.terminals[0];
+  if (first) return { cols: first.term.cols, rows: first.term.rows };
+  return {};
+}
+
 // --- Terminal lifecycle ---
 
 export async function spawnTerminal(cwd, cmd, args, targetLeafId) {
@@ -254,6 +262,7 @@ export async function spawnTerminal(cwd, cmd, args, targetLeafId) {
       cmd: cmd || undefined,
       args: args || undefined,
       sessionId: state.currentSessionId || undefined,
+      ...getCurrentDims(),
     }));
   } catch (err) {
     term.dispose();
@@ -621,6 +630,9 @@ export async function reconnectTerminal(ptyInfo) {
   if (ptyInfo.buffer) {
     term.write(ptyInfo.buffer);
     entry.skipReplay = true;
+    // Flag so setupTerminalResize clears on first fit if dims changed,
+    // preventing reflow garbling of cursor-positioned content.
+    entry._hasReconnectBuffer = true;
   }
 
   pendingTerminals.set(ptyInfo.termId, entry);
