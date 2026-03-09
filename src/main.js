@@ -124,7 +124,7 @@ function createWindow() {
 
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.key === "Escape" && !input.meta && !input.control && !input.alt) {
-      mainWindow.webContents.send("focus-terminal");
+      if (!dialogOpen) mainWindow.webContents.send("focus-terminal");
       return;
     }
 
