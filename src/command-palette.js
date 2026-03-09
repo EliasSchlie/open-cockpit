@@ -63,6 +63,12 @@ export function initCommandPalette(actions) {
       action: () => _actions.spawnCustomSession(),
     },
     {
+      id: "run-agent",
+      label: "Run Agent",
+      shortcutAction: "run-agent",
+      action: () => _actions.runAgent(),
+    },
+    {
       id: "new-terminal",
       label: "New Terminal Tab",
       shortcutAction: "new-terminal-tab",

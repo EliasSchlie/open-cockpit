@@ -39,6 +39,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 |----------|--------|
 | `Cmd+N` | New Claude Session |
 | `Cmd+Shift+N` | New Custom Session (standalone Claude with custom path/flags) |
+| `Cmd+Shift+A` | Run Agent (launch an agent template) |
 | `Cmd+T` | New Terminal Tab |
 | `Cmd+W` | Close Terminal Tab |
 | `Cmd+Shift+]` / `[` | Next / Previous Tab |

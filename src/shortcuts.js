@@ -45,6 +45,8 @@ const DEFAULT_SHORTCUTS = {
   "prev-child-session": "Alt+Shift+Up",
   // Custom session
   "new-custom-session": "CmdOrCtrl+Shift+N",
+  // Agent templates
+  "run-agent": "CmdOrCtrl+Shift+A",
   // Bell
   "toggle-bell": "CmdOrCtrl+Shift+B",
   // Session actions

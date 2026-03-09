@@ -7,6 +7,7 @@ import {
   sessionTerminals,
   showNotification,
   showToast,
+  escapeHtml,
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
@@ -777,6 +778,7 @@ initCommandPalette({
   switchSession,
   spawnTerminal,
   spawnCustomSession,
+  runAgent,
   getActiveTermIndex,
   closeTerminal,
   switchToTerminal,
@@ -991,6 +993,226 @@ async function spawnCustomSession() {
   }
 }
 
+// --- Agent template runner ---
+
+function renderAgentPrompt(agent, args) {
+  let prompt = agent.prompt;
+  if (args) {
+    prompt = prompt.replace(/\{\{args\}\}/g, args);
+  } else {
+    prompt = prompt.replace(/\{\{args\}\}/g, "").trim();
+  }
+  return prompt;
+}
+
+let agentRunInProgress = false;
+async function runAgent() {
+  if (agentRunInProgress) return;
+  agentRunInProgress = true;
+  try {
+    const agents = await window.api.agentList();
+    if (!agents || agents.length === 0) {
+      showNotification(
+        "No agent templates found. Create templates in ~/.open-cockpit/agents/<name>.md",
+      );
+      return;
+    }
+
+    const selected = await showAgentPicker(agents);
+    if (!selected) return;
+
+    const args = await showAgentArgsDialog(selected);
+    if (args === null) return; // cancelled
+
+    showNotification(`Running agent: ${selected.name}…`);
+
+    const prompt = renderAgentPrompt(selected, args);
+    const pool = await window.api.poolRead();
+    if (!pool) {
+      showNotification("Pool not initialized — open pool settings");
+      return;
+    }
+
+    const freshSlot = await acquireFreshSlot();
+    if (!freshSlot) {
+      showNotification("All pool slots are busy — wait or resize pool");
+      return;
+    }
+
+    await selectSession(freshSlot);
+
+    // Send the rendered prompt
+    const poolData = await window.api.poolRead();
+    const slot = poolData?.slots.find(
+      (s) => s.sessionId === freshSlot.sessionId,
+    );
+    if (slot) {
+      await window.api.ptyWrite(slot.termId, prompt + "\r");
+    }
+    await loadSessions();
+  } catch (err) {
+    showNotification(`Agent failed: ${err.message}`);
+  } finally {
+    agentRunInProgress = false;
+  }
+}
+
+function showAgentPicker(agents) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    let filtered = [...agents];
+    let selectedIndex = 0;
+
+    function finish(result) {
+      if (resolved) return;
+      resolved = true;
+      window.api.setDialogOpen(false);
+      close();
+      resolve(result);
+    }
+
+    const { overlay, close } = createOverlayDialog({
+      id: "agent-picker-dialog",
+      escapeClose: false,
+      closeSelector: null,
+      onClose: () => {
+        if (!resolved) {
+          resolved = true;
+          window.api.setDialogOpen(false);
+          resolve(null);
+        }
+      },
+      onKeydown(e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(null);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          if (filtered[selectedIndex]) finish(filtered[selectedIndex]);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          selectedIndex = Math.min(selectedIndex + 1, filtered.length - 1);
+          renderAgentList();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          selectedIndex = Math.max(selectedIndex - 1, 0);
+          renderAgentList();
+        }
+      },
+      html: `
+        <div class="agent-picker-dialog">
+          <div class="setup-script-title">Run Agent</div>
+          <div class="setup-script-subtitle">Select an agent template</div>
+          <input type="text" id="agent-picker-search" class="overlay-picker-input" placeholder="Search agents…" />
+          <div id="agent-picker-list" class="overlay-picker-list"></div>
+        </div>
+      `,
+    });
+
+    window.api.setDialogOpen(true);
+
+    const searchInput = overlay.querySelector("#agent-picker-search");
+    const listEl = overlay.querySelector("#agent-picker-list");
+
+    function renderAgentList() {
+      const q = searchInput.value.toLowerCase();
+      filtered = q
+        ? agents.filter(
+            (a) =>
+              a.name.toLowerCase().includes(q) ||
+              (a.description && a.description.toLowerCase().includes(q)),
+          )
+        : [...agents];
+      selectedIndex = Math.min(selectedIndex, Math.max(filtered.length - 1, 0));
+
+      listEl.innerHTML = "";
+      filtered.forEach((agent, i) => {
+        const item = document.createElement("div");
+        item.className = `overlay-picker-item${i === selectedIndex ? " selected" : ""}`;
+        item.innerHTML = `<span class="agent-name">${escapeHtml(agent.name)}</span>${agent.description ? `<span class="agent-desc"> — ${escapeHtml(agent.description)}</span>` : ""}`;
+        item.addEventListener("mouseenter", () => {
+          listEl.querySelector(".selected")?.classList.remove("selected");
+          item.classList.add("selected");
+          selectedIndex = i;
+        });
+        item.addEventListener("click", () => finish(agent));
+        listEl.appendChild(item);
+      });
+    }
+
+    searchInput.addEventListener("input", () => {
+      selectedIndex = 0;
+      renderAgentList();
+    });
+
+    renderAgentList();
+    searchInput.focus();
+  });
+}
+
+function showAgentArgsDialog(agent) {
+  // If the template has no {{args}} placeholder, skip the dialog
+  if (!agent.prompt.includes("{{args}}")) return Promise.resolve("");
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    function finish(result) {
+      if (resolved) return;
+      resolved = true;
+      window.api.setDialogOpen(false);
+      close();
+      resolve(result);
+    }
+
+    const { overlay, close } = createOverlayDialog({
+      id: "agent-args-dialog",
+      escapeClose: false,
+      closeSelector: null,
+      onClose: () => {
+        if (!resolved) {
+          resolved = true;
+          window.api.setDialogOpen(false);
+          resolve(null);
+        }
+      },
+      onKeydown(e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(null);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          const input = overlay.querySelector("#agent-args-input");
+          finish(input.value.trim());
+        }
+      },
+      html: `
+        <div class="agent-args-dialog">
+          <div class="setup-script-title">${escapeHtml(agent.name)}</div>
+          <div class="setup-script-subtitle">${escapeHtml(agent.description || "Enter arguments for this agent")}</div>
+          <div class="field-group">
+            <label>Arguments</label>
+            <input type="text" id="agent-args-input" placeholder="e.g. PR #42, src/main.js" />
+          </div>
+          <div class="dialog-buttons">
+            <button class="btn-cancel">Cancel</button>
+            <button class="btn-spawn">Run</button>
+          </div>
+        </div>
+      `,
+    });
+
+    window.api.setDialogOpen(true);
+
+    const argsInput = overlay.querySelector("#agent-args-input");
+    const cancelBtn = overlay.querySelector(".btn-cancel");
+    const runBtn = overlay.querySelector(".btn-spawn");
+
+    argsInput.focus();
+    cancelBtn.addEventListener("click", () => finish(null));
+    runBtn.addEventListener("click", () => finish(argsInput.value.trim()));
+  });
+}
+
 // --- IPC event handlers ---
 
 // Menu keyboard shortcuts — terminal tabs
@@ -1019,6 +1241,7 @@ window.api.onSwitchTerminalTab((index) => {
 // Navigation shortcuts
 window.api.onNewSession(() => dom.newSessionBtn.click());
 window.api.onNewCustomSession(spawnCustomSession);
+window.api.onRunAgent(runAgent);
 window.api.onNextSession(() => switchSession(1));
 window.api.onPrevSession(() => switchSession(-1));
 window.api.onToggleChildren(toggleChildren);

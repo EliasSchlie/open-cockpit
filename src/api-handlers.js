@@ -16,6 +16,11 @@ const {
 const { IDLE_SIGNALS_DIR } = require("./paths");
 const { secureWriteFileSync } = require("./secure-fs");
 const {
+  discoverAgents,
+  renderPrompt,
+  resolveCwd,
+} = require("./agent-templates");
+const {
   daemonRequest,
   daemonSendSafe,
   ensureDaemon,
@@ -222,6 +227,9 @@ const sharedHandlers = {
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
   "archive-session": async ({ sessionId }) => archiveSession(sessionId),
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
+  "agent-list": ({ projectDir }) => {
+    return discoverAgents(projectDir || null);
+  },
   "spawn-custom-session": async ({ cwd, flags }) => {
     const claudePath = getCachedClaudePath();
     const args = ["--dangerously-skip-permissions"];
@@ -272,6 +280,7 @@ const ipcArgMap = {
   "pool-resume": (sessionId) => ({ sessionId }),
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
+  "agent-list": (projectDir) => ({ projectDir }),
   "spawn-custom-session": (cwd, flags) => ({ cwd, flags }),
 };
 
@@ -297,6 +306,7 @@ const apiResponseMap = {
   "pool-resume": (result) => result, // poolResume already returns { type: "resumed", ... }
   "archive-session": () => ({ type: "ok" }),
   "unarchive-session": () => ({ type: "ok" }),
+  "agent-list": (agents) => ({ type: "agents", agents }),
   "spawn-custom-session": (result) => ({ type: "spawned", ...result }),
 };
 
@@ -318,6 +328,61 @@ function buildApiHandlers() {
     const resp = await daemonRequest({ type: "list" });
     const p = resp.ptys.find((p) => p.termId === msg.termId);
     return { type: "buffer", buffer: p ? p.buffer : null };
+  };
+
+  handlers["agent-run"] = async (msg) => {
+    if (!msg.name) throw new Error("name required");
+    const agents = discoverAgents(msg.projectDir || null);
+    const agent = agents.find((a) => a.name === msg.name);
+    if (!agent) throw new Error(`Agent template '${msg.name}' not found`);
+
+    const prompt = renderPrompt(agent, msg.args || "");
+    if (!prompt) throw new Error("Agent template produced empty prompt");
+
+    const callerCwd = msg.cwd || null;
+    const agentCwd = resolveCwd(agent.cwd, callerCwd);
+
+    // If agent has custom flags, spawn a custom session instead of using the pool
+    if (agent.flags) {
+      const spawnResult = await sharedHandlers["spawn-custom-session"]({
+        cwd: agentCwd,
+        flags: agent.flags,
+      });
+      // Send the prompt to the custom session's terminal
+      await sendPromptToTerminal(spawnResult.termId, prompt);
+      recordSessionRelation(
+        null, // sessionId not yet known for custom sessions
+        msg.parentSessionId || null,
+        msg.parentSessionId ? INITIATOR.MODEL : INITIATOR.USER,
+      );
+      return {
+        type: "agent-started",
+        agentName: msg.name,
+        termId: spawnResult.termId,
+        mode: "custom",
+      };
+    }
+
+    // Use pool slot (like pool-start)
+    const result = await withFreshSlot(async (pool, slot) => {
+      await sendPromptToTerminal(slot.termId, prompt);
+      slot.status = POOL_STATUS.BUSY;
+      writePool(pool);
+      return {
+        type: "agent-started",
+        agentName: msg.name,
+        sessionId: slot.sessionId,
+        termId: slot.termId,
+        slotIndex: slot.index,
+        mode: "pool",
+      };
+    });
+    recordSessionRelation(
+      result.sessionId,
+      msg.parentSessionId || null,
+      msg.parentSessionId ? INITIATOR.MODEL : INITIATOR.USER,
+    );
+    return result;
   };
 
   handlers["pool-start"] = async (msg) => {

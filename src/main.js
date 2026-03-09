@@ -190,6 +190,11 @@ function buildMenu() {
           click: () => send("new-custom-session"),
         },
         {
+          label: "Run Agent",
+          accelerator: accel("run-agent"),
+          click: () => send("run-agent"),
+        },
+        {
           label: "New Terminal Tab",
           accelerator: accel("new-terminal-tab"),
           click: () => send("new-terminal-tab"),

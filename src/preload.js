@@ -20,6 +20,7 @@ const channels = [
   "switch-terminal-tab",
   "new-session",
   "new-custom-session",
+  "run-agent",
   "next-session",
   "prev-session",
   "toggle-children",
@@ -105,6 +106,9 @@ contextBridge.exposeInMainWorld("api", {
   // Custom sessions
   spawnCustomSession: (cwd, flags) =>
     ipcRenderer.invoke("spawn-custom-session", cwd, flags),
+
+  // Agent templates
+  agentList: (projectDir) => ipcRenderer.invoke("agent-list", projectDir),
 
   // Terminal (forwarded to PTY daemon via main process)
   ptySpawn: (opts) => ipcRenderer.invoke("pty-spawn", opts),
@@ -210,6 +214,8 @@ contextBridge.exposeInMainWorld("api", {
   onNewSession: (callback) => ipcRenderer.on("new-session", () => callback()),
   onNewCustomSession: (callback) =>
     ipcRenderer.on("new-custom-session", () => callback()),
+  onRunAgent: (callback) =>
+    ipcRenderer.on("run-agent", () => callback()),
   onNextSession: (callback) => ipcRenderer.on("next-session", () => callback()),
   onPrevSession: (callback) => ipcRenderer.on("prev-session", () => callback()),
   onToggleChildren: (callback) =>

@@ -70,6 +70,16 @@ cockpit-cli archive <id>                             # Archive a session
 cockpit-cli unarchive <id>                           # Move archived → recent
 ```
 
+### Agent templates
+
+```bash
+cockpit-cli agent list                               # List available agents
+cockpit-cli agent list --project /path               # Include project-local agents
+cockpit-cli agent run reviewer                       # Run agent, return session ID
+cockpit-cli agent run reviewer "PR #42" --block      # Run with args, wait for result
+cockpit-cli -v response agent run summarizer "src/"  # Get filtered response
+```
+
 ### Session terminals (per-session tab access)
 
 All `term` commands auto-detect the session when called from within a Claude session (walks PID ancestry to find `session-pids/` entry). Specify `<target>` to override.
@@ -187,6 +197,16 @@ Direct slot access by pool index. Works even on error-status slots that have no 
 | `write-intention` | `sessionId`, `content` | `{ type: "ok" }` |
 | `archive-session` | `sessionId` | `{ type: "ok" }` |
 | `unarchive-session` | `sessionId` | `{ type: "ok" }` |
+
+### Agent Templates
+| Command | Fields | Response |
+|---------|--------|----------|
+| `agent-list` | `projectDir` (optional) | `{ type: "agents", agents: [{ name, description, cwd, flags, prompt, filePath }] }` |
+| `agent-run` | `name`, `args` (optional), `cwd` (optional), `projectDir` (optional), `parentSessionId` (optional) | `{ type: "agent-started", agentName, sessionId, termId, slotIndex, mode }` |
+
+`agent-list` discovers templates from `~/.open-cockpit/agents/` (global) and `<projectDir>/.open-cockpit/agents/` (local overrides global).
+
+`agent-run` renders the template prompt (substituting `{{args}}`), resolves cwd, and either claims a pool slot (default) or spawns a custom session (if the template has `flags`). Returns `mode: "pool"` or `mode: "custom"`.
 
 ### Session Terminal Access
 | Command | Fields | Response |
