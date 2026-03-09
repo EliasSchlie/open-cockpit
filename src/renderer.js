@@ -10,7 +10,7 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS } from "./session-statuses.js";
+import { STATUS, ORIGIN } from "./session-statuses.js";
 import { disposeTerminalEntry } from "./dock-helpers.js";
 import { createEditor, setOnDocChange } from "./editor.js";
 import { createOverlayDialog } from "./overlay-dialog.js";
@@ -149,7 +149,7 @@ async function selectSession(session) {
 
     // Resolve the daemon terminal ID for pool/custom sessions
     let daemonTermId = null;
-    if (session.origin === "pool") {
+    if (session.origin === ORIGIN.POOL) {
       const pool = await window.api.poolRead();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at poolRead`);
@@ -157,7 +157,7 @@ async function selectSession(session) {
       }
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
       daemonTermId = slot?.termId || null;
-    } else if (session.origin === "custom") {
+    } else if (session.origin === ORIGIN.CUSTOM) {
       const allPtys = await window.api.ptyList();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at customPtyList`);
@@ -202,7 +202,10 @@ async function selectSession(session) {
       } catch (err) {
         debugLog("session", `extra terminal discovery failed: ${err.message}`);
       }
-    } else if (session.origin === "pool" || session.origin === "custom") {
+    } else if (
+      session.origin === ORIGIN.POOL ||
+      session.origin === ORIGIN.CUSTOM
+    ) {
       // Daemon session but no terminal found — fallback to shell
       await spawnTerminal(session.cwd);
       if (gen !== state.sessionGeneration) {
@@ -241,7 +244,7 @@ async function selectSession(session) {
 
 function isFreshPoolSlot(s) {
   return (
-    s.origin === "pool" &&
+    s.origin === ORIGIN.POOL &&
     (s.status === STATUS.FRESH || s.poolStatus === STATUS.FRESH)
   );
 }
@@ -256,14 +259,14 @@ async function acquireFreshSlot() {
   if (freshSession) return freshSession;
 
   // No pool sessions at all — nothing to acquire from
-  if (!sessions.some((s) => s.origin === "pool")) return null;
+  if (!sessions.some((s) => s.origin === ORIGIN.POOL)) return null;
 
   // 2. Offload the longest-unused idle session (LRU)
   const idleSessions = sessions
     .filter(
       (s) =>
         s.status === STATUS.IDLE &&
-        s.origin === "pool" &&
+        s.origin === ORIGIN.POOL &&
         s.sessionId !== state.currentSessionId,
     )
     .sort((a, b) => a.idleTs - b.idleTs);
@@ -591,7 +594,7 @@ async function focusCurrentExternalTerminal() {
   const session = state.cachedSessions.find(
     (s) => s.sessionId === state.currentSessionId,
   );
-  if (!session || !session.alive || session.origin === "pool") return;
+  if (!session || !session.alive || session.origin === ORIGIN.POOL) return;
   const result = await window.api.focusExternalTerminal(session.pid);
   if (result.focused) showNotification(`Focused ${result.app}`);
 }
@@ -621,7 +624,7 @@ async function archiveCurrentSession() {
     selectSession(idle);
   }
 
-  if (session.origin === "custom" && session.alive) {
+  if (session.origin === ORIGIN.CUSTOM && session.alive) {
     // Custom session: kill the daemon PTY (fully kill, not offload)
     const allPtys = await window.api.ptyList();
     const pty = allPtys.find(
@@ -629,7 +632,7 @@ async function archiveCurrentSession() {
     );
     if (pty) window.api.ptyKill(pty.termId).catch(() => {});
     destroySessionTerminals(session.sessionId);
-  } else if (session.origin !== "pool" && session.alive && session.pid) {
+  } else if (session.origin !== ORIGIN.POOL && session.alive && session.pid) {
     // External/sub-claude session: close external terminal
     window.api.closeExternalTerminal(session.pid).catch(() => {});
   }

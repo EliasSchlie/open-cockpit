@@ -11,7 +11,7 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS, INITIATOR } from "./session-statuses.js";
+import { STATUS, INITIATOR, ORIGIN } from "./session-statuses.js";
 import {
   createDefaultLayout,
   TAB_EDITOR,
@@ -197,7 +197,7 @@ async function loadSessions() {
   const custom = sessions.filter(
     (s) =>
       isTopLevel(s) &&
-      s.origin === "custom" &&
+      s.origin === ORIGIN.CUSTOM &&
       (s.status === STATUS.FRESH || s.status === STATUS.TYPING),
   );
   const customIds = new Set(custom.map((s) => s.sessionId));

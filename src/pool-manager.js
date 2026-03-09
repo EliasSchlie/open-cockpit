@@ -31,7 +31,12 @@ const {
   findOffloadTarget,
   findOffloadTargets,
 } = require("./pool");
-const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
+const {
+  STATUS,
+  POOL_STATUS,
+  INITIATOR,
+  ORIGIN,
+} = require("./session-statuses");
 const {
   daemonSend,
   daemonSendSafe,
@@ -200,7 +205,7 @@ async function offloadSession(
     gitRoot,
     claudeSessionId,
     snapshot,
-    origin: "pool",
+    origin: ORIGIN.POOL,
   });
   // Clean up terminal input cache for the offloaded slot
   const { terminalHasInputCache } = getSessionDiscovery();
@@ -439,7 +444,7 @@ async function saveExternalClearOffload(oldSessionId, pid) {
   await writeOffloadMeta(oldSessionId, {
     cwd,
     externalClear: true,
-    origin: "ext",
+    origin: ORIGIN.EXT,
   });
 }
 
