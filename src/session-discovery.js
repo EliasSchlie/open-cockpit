@@ -255,19 +255,25 @@ async function pollTerminalInput() {
           changed = true;
         }
       } else if (prev) {
-        // Previously had input, now empty — require consecutive misses before
-        // clearing to handle transient parse failures (alt-screen loss,
-        // mid-redraw captures, buffer truncation)
-        const misses = (consecutiveMisses.get(termId) || 0) + 1;
-        consecutiveMisses.set(termId, misses);
-        if (misses >= MISS_THRESHOLD) {
+        // Previously had input, now empty.
+        // If the user recently typed (e.g. backspaced to empty), clear immediately.
+        // Otherwise require consecutive misses to guard against transient parse failures.
+        if (recentWriteTermIds.has(termId)) {
           terminalHasInputCache.delete(termId);
           consecutiveMisses.delete(termId);
           changed = true;
-          _debugLog(
-            "main",
-            `Terminal input cleared for termId=${termId} after ${MISS_THRESHOLD} consecutive misses`,
-          );
+        } else {
+          const misses = (consecutiveMisses.get(termId) || 0) + 1;
+          consecutiveMisses.set(termId, misses);
+          if (misses >= MISS_THRESHOLD) {
+            terminalHasInputCache.delete(termId);
+            consecutiveMisses.delete(termId);
+            changed = true;
+            _debugLog(
+              "main",
+              `Terminal input cleared for termId=${termId} after ${MISS_THRESHOLD} consecutive misses`,
+            );
+          }
         }
       }
     }
