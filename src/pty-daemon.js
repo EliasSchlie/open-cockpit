@@ -36,6 +36,9 @@ const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals a
  * buffer hasn't been truncated (joined length <= BUFFER_SIZE).
  */
 function getBuffer(entry) {
+  if (entry.chunks.length === 1 && entry.chunksLen <= BUFFER_SIZE) {
+    return entry.chunks[0];
+  }
   const joined = entry.chunks.join("");
   if (joined.length <= BUFFER_SIZE) return joined;
   return sanitizeBufferStart(joined.slice(-BUFFER_SIZE));
