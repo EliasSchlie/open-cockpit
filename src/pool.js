@@ -211,19 +211,20 @@ function resolveSlot(pool, msg) {
 }
 
 /**
- * Find an idle slot to offload so a fresh slot becomes available.
- * Returns offload info { sessionId, termId, pid, cwd, gitRoot } or null
- * if enough fresh slots already exist. Throws if no fresh or idle slots.
+ * Find up to N idle slots to offload so fresh slots become available.
+ * Returns array of offload targets (may be empty if enough fresh slots exist).
+ * Throws if offloads are needed but no idle slots are available.
  * @param {number} [minFresh=1] — minimum number of fresh slots to maintain
  */
-function findOffloadTarget(pool, sessionMap, minFresh = 1) {
+function findOffloadTargets(pool, sessionMap, minFresh = 1) {
   const freshCount = pool.slots.filter((s) => {
     // Typing slots don't count as fresh — they're protected
     if (s.status === POOL_STATUS.FRESH) return true;
     const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
     return session && session.status === STATUS.FRESH;
   }).length;
-  if (freshCount >= minFresh) return null;
+  const needed = minFresh - freshCount;
+  if (needed <= 0) return [];
 
   const idleSlots = pool.slots.filter((s) => {
     if (isSlotPinned(s)) return false;
@@ -241,15 +242,27 @@ function findOffloadTarget(pool, sessionMap, minFresh = 1) {
     if (ia !== ib) return ia - ib;
     return (sa?.idleTs || 0) - (sb?.idleTs || 0);
   });
-  const victim = idleSlots[0];
-  const vs = sessionMap.get(victim.sessionId);
-  return {
-    sessionId: victim.sessionId,
-    termId: victim.termId,
-    pid: victim.pid,
-    cwd: vs?.cwd,
-    gitRoot: vs?.gitRoot,
-  };
+  return idleSlots.slice(0, needed).map((slot) => {
+    const vs = sessionMap.get(slot.sessionId);
+    return {
+      sessionId: slot.sessionId,
+      termId: slot.termId,
+      pid: slot.pid,
+      cwd: vs?.cwd,
+      gitRoot: vs?.gitRoot,
+    };
+  });
+}
+
+/**
+ * Find a single idle slot to offload (convenience wrapper around findOffloadTargets).
+ * Returns offload info or null if enough fresh slots exist.
+ * Throws if offloads are needed but no idle slots are available.
+ * @param {number} [minFresh=1] — minimum number of fresh slots to maintain
+ */
+function findOffloadTarget(pool, sessionMap, minFresh = 1) {
+  const targets = findOffloadTargets(pool, sessionMap, minFresh);
+  return targets.length > 0 ? targets[0] : null;
 }
 
 module.exports = {
@@ -265,4 +278,5 @@ module.exports = {
   findSlotByIndex,
   resolveSlot,
   findOffloadTarget,
+  findOffloadTargets,
 };
