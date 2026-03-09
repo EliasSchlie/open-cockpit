@@ -56,8 +56,8 @@ Merging — always from root worktree:
 cd ~/projects/open-cockpit
 gh pr merge <number> --squash
 git worktree remove .wt/<name>
-git branch -D <branch>
 git pull
+git branch -d <branch>
 ```
 
 ## Conventions
