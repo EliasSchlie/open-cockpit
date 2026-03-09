@@ -1002,7 +1002,11 @@ function wireSettingsInput(
 ) {
   const input = overlay.querySelector(selector);
   if (!input) return;
-  const save = () => saveFn(input);
+  let timer;
+  const save = () => {
+    clearTimeout(timer);
+    saveFn(input);
+  };
   input.addEventListener("blur", save);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -1013,7 +1017,6 @@ function wireSettingsInput(
     e.stopPropagation();
   });
   if (debounceMs) {
-    let timer;
     input.addEventListener("input", () => {
       clearTimeout(timer);
       timer = setTimeout(save, debounceMs);
