@@ -110,8 +110,6 @@ contextBridge.exposeInMainWorld("api", {
   ptyKill: (termId) => ipcRenderer.invoke("pty-kill", termId),
   ptyList: () => ipcRenderer.invoke("pty-list"),
   ptyAttach: (termId) => ipcRenderer.invoke("pty-attach", termId),
-  ptyJitter: (termId, cols, rows) =>
-    ipcRenderer.invoke("pty-jitter", termId, cols, rows),
   ptyDetach: (termId) => ipcRenderer.invoke("pty-detach", termId),
   ptySetSession: (termId, sessionId) =>
     ipcRenderer.invoke("pty-set-session", termId, sessionId),

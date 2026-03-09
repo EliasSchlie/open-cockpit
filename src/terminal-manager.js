@@ -375,14 +375,6 @@ export async function attachPoolTerminal(poolTermId) {
   // Focus the new terminal so user can type immediately
   entry.term.focus();
 
-  // Jitter to clear any TUI rendering artifacts accumulated while the
-  // terminal was running in the background (spinner animation, etc.)
-  if (ptyInfo?.cols && ptyInfo?.rows) {
-    window.api
-      .ptyJitter(poolTermId, ptyInfo.cols, ptyInfo.rows)
-      .catch(() => {});
-  }
-
   syncSessionCache();
   return entry;
 }
@@ -506,15 +498,6 @@ export function restoreSessionTerminals(sessionId) {
 
   initDockLayout(state.terminals, cached.dockLayout);
   for (const entry of state.terminals) setupTerminalResize(entry);
-
-  // Jitter all restored terminals to clear any artifacts accumulated
-  // while the session was in the background
-  for (const entry of state.terminals) {
-    const { cols, rows } = entry.term;
-    if (cols && rows) {
-      window.api.ptyJitter(entry.termId, cols, rows).catch(() => {});
-    }
-  }
 
   return true;
 }
