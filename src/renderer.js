@@ -335,6 +335,9 @@ async function resumeOffloadedSession(session) {
 
   // Transition: cache previous session's terminals, set up fresh dock, attach terminal
   hideCurrentTerminals();
+  // Clear currentSessionId so attachPoolTerminal → syncSessionCache() doesn't
+  // cache the resumed terminal under the previously-viewed session's ID.
+  state.currentSessionId = null;
   initDockLayout();
 
   try {
