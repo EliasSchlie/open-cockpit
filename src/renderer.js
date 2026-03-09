@@ -10,7 +10,12 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS, ORIGIN } from "./session-statuses.js";
+import {
+  STATUS,
+  ORIGIN,
+  isInactiveStatus,
+  isPoolOrigin,
+} from "./session-statuses.js";
 import { disposeTerminalEntry } from "./dock-helpers.js";
 import { createEditor, setOnDocChange } from "./editor.js";
 import { createOverlayDialog } from "./overlay-dialog.js";
@@ -141,19 +146,16 @@ async function selectSession(session) {
     dom.sessionView.classList.remove("colored");
   }
 
-  // Offloaded/archived: show snapshot inline instead of a terminal
-  if (
-    session.status === STATUS.OFFLOADED ||
-    session.status === STATUS.ARCHIVED
-  ) {
+  // Inactive sessions: show snapshot inline instead of a terminal
+  if (isInactiveStatus(session.status)) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
     initDockLayout();
 
-    // Resolve the daemon terminal ID for pool/custom sessions
+    // Resolve the daemon terminal ID for pool/custom/sub-agent sessions
     let daemonTermId = null;
-    if (session.origin === ORIGIN.POOL) {
+    if (isPoolOrigin(session.origin)) {
       const pool = await window.api.poolRead();
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at poolRead`);
@@ -207,7 +209,7 @@ async function selectSession(session) {
         debugLog("session", `extra terminal discovery failed: ${err.message}`);
       }
     } else if (
-      session.origin === ORIGIN.POOL ||
+      isPoolOrigin(session.origin) ||
       session.origin === ORIGIN.CUSTOM
     ) {
       // Daemon session but no terminal found — fallback to shell
@@ -491,11 +493,11 @@ function switchSession(direction) {
   const ordered = buildVisualOrder(maps);
   const navigable = ordered.filter(
     (s) =>
+      isInactiveStatus(s.status) ||
       (s.alive &&
         (s.status === STATUS.IDLE ||
           s.status === STATUS.PROCESSING ||
-          s.status === STATUS.TYPING)) ||
-      s.status === STATUS.ARCHIVED,
+          s.status === STATUS.TYPING)),
   );
   if (navigable.length === 0) return;
   const currentIndex = navigable.findIndex(
@@ -604,6 +606,18 @@ async function focusCurrentExternalTerminal() {
   if (!session || !session.alive || session.origin === ORIGIN.POOL) return;
   const result = await window.api.focusExternalTerminal(session.pid);
   if (result.focused) showNotification(`Focused ${result.app}`);
+}
+
+// --- Resume current session ---
+
+async function resumeCurrentSession() {
+  if (!state.currentSessionId) return;
+  const session = state.cachedSessions.find(
+    (s) => s.sessionId === state.currentSessionId,
+  );
+  if (!session) return;
+  if (!isInactiveStatus(session.status)) return;
+  await resumeOffloadedSession(session);
 }
 
 // --- Archive current session (then jump to recent idle) ---
@@ -752,6 +766,7 @@ initCommandPalette({
   cycleTabInFocusedLeaf,
   jumpToRecentIdle,
   archiveCurrentSession,
+  resumeCurrentSession,
   toggleSidebar,
   togglePaneFocus,
   focusEditor,
@@ -1008,6 +1023,7 @@ window.api.onSplitDown(() => splitFocusedTab("down"));
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
+window.api.onResumeSession(resumeCurrentSession);
 window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });

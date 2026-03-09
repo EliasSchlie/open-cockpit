@@ -105,6 +105,12 @@ export function initCommandPalette(actions) {
       action: () => _actions.archiveCurrentSession(),
     },
     {
+      id: "resume-session",
+      label: "Resume Session",
+      shortcutAction: "resume-session",
+      action: () => _actions.resumeCurrentSession(),
+    },
+    {
       id: "toggle-sidebar",
       label: "Toggle Sidebar",
       shortcutAction: "toggle-sidebar",

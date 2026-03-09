@@ -11,7 +11,12 @@ import {
   toggleBellMuted,
   syncBellButton,
 } from "./renderer-state.js";
-import { STATUS, INITIATOR, ORIGIN } from "./session-statuses.js";
+import {
+  STATUS,
+  INITIATOR,
+  ORIGIN,
+  isInactiveStatus,
+} from "./session-statuses.js";
 import {
   createDefaultLayout,
   TAB_EDITOR,
@@ -362,7 +367,8 @@ async function loadSessions() {
 function createSessionItem(s, depth = 0) {
   const li = document.createElement("li");
   const isChild = depth > 0;
-  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${s.status === STATUS.OFFLOADED || s.status === STATUS.ARCHIVED ? " offloaded" : ""}${isChild ? " session-child" : ""}`;
+  const inactive = isInactiveStatus(s.status);
+  li.className = `session-item${s.sessionId === state.currentSessionId ? " active" : ""}${inactive ? " inactive" : ""}${isChild ? " session-child" : ""}`;
   li.dataset.sessionId = s.sessionId;
   if (isChild) li.style.paddingLeft = `${12 + depth * 18}px`;
   const heading = s.intentionHeading || s.intentionPreview || null;
@@ -372,8 +378,7 @@ function createSessionItem(s, depth = 0) {
   const indicatorStyle = dirColor
     ? `background: ${dirColor}; box-shadow: 0 0 4px ${dirColor}`
     : "background: transparent";
-  const showOrigin =
-    s.origin && s.status !== STATUS.OFFLOADED && s.status !== STATUS.ARCHIVED;
+  const showOrigin = !!s.origin;
   const originTag = showOrigin
     ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
     : "";
@@ -509,12 +514,13 @@ function showSessionContextMenu(e, session) {
   menu.style.top = `${e.clientY}px`;
 
   const isArchived = session.status === STATUS.ARCHIVED;
+  const isDead = session.status === STATUS.DEAD;
   const isOffloaded = session.status === STATUS.OFFLOADED;
 
-  if (isArchived) {
+  if (isArchived || isDead) {
     menu.innerHTML = `
       <div class="session-context-item" data-action="restart">Restart</div>
-      <div class="session-context-item" data-action="unarchive">Move to Recent</div>
+      ${isArchived ? '<div class="session-context-item" data-action="unarchive">Move to Recent</div>' : ""}
     `;
   } else if (isOffloaded) {
     menu.innerHTML = `
@@ -577,7 +583,8 @@ function showSnapshotViewer(session, snapshotText) {
 // Show snapshot content inline as a dock tab for offloaded/archived sessions
 async function showInlineSnapshot(session, gen) {
   const isArchived = session.status === STATUS.ARCHIVED;
-  const btnLabel = isArchived ? "Restart" : "Resume";
+  const isDead = session.status === STATUS.DEAD;
+  const statusLabel = isArchived ? "Archived" : isDead ? "Ended" : "Offloaded";
 
   let snapshotText = null;
   if (session.hasSnapshot) {
@@ -592,9 +599,11 @@ async function showInlineSnapshot(session, gen) {
   // Create snapshot content element
   const container = document.createElement("div");
   container.className = "dock-snapshot-content";
+
+  const btnLabel = isArchived || isDead ? "Restart" : "Resume";
   container.innerHTML = `
     <div class="inline-snapshot-header">
-      <span class="inline-snapshot-label">${isArchived ? "Archived" : "Offloaded"} Session</span>
+      <span class="inline-snapshot-label">${statusLabel} Session</span>
       <button class="inline-snapshot-restart">${btnLabel}</button>
     </div>
     <pre class="snapshot-content inline-snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
@@ -603,7 +612,7 @@ async function showInlineSnapshot(session, gen) {
   container
     .querySelector(".inline-snapshot-restart")
     .addEventListener("click", async () => {
-      if (isArchived) {
+      if (isArchived || isDead) {
         try {
           await window.api.unarchiveSession(session.sessionId);
         } catch (err) {
@@ -618,7 +627,7 @@ async function showInlineSnapshot(session, gen) {
   _actions.ensureDock();
   state.dock.registerTab(TAB_SNAPSHOT, {
     type: TAB_SNAPSHOT,
-    label: isArchived ? "Archived" : "Snapshot",
+    label: isDead ? "Ended" : isArchived ? "Archived" : "Snapshot",
     closable: false,
     contentEl: container,
   });

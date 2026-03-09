@@ -301,6 +301,11 @@ function buildMenu() {
           accelerator: accel("archive-current-session"),
           click: () => send("archive-current-session"),
         },
+        {
+          label: "Resume Session",
+          accelerator: accel("resume-session"),
+          click: () => send("resume-session"),
+        },
         { type: "separator" },
         {
           label: "Search Sessions",
