@@ -162,101 +162,20 @@ These spawn real Claude Code sessions and observe state transitions through the 
 
 **Why manual PID files**: The Open Cockpit plugin hooks write to `~/.open-cockpit/` (hardcoded in shell scripts). Modifying hooks for tests is fragile. Instead, we replicate the essential hook behavior (PID file + idle signal) in the test harness. The actual Claude Code process is real — we just manage the discovery metadata ourselves.
 
-### 3.1 `e2e-session-lifecycle.test.js` — ~4 Claude Code calls
+### Tier 3: E2E tests (removed)
 
-**Test A: Spawn → Processing → Idle** (1 API call)
-1. Spawn `claude --session-id <id> -p "Say exactly: hello" --output-format text`
-2. Write PID file in test dir
-3. Poll `getSessions()` — verify session appears with `status: processing`
-4. Wait for Claude to finish (process exits or idle signal)
-5. Write idle signal in test dir
-6. Verify `status: idle`
+The e2e tests (`e2e-session-lifecycle.test.js`, `e2e-session-stats.test.js`, `e2e-api.test.js`) were removed in PR #379. They spawned real Claude Code sessions, were slow (120s timeouts), cost API credits, and leaked `OPEN_COCKPIT_DIR` env vars that caused other tests to interact with the live Open Cockpit instance. They were already excluded from CI.
 
-**Test B: Offload → Restore** (1 API call)
-1. From Test A's idle session, call offload logic (snapshot terminal, write meta, clear)
-2. Verify `getSessions()` shows `status: offloaded`
-3. Call restore logic (spawn new Claude Code with `--resume`)
-4. Write new PID file
-5. Verify session is back as `idle` or `processing`
-
-**Test C: Archive → Unarchive** (0 API calls — uses offloaded state)
-1. Set `archived: true` in meta.json
-2. Verify `getSessions()` shows `status: archived`
-3. Remove `archived` flag
-4. Verify back to `offloaded`
-
-**Test D: Fresh → Typing → Clear** (1 API call)
-1. Spawn Claude Code with `--session-id` (pool-style, no initial prompt)
-2. Write intention file content
-3. Verify `status: typing` (has intention content)
-4. Kill the process
-5. Verify cleanup
-
-### 3.2 `e2e-session-stats.test.js` — ~2 Claude Code calls
-
-**Test E: Single session stats** (1 API call)
-1. Spawn Claude Code: `claude -p "What is 2+2?" --session-id <id>`
-2. Wait for completion
-3. Call `getSessionStats(id)` (from session-stats.js)
-4. Verify: turns > 0, tokens.input > 0, tokens.output > 0, cost > 0, model starts with "claude"
-
-**Test F: Sub-agent stats aggregation** (1 API call)
-1. Spawn Claude Code: `claude -p "Use the Agent tool to ask: what is 1+1?" --session-id <id>`
-2. Wait for completion
-3. Write session-graph.json with parent→child relationship
-4. Call `getSessionStats(id)` with graph
-5. Verify `subAgents` array populated, `totalWithSubAgents` > main session alone
-
-### 3.3 `e2e-api.test.js` — ~2 Claude Code calls
-
-**Test G: API get-sessions with live session** (1 API call)
-1. Start API server in test dir with real handlers
-2. Spawn Claude Code session
-3. Send `{"type": "get-sessions"}` to API socket
-4. Verify response contains the test session with correct fields
-
-**Test H: API pin/unpin** (0 extra API calls — reuses G's session)
-1. Send `{"type": "pin-session", "sessionId": "<id>"}`
-2. Verify session is pinned
-3. Send `{"type": "unpin-session", "sessionId": "<id>"}`
-4. Verify unpinned
+The behaviors they tested are covered by:
+- `session-discovery-integration.test.js` — lifecycle with synthetic processes
+- `cockpit-cli.test.js` — API protocol via mock server
+- `session-stats.test.js` — stats parsing from fixture data
 
 ---
 
-## Implementation Order
+## Files
 
-1. **`test/helpers/test-env.js`** — shared isolation harness
-2. **`paths.js` + `pty-daemon.js`** — add `OPEN_COCKPIT_TEST_DIR` env var support
-3. **Tier 1 tests** (4 files, parallel sub-agents)
-4. **Tier 2 tests** (3 files, parallel sub-agents)
-5. **Tier 3 tests** (3 files, sequential — each needs Claude Code)
-
-## Claude Code Call Budget
-
-| Test | Calls | What it proves |
-|------|-------|---------------|
-| A: Spawn→Process→Idle | 1 | Core lifecycle |
-| B: Offload→Restore | 1 | Session persistence |
-| D: Fresh→Typing→Clear | 1 | Pool slot recycling |
-| E: Single stats | 1 | Stats accuracy |
-| F: Sub-agent stats | 1 | Graph + aggregation |
-| G: API with live session | 1 | API integration |
-| **Total** | **6** | |
-
-Tests C and H use pre-existing state, no Claude Code calls.
-
-## Risk: Daemon in Tests
-
-The PTY daemon requires `node-pty` compiled for the right Node ABI. In vitest (plain Node), this should work if `npm install` was run (it compiles for system Node). If it fails, Tier 2 daemon tests can be skipped with a clear error message, and Tier 3 tests can use `child_process.spawn` directly instead of the daemon.
-
-## Files Created/Modified
-
-**Modified:**
-- `src/paths.js` — 1 line: env var override for `OPEN_COCKPIT_DIR`
-- `src/pty-daemon.js` — 1 line: same env var override
-
-**Created:**
-- `test/helpers/test-env.js` — shared test harness
+- `test/helpers/test-env.js` — shared test isolation (env sandwich in `requireFresh()`)
 - `test/secure-fs.test.js`
 - `test/session-stats.test.js`
 - `test/platform.test.js`
@@ -264,7 +183,3 @@ The PTY daemon requires `node-pty` compiled for the right Node ABI. In vitest (p
 - `test/session-discovery-integration.test.js`
 - `test/daemon-client.test.js`
 - `test/pool-lifecycle.test.js`
-- `test/e2e-session-lifecycle.test.js`
-- `test/e2e-session-stats.test.js`
-- `test/e2e-api.test.js`
-- `test/fixtures/` — JSONL fixtures for stats tests
