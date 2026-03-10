@@ -546,7 +546,7 @@ case "$CMD" in
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
 
     json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SID\",\"prompt\":$PROMPT_JSON}"
-    RESULT=$(send_api "$json")
+    RESULT=$(send_api "$json" 180)
     check_error "$RESULT"
 
     if $BLOCK; then
@@ -697,7 +697,7 @@ case "$CMD" in
 
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
     json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON}"
-    RESULT=$(send_api "$json")
+    RESULT=$(send_api "$json" 180)
     check_error "$RESULT"
     SID=$(json_field "$RESULT" "sessionId")
 

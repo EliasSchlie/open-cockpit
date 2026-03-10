@@ -55,6 +55,7 @@ const {
   getMinFreshSlots,
   setMinFreshSlots,
   poolResume,
+  readOffloadMeta,
   withFreshSlot,
   readIntention,
   writeIntention,
@@ -479,8 +480,40 @@ function buildApiHandlers() {
   handlers["pool-followup"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
     if (!msg.prompt) throw new Error("prompt required");
+
+    // Auto-resume offloaded sessions so callers don't need to manage pool state
+    let sessionId = msg.sessionId;
+    const currentPool = readPool();
+    const inSlot =
+      currentPool && currentPool.slots.some((s) => s.sessionId === sessionId);
+    if (!inSlot && readOffloadMeta(sessionId)) {
+      const { slotIndex } = await poolResume(sessionId);
+      // After /resume the session gets a new ID. Wait by slot index
+      // until the new session is idle.
+      await poll(
+        async () => {
+          const pool = readPool();
+          const slot = pool?.slots?.[slotIndex];
+          if (!slot?.sessionId) return null;
+          const sessions = await getSessions();
+          const session = sessions.find((s) => s.sessionId === slot.sessionId);
+          if (session?.status === STATUS.IDLE) return true;
+          if (session && !session.alive)
+            throw new Error("Session died during resume");
+          return null;
+        },
+        {
+          interval: 1000,
+          initialDelay: 2000,
+          timeout: 120000,
+          label: "waiting for resumed session",
+        },
+      );
+      sessionId = readPool().slots[slotIndex].sessionId;
+    }
+
     return withPoolLock(async () => {
-      const { pool, slot } = findSlotBySessionId(msg.sessionId);
+      const { pool, slot } = findSlotBySessionId(sessionId);
       const status = await getEffectiveSlotStatus(slot);
       if (status !== POOL_STATUS.IDLE)
         throw new Error(`Session is ${status}, expected idle`);
