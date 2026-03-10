@@ -21,7 +21,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(ocDir, "idle-signals"), { recursive: true });
   fs.mkdirSync(path.join(ocDir, "logs"), { recursive: true });
 
-  env = { ...process.env, HOME: tmpHome };
+  env = { ...process.env, HOME: tmpHome, OPEN_COCKPIT_DIR: "" };
 });
 
 afterEach(() => {
