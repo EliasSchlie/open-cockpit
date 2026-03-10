@@ -31,11 +31,6 @@ export function createTestEnv(prefix = "open-cockpit-test") {
     fs.mkdirSync(path.join(dir, sub), { recursive: true });
   }
 
-  const origEnv = process.env.OPEN_COCKPIT_TEST_DIR;
-  const origDirEnv = process.env.OPEN_COCKPIT_DIR;
-  process.env.OPEN_COCKPIT_TEST_DIR = dir;
-  process.env.OPEN_COCKPIT_DIR = dir;
-
   // Track modules loaded via requireFresh so we can clean them up
   const loadedModules = new Set();
 
@@ -49,7 +44,8 @@ export function createTestEnv(prefix = "open-cockpit-test") {
 
     /**
      * Import a module with a fresh module cache so it picks up the test env var.
-     * Pass absolute path or relative from project root.
+     * Sets OPEN_COCKPIT_DIR only during require, then restores it immediately
+     * to avoid leaking to other tests or subprocess-spawning tests.
      */
     requireFresh(modulePath) {
       // Resolve relative paths from the project src dir
@@ -70,7 +66,26 @@ export function createTestEnv(prefix = "open-cockpit-test") {
         }
       }
 
-      return require(abs);
+      // Set env, require (paths.js reads env at load time), then restore.
+      // Capture originals fresh each call to be robust against interleaving.
+      const prevTestDir = process.env.OPEN_COCKPIT_TEST_DIR;
+      const prevDir = process.env.OPEN_COCKPIT_DIR;
+      process.env.OPEN_COCKPIT_TEST_DIR = dir;
+      process.env.OPEN_COCKPIT_DIR = dir;
+      try {
+        return require(abs);
+      } finally {
+        if (prevTestDir === undefined) {
+          delete process.env.OPEN_COCKPIT_TEST_DIR;
+        } else {
+          process.env.OPEN_COCKPIT_TEST_DIR = prevTestDir;
+        }
+        if (prevDir === undefined) {
+          delete process.env.OPEN_COCKPIT_DIR;
+        } else {
+          process.env.OPEN_COCKPIT_DIR = prevDir;
+        }
+      }
     },
 
     /** Write a JSON file in the test dir */
@@ -92,20 +107,8 @@ export function createTestEnv(prefix = "open-cockpit-test") {
       return JSON.parse(fs.readFileSync(path.join(dir, relativePath), "utf-8"));
     },
 
-    /** Clean up temp dir and restore env */
+    /** Clean up temp dir and module cache */
     cleanup() {
-      // Restore env
-      if (origEnv === undefined) {
-        delete process.env.OPEN_COCKPIT_TEST_DIR;
-      } else {
-        process.env.OPEN_COCKPIT_TEST_DIR = origEnv;
-      }
-      if (origDirEnv === undefined) {
-        delete process.env.OPEN_COCKPIT_DIR;
-      } else {
-        process.env.OPEN_COCKPIT_DIR = origDirEnv;
-      }
-
       // Clear cached modules so next test gets fresh imports
       for (const key of loadedModules) {
         delete require.cache[key];

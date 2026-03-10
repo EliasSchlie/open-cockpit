@@ -6,10 +6,15 @@ import os from "os";
 const tmpDir = path.join(os.tmpdir(), `preferences-test-${process.pid}`);
 const prefsFile = path.join(tmpDir, "preferences.json");
 
-// Set env before requiring the CJS module so paths.js picks it up
+// Set env before requiring the CJS module so paths.js picks it up, then restore
+const origOcDir = process.env.OPEN_COCKPIT_DIR;
 process.env.OPEN_COCKPIT_DIR = tmpDir;
-
 const { getPreference, setPreference } = await import("../src/preferences.js");
+if (origOcDir === undefined) {
+  delete process.env.OPEN_COCKPIT_DIR;
+} else {
+  process.env.OPEN_COCKPIT_DIR = origOcDir;
+}
 
 beforeEach(() => {
   fs.mkdirSync(tmpDir, { recursive: true });
