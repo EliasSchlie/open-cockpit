@@ -262,6 +262,7 @@ function runCli(args, env = {}, timeout = 5000) {
           ...process.env,
           HOME: TMP_DIR,
           PATH: process.env.PATH,
+          OPEN_COCKPIT_DIR: "",
           ...env,
         },
         timeout,
