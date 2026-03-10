@@ -1,5 +1,5 @@
 #!/bin/bash
-# Logs hook errors to ~/.open-cockpit/logs/hooks.log with rotation.
+# Logs hook errors to $OPEN_COCKPIT_DIR/logs/hooks.log with rotation.
 #
 # Usage (source from hook scripts):
 #   source "$(dirname "$0")/log-error.sh"
@@ -10,7 +10,7 @@
 # Note: This sets a trap on ERR. If a hook needs its own ERR trap,
 # it must call _hook_log_error manually from within it.
 
-HOOK_LOG_DIR="$HOME/.open-cockpit/logs"
+HOOK_LOG_DIR="${OPEN_COCKPIT_DIR:-$HOME/.open-cockpit}/logs"
 HOOK_LOG_FILE="$HOOK_LOG_DIR/hooks.log"
 HOOK_LOG_MAX_SIZE=102400  # 100KB
 
