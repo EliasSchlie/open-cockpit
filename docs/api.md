@@ -4,7 +4,7 @@ Unix socket API at `~/.open-cockpit/api.sock` for external process control. Prot
 
 ## CLI Quick Reference
 
-The CLI (`bin/cockpit-cli`) provides both high-level agent-friendly commands and low-level API access.
+The CLI (`bin/cockpit-cli`) provides both high-level agent-friendly commands and low-level API access. It auto-augments `PATH` at startup (probing `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.nvm`) so it works from restricted shell environments like Claude Code's Bash tool.
 
 ### Targeting sessions
 

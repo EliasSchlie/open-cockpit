@@ -7,7 +7,9 @@ description: Use when needing to run Claude instances in parallel or in sequence
 
 Send prompts to other Claude sessions through a shared pool. The pool pre-starts sessions so `start` never launches a new `claude` process (which would destroy any in-flight Bash tool call output).
 
-Requires Open Cockpit running with an active pool. If `cockpit-cli start` fails with "socket not found", the app isn't running. If it fails with "no fresh slots", the pool is full — run `cockpit-cli clean` or wait for sessions to finish.
+Requires Open Cockpit running with an active pool. `cockpit-cli` auto-augments `PATH` so it works from restricted shells — just call it directly, no PATH setup needed.
+
+If `cockpit-cli start` fails with "socket not found", the app isn't running. If it fails with "no fresh slots", the pool is full — run `cockpit-cli clean` or wait for sessions to finish.
 
 ## Sending a prompt
 

@@ -3,6 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# --- Ensure node and common tools are in PATH ---
+# Restricted shells (e.g. Claude Code's Bash tool) may not load the full profile.
+for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.nvm/versions/node"/*/bin; do
+  [[ -d "$dir" ]] && [[ ":$PATH:" != *":$dir:"* ]] && PATH="$dir:$PATH"
+done
+export PATH
+
 # --- Global flags (parsed before socket resolution) ---
 VERBOSITY="raw"
 INSTANCE_FLAG=""
@@ -86,7 +93,8 @@ detect_parent_session() {
 parse_jsonl_response() {
   tail -50 "$1" | jq -rs '
     [.[] | select(.type == "assistant") |
-      (.message.content // []) | map(select(.type == "text") | .text) | join("\n")
+      (.message.content // []) | map(select(.type == "text") | .text) | join("\n") |
+      select(length > 0)
     ] | last // "(no response)"
   '
 }
@@ -202,8 +210,9 @@ check_error() {
   err=$(echo "$resp" | jq -r '.error // empty' 2>/dev/null) || true
   if [[ -n "$err" ]]; then
     if [[ "$err" == *"No slot found"* ]]; then
-      echo "Error: session is external (not managed by the pool)." >&2
-      echo "Only pool sessions support this operation." >&2
+      echo "Error: no pool session matches the given ID." >&2
+      echo "The session may have been offloaded, or it's external (not managed by the pool)." >&2
+      echo "Use 'cockpit-cli ls' to see active pool sessions." >&2
     else
       echo "Error: $err" >&2
     fi
@@ -410,8 +419,8 @@ case "$CMD" in
     # Check if session is external (not in pool)
     ERR=$(echo "$RESULT" | jq -r '.error // empty' 2>/dev/null) || true
     if [[ -n "$ERR" && "$ERR" == *"No slot found"* ]]; then
-      echo "Error: session $RESOLVED_VALUE is external (not managed by the pool)." >&2
-      echo "Only pool sessions have readable terminal buffers." >&2
+      echo "Error: no pool session matches '$RESOLVED_VALUE'." >&2
+      echo "The session may have been offloaded or is external. Pool sessions have readable terminal buffers." >&2
       echo "Use 'cockpit-cli log $TARGET' to read its conversation history instead." >&2
       exit 1
     fi
@@ -441,7 +450,7 @@ case "$CMD" in
     FIRST=$(send_api "$json" 2>/dev/null) || { echo "Error: cannot connect to API" >&2; exit 1; }
     FIRST_ERR=$(echo "$FIRST" | jq -r '.error // empty' 2>/dev/null) || true
     if [[ -n "$FIRST_ERR" && "$FIRST_ERR" == *"No slot found"* ]]; then
-      echo "Error: session is external (not managed by the pool). Cannot watch terminal." >&2
+      echo "Error: no pool session matches the given ID. Cannot watch terminal." >&2
       echo "Use 'cockpit-cli log $TARGET' to read conversation history instead." >&2
       exit 1
     fi
@@ -532,22 +541,9 @@ case "$CMD" in
       exit 1
     fi
 
-    resolve_target "$TARGET"
+    resolve_to_session_id "$TARGET"
+    SID="$RESOLVED_SESSION_ID"
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-
-    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
-      # Get sessionId from slot
-      json="{\"type\":\"slot-status\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
-      SLOT_RESULT=$(send_api "$json")
-      check_error "$SLOT_RESULT"
-      SID=$(echo "$SLOT_RESULT" | jq -r '.slot.sessionId // empty')
-      if [[ -z "$SID" ]]; then
-        echo "Error: slot $RESOLVED_VALUE has no session" >&2
-        exit 1
-      fi
-    else
-      SID="$RESOLVED_VALUE"
-    fi
 
     json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SID\",\"prompt\":$PROMPT_JSON}"
     RESULT=$(send_api "$json")
@@ -652,7 +648,8 @@ case "$CMD" in
     ;;
 
   resume)
-    SESSION_ID="${1:?sessionId required}"
+    resolve_to_session_id "${1:?sessionId required}"
+    SESSION_ID="$RESOLVED_SESSION_ID"
     shift
     BLOCK=false
     while [[ $# -gt 0 ]]; do
@@ -682,7 +679,8 @@ case "$CMD" in
     ;;
 
   followup)
-    SESSION_ID="${1:?sessionId required}"
+    resolve_to_session_id "${1:?sessionId required}"
+    SESSION_ID="$RESOLVED_SESSION_ID"
     shift
     BLOCK=false
     PROMPT=""
@@ -717,8 +715,12 @@ case "$CMD" in
 
   wait)
     if [[ $# -gt 0 ]]; then
-      SESSION_ID="$1"
-      json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"timeout\":300000}"
+      resolve_target "$1"
+      if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+        json="{\"type\":\"pool-wait\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE,\"timeout\":300000}"
+      else
+        json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"timeout\":300000}"
+      fi
     else
       json="{\"type\":\"pool-wait\",\"id\":1,\"timeout\":300000}"
     fi
@@ -730,13 +732,12 @@ case "$CMD" in
     ;;
 
   capture)
-    SESSION_ID="${1:?sessionId or --slot required}"
-    if [[ "$SESSION_ID" == "--slot" ]]; then
-      SLOT="${2:?slot index required}"
-      validate_int "$SLOT" "slot index"
-      json="{\"type\":\"pool-capture\",\"id\":1,\"slotIndex\":$SLOT}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_target "$TARGET"
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"pool-capture\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
     else
-      json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+      json="{\"type\":\"pool-capture\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
     fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
@@ -746,13 +747,12 @@ case "$CMD" in
     ;;
 
   result)
-    SESSION_ID="${1:?sessionId or --slot required}"
-    if [[ "$SESSION_ID" == "--slot" ]]; then
-      SLOT="${2:?slot index required}"
-      validate_int "$SLOT" "slot index"
-      json="{\"type\":\"pool-result\",\"id\":1,\"slotIndex\":$SLOT}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_target "$TARGET"
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"pool-result\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE}"
     else
-      json="{\"type\":\"pool-result\",\"id\":1,\"sessionId\":\"$SESSION_ID\"}"
+      json="{\"type\":\"pool-result\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
     fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
@@ -762,17 +762,14 @@ case "$CMD" in
     ;;
 
   input)
-    SESSION_ID="${1:?sessionId or --slot required}"
-    if [[ "$SESSION_ID" == "--slot" ]]; then
-      SLOT="${2:?slot index required}"
-      validate_int "$SLOT" "slot index"
-      TEXT=$(printf '%b' "${3:?text required}")
-      DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
-      json="{\"type\":\"pool-input\",\"id\":1,\"slotIndex\":$SLOT,\"data\":$DATA_JSON}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_target "$TARGET"
+    TEXT=$(printf '%b' "${2:?text required}")
+    DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
+    if [[ "$RESOLVED_TYPE" == "slotIndex" ]]; then
+      json="{\"type\":\"pool-input\",\"id\":1,\"slotIndex\":$RESOLVED_VALUE,\"data\":$DATA_JSON}"
     else
-      TEXT=$(printf '%b' "${2:?text required}")
-      DATA_JSON=$(printf '%s' "$TEXT" | jq -Rs .)
-      json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"data\":$DATA_JSON}"
+      json="{\"type\":\"pool-input\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"data\":$DATA_JSON}"
     fi
     RESULT=$(send_api "$json")
     check_error "$RESULT"
@@ -1434,9 +1431,9 @@ Targets: Most commands accept a <target> which can be:
   resume <id> [--block]          Resume offloaded/archived session
   followup <id> <prompt> [--block]  Follow up on idle session
   wait [id]                      Wait for session to finish, print output
-  capture <id|--slot N>          Show live terminal content
-  result <id|--slot N>           Print output (error if still running)
-  input <id|--slot N> <text>     Send raw input to terminal
+  capture <target>               Show live terminal content
+  result <target>                Print output (error if still running)
+  input <target> <text>          Send raw input to terminal
   clean                          Free slots occupied by finished sessions
   pin <id> [seconds]             Prevent offloading (default: 120s)
   unpin <id>                     Allow offloading again
