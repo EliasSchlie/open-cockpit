@@ -90,6 +90,10 @@ function setTerminalDims(cols, rows) {
 
 const { withPoolLock } = createPoolLock(POOL_FILE);
 
+// Sessions currently being restored (prevents double-restore races).
+// Added synchronously at poolResume entry, removed when tracking completes.
+const _pendingRestores = new Set();
+
 // Poll a condition until it returns a truthy value, with timeout.
 // Returns the truthy value, or throws on timeout.
 async function poll(
@@ -1036,6 +1040,7 @@ function trackNewSlot(
     skipTrustPrompt = false,
     skipFreshSignal = false,
     onResolved = null,
+    onError = null,
   } = {},
 ) {
   if (!skipTrustPrompt) acceptTrustPrompt(slot.termId);
@@ -1081,6 +1086,7 @@ function trackNewSlot(
         "main",
         `Slot tracking failed: termId=${slot.termId} pid=${slot.pid} err=${err.message}`,
       );
+      if (onError) onError(err);
       await withPoolLock(() => {
         const p = readPool();
         if (!p) return;
@@ -1675,72 +1681,117 @@ async function withFreshSlot(claimFn) {
 async function poolResume(sessionId) {
   const { invalidateSessionsCache } = getSessionDiscovery();
   validateSessionId(sessionId);
+
+  // Prevent double-restore: guards against the race where restorePendingSessions
+  // and restoreFromActiveRegistry both try to restore the same session before
+  // trackNewSlot updates pool.json. The guard is added after validation so
+  // early throws don't need manual cleanup.
+  if (_pendingRestores.has(sessionId)) {
+    _debugLog(
+      "main",
+      `poolResume skipped: session ${sessionId} is already being restored`,
+    );
+    throw new Error("Session is already being restored");
+  }
+
+  // Check if this session is already live in a pool slot
+  const currentPool = readPool();
+  if (currentPool) {
+    const alreadyLive = currentPool.slots.find(
+      (s) => s.sessionId === sessionId,
+    );
+    if (alreadyLive) {
+      _debugLog(
+        "main",
+        `poolResume skipped: session ${sessionId} already in slot ${alreadyLive.index} (termId=${alreadyLive.termId})`,
+      );
+      throw new Error("Session already live in pool");
+    }
+  }
+
   const meta = readOffloadMeta(sessionId);
   if (!meta) throw new Error("No offload data for session");
   const claudeSessionId = meta.claudeSessionId || meta.sessionId;
   if (!claudeSessionId) throw new Error("No Claude session ID stored");
 
-  // Atomically ensure a fresh slot and claim it for /resume.
-  // Unarchive only after the slot is claimed — if withFreshSlot fails,
-  // the session stays archived instead of getting stuck in recents.
-  const result = await withFreshSlot(async (pool, slot) => {
-    if (readOffloadMeta(sessionId)?.archived) unarchiveSession(sessionId);
-    const oldSlotSessionId = slot.sessionId;
+  // Add guard after all validation — stays active until trackNewSlot resolves
+  // (which happens async after poolResume returns).
+  _pendingRestores.add(sessionId);
 
-    try {
-      await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
-    } catch (err) {
-      console.error("[main] /resume command failed:", err.message);
-      throw err; // slot stays fresh (withFreshSlot default)
-    }
-    slot.status = POOL_STATUS.BUSY;
-    slot.sessionId = null; // Clear so pollForResumedSession doesn't match the old slot session
-    writePool(pool);
+  let result;
+  try {
+    // Atomically ensure a fresh slot and claim it for /resume.
+    // Unarchive only after the slot is claimed — if withFreshSlot fails,
+    // the session stays archived instead of getting stuck in recents.
+    result = await withFreshSlot(async (pool, slot) => {
+      if (readOffloadMeta(sessionId)?.archived) unarchiveSession(sessionId);
+      const oldSlotSessionId = slot.sessionId;
 
-    // Track slot in background (session ID polling after /resume)
-    trackNewSlot(
-      { termId: slot.termId, pid: slot.pid },
-      {
-        excludeId: oldSlotSessionId,
-        expectedStatus: POOL_STATUS.BUSY,
-        skipTrustPrompt: true,
-        skipFreshSignal: true,
-        onResolved: async (newSessionId) => {
-          // Re-tag orphaned extra terminals from old session to new session
-          if (newSessionId) {
-            try {
-              const resp = await daemonRequest({ type: "list" });
-              const orphaned = resp.ptys.filter(
-                (p) => p.sessionId === sessionId && !p.exited,
-              );
-              await Promise.all(
-                orphaned.map((pty) =>
-                  daemonRequest({
-                    type: "set-session",
-                    termId: pty.termId,
-                    sessionId: newSessionId,
-                  }),
-                ),
-              );
-            } catch (err) {
-              _debugLog(
-                "main",
-                `Failed to re-tag orphaned terminals: ${err.message}`,
-              );
+      _debugLog(
+        "main",
+        `poolResume: sending /resume ${claudeSessionId} to slot ${slot.index} (termId=${slot.termId} pid=${slot.pid})`,
+      );
+
+      try {
+        await sendCommandToTerminal(slot.termId, `/resume ${claudeSessionId}`);
+      } catch (err) {
+        console.error("[main] /resume command failed:", err.message);
+        throw err; // slot stays fresh (withFreshSlot default)
+      }
+      slot.status = POOL_STATUS.BUSY;
+      slot.sessionId = null; // Clear so pollForResumedSession doesn't match the old slot session
+      writePool(pool);
+
+      // Track slot in background (session ID polling after /resume)
+      trackNewSlot(
+        { termId: slot.termId, pid: slot.pid },
+        {
+          excludeId: oldSlotSessionId,
+          expectedStatus: POOL_STATUS.BUSY,
+          skipTrustPrompt: true,
+          skipFreshSignal: true,
+          onError: () => _pendingRestores.delete(sessionId),
+          onResolved: async (newSessionId) => {
+            _pendingRestores.delete(sessionId);
+            // Re-tag orphaned extra terminals from old session to new session
+            if (newSessionId) {
+              try {
+                const resp = await daemonRequest({ type: "list" });
+                const orphaned = resp.ptys.filter(
+                  (p) => p.sessionId === sessionId && !p.exited,
+                );
+                await Promise.all(
+                  orphaned.map((pty) =>
+                    daemonRequest({
+                      type: "set-session",
+                      termId: pty.termId,
+                      sessionId: newSessionId,
+                    }),
+                  ),
+                );
+              } catch (err) {
+                _debugLog(
+                  "main",
+                  `Failed to re-tag orphaned terminals: ${err.message}`,
+                );
+              }
             }
-          }
-          invalidateSessionsCache();
+            invalidateSessionsCache();
+          },
         },
-      },
-    );
+      );
 
-    return {
-      type: "resumed",
-      sessionId,
-      termId: slot.termId,
-      slotIndex: slot.index,
-    };
-  });
+      return {
+        type: "resumed",
+        sessionId,
+        termId: slot.termId,
+        slotIndex: slot.index,
+      };
+    });
+  } catch (err) {
+    _pendingRestores.delete(sessionId);
+    throw err;
+  }
 
   // Remove offload data outside the pool lock so fs.rmSync doesn't block
   // concurrent pool operations. Done after the slot is claimed and /resume sent.
