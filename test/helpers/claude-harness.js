@@ -14,13 +14,18 @@ import crypto from "crypto";
 
 const execFileAsync = promisify(execFile);
 
+let cachedClaudePath = null;
+
 /**
  * Spawn a Claude Code session and register it in the test env.
  * Returns { sessionId, pid, process, waitForExit }.
  */
 export async function spawnTestSession(env, { prompt, sessionId, cwd } = {}) {
   const id = sessionId || crypto.randomUUID();
-  const claudePath = (await execFileAsync("which", ["claude"])).stdout.trim();
+  if (!cachedClaudePath) {
+    cachedClaudePath = (await execFileAsync("which", ["claude"])).stdout.trim();
+  }
+  const claudePath = cachedClaudePath;
   const workDir = cwd || env.dir;
 
   const args = ["--session-id", id];

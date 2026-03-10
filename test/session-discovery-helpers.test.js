@@ -1,23 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { createTestEnv } from "./helpers/test-env.js";
 
 let env;
+let mod;
 
-beforeEach(() => {
+beforeAll(() => {
   env = createTestEnv();
+  mod = env.requireFresh("session-discovery.js");
 });
 
-afterEach(() => {
+afterAll(() => {
   env.cleanup();
 });
 
 describe("findGitRoot", () => {
   it("finds git root when .git dir exists", async () => {
-    const mod = env.requireFresh("session-discovery.js");
-
     // Create a project dir with .git inside the temp dir
     const projectDir = path.join(env.dir, "my-project");
     fs.mkdirSync(projectDir, { recursive: true });
@@ -33,8 +32,6 @@ describe("findGitRoot", () => {
   });
 
   it("returns null when no .git exists", async () => {
-    const mod = env.requireFresh("session-discovery.js");
-
     // tmpdir without any .git — walk up will eventually hit root
     const dir = path.join(env.dir, "no-git-project");
     fs.mkdirSync(dir, { recursive: true });
@@ -47,13 +44,11 @@ describe("findGitRoot", () => {
   });
 
   it("returns null for null input", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const result = await mod.findGitRoot(null);
     expect(result).toBe(null);
   });
 
   it("finds .git at the same level as cwd", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const dir = path.join(env.dir, "root-level-git");
     fs.mkdirSync(dir);
     fs.mkdirSync(path.join(dir, ".git"));
@@ -66,7 +61,6 @@ describe("findGitRoot", () => {
 
 describe("getIntentionHeading", () => {
   it("extracts heading from markdown file", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const file = path.join(env.dir, "intention.md");
     fs.writeFileSync(file, "# My Great Heading\n\nSome body text\n");
 
@@ -76,7 +70,6 @@ describe("getIntentionHeading", () => {
   });
 
   it("extracts first heading when multiple exist", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const file = path.join(env.dir, "multi-heading.md");
     fs.writeFileSync(
       file,
@@ -89,7 +82,6 @@ describe("getIntentionHeading", () => {
   });
 
   it("returns null for file without heading", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const file = path.join(env.dir, "no-heading.md");
     fs.writeFileSync(file, "Just some text without a heading\n");
 
@@ -99,7 +91,6 @@ describe("getIntentionHeading", () => {
   });
 
   it("returns null for nonexistent file", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const file = path.join(env.dir, "nonexistent.md");
 
     const heading = await mod.getIntentionHeading(file);
@@ -108,7 +99,6 @@ describe("getIntentionHeading", () => {
   });
 
   it("trims whitespace from heading", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const file = path.join(env.dir, "whitespace.md");
     fs.writeFileSync(file, "#   Spaced Heading   \n");
 
@@ -120,7 +110,6 @@ describe("getIntentionHeading", () => {
 
 describe("getIdleSignal", () => {
   it("parses idle signal file for a PID", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const signalData = {
       cwd: "/some/project",
       ts: 1704067200,
@@ -139,15 +128,12 @@ describe("getIdleSignal", () => {
   });
 
   it("returns null when no signal file exists", async () => {
-    const mod = env.requireFresh("session-discovery.js");
-
     const result = await mod.getIdleSignal("99999");
 
     expect(result).toBe(null);
   });
 
   it("returns null for invalid JSON in signal file", async () => {
-    const mod = env.requireFresh("session-discovery.js");
     const signalFile = path.join(env.dir, "idle-signals", "88888");
     fs.writeFileSync(signalFile, "not valid json");
 
@@ -163,8 +149,6 @@ describe("getIdleSignal", () => {
 
 describe("getJsonlSize", () => {
   it("returns file size for existing JSONL", async () => {
-    const mod = env.requireFresh("session-discovery.js");
-
     // getJsonlSize depends on findJsonlPath which searches CLAUDE_PROJECTS_DIR.
     // We need to set up the JSONL file in the right location.
     const { CLAUDE_PROJECTS_DIR } = env.requireFresh("paths.js");
@@ -181,8 +165,6 @@ describe("getJsonlSize", () => {
   });
 
   it("returns null for nonexistent session", async () => {
-    const mod = env.requireFresh("session-discovery.js");
-
     const size = await mod.getJsonlSize("nonexistent-session-id");
 
     expect(size).toBe(null);

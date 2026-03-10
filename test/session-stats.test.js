@@ -1,48 +1,41 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { createRequire } from "module";
+import { createTestEnv } from "./helpers/test-env.js";
 
 const require = createRequire(import.meta.url);
 
-const TMP_DIR = path.join(
-  os.tmpdir(),
-  "open-cockpit-session-stats-test-" + process.pid,
-);
-
-beforeEach(() => {
-  fs.mkdirSync(TMP_DIR, { recursive: true });
-  // Clear cached modules for fresh imports
-  for (const key of Object.keys(require.cache)) {
-    if (key.includes("/src/")) delete require.cache[key];
-  }
-});
-
-afterEach(() => {
-  fs.rmSync(TMP_DIR, { recursive: true, force: true });
-});
+let env;
+let stats; // cached wrapper module
 
 // parseJsonlStats, getPricing, findChildSessionIds, findAllDescendants are NOT
 // exported from session-stats.js. We extract them via a wrapper module that
 // stubs out the external dependencies (session-discovery, pool-manager, paths).
 
+beforeAll(() => {
+  env = createTestEnv("session-stats-test");
+  stats = loadParseJsonlStats();
+});
+
+afterAll(() => {
+  env.cleanup();
+});
+
 function writeJsonl(filename, lines) {
-  const filePath = path.join(TMP_DIR, filename);
+  const filePath = env.resolve(filename);
   fs.writeFileSync(filePath, lines.map((l) => JSON.stringify(l)).join("\n"));
   return filePath;
 }
 
 function loadParseJsonlStats() {
-  const wrapperPath = path.join(TMP_DIR, "_stats_wrapper.js");
+  const wrapperPath = env.resolve("_stats_wrapper.js");
   const srcPath = path.resolve(
     path.dirname(new URL(import.meta.url).pathname),
     "../src/session-stats.js",
   );
   const src = fs.readFileSync(srcPath, "utf-8");
 
-  // Replace external requires with stubs, strip the existing module.exports,
-  // then append our own exports of the internal functions.
   const patched = src
     .replace(
       /const \{ findJsonlPath \}.*\n/,
@@ -74,7 +67,7 @@ function loadParseJsonlStats() {
 
 describe("PRICING", () => {
   it("has pricing for known models", () => {
-    const { PRICING } = loadParseJsonlStats();
+    const { PRICING } = stats;
 
     expect(PRICING["claude-opus-4-6"]).toBeDefined();
     expect(PRICING["claude-sonnet-4-6"]).toBeDefined();
@@ -82,7 +75,7 @@ describe("PRICING", () => {
   });
 
   it("pricing entries have all required fields", () => {
-    const { PRICING } = loadParseJsonlStats();
+    const { PRICING } = stats;
 
     for (const [model, pricing] of Object.entries(PRICING)) {
       expect(pricing.input).toBeTypeOf("number");
@@ -95,7 +88,7 @@ describe("PRICING", () => {
 
 describe("parseJsonlStats", () => {
   it("parses tokens correctly", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
+    const { parseJsonlStats } = stats;
     const filePath = writeJsonl("tokens.jsonl", [
       {
         type: "user",
@@ -119,16 +112,16 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
-    expect(stats.tokens.input).toBe(100);
-    expect(stats.tokens.output).toBe(50);
-    expect(stats.tokens.cacheCreation).toBe(20);
-    expect(stats.tokens.cacheRead).toBe(10);
+    expect(result.tokens.input).toBe(100);
+    expect(result.tokens.output).toBe(50);
+    expect(result.tokens.cacheCreation).toBe(20);
+    expect(result.tokens.cacheRead).toBe(10);
   });
 
   it("accumulates tokens across multiple assistant messages", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
+    const { parseJsonlStats } = stats;
     const filePath = writeJsonl("multi-tokens.jsonl", [
       {
         type: "assistant",
@@ -152,14 +145,14 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
-    expect(stats.tokens.input).toBe(300);
-    expect(stats.tokens.output).toBe(125);
+    expect(result.tokens.input).toBe(300);
+    expect(result.tokens.output).toBe(125);
   });
 
   it("computes cost estimate correctly for Sonnet", async () => {
-    const { parseJsonlStats, PRICING } = loadParseJsonlStats();
+    const { parseJsonlStats, PRICING } = stats;
     const filePath = writeJsonl("cost.jsonl", [
       {
         type: "assistant",
@@ -178,15 +171,15 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
     const p = PRICING["claude-sonnet-4-6"];
     const expectedCost = p.input + p.output + p.cacheWrite + p.cacheRead;
 
-    expect(stats.estimatedCostUSD).toBeCloseTo(expectedCost, 6);
+    expect(result.estimatedCostUSD).toBeCloseTo(expectedCost, 6);
   });
 
   it("computes cost estimate correctly for Opus", async () => {
-    const { parseJsonlStats, PRICING } = loadParseJsonlStats();
+    const { parseJsonlStats, PRICING } = stats;
     const filePath = writeJsonl("cost-opus.jsonl", [
       {
         type: "assistant",
@@ -203,16 +196,16 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
     const p = PRICING["claude-opus-4-6"];
     const expectedCost =
       (500_000 * p.input) / 1_000_000 + (200_000 * p.output) / 1_000_000;
 
-    expect(stats.estimatedCostUSD).toBeCloseTo(expectedCost, 6);
+    expect(result.estimatedCostUSD).toBeCloseTo(expectedCost, 6);
   });
 
   it("counts turns (user messages) and assistant messages", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
+    const { parseJsonlStats } = stats;
     const filePath = writeJsonl("counts.jsonl", [
       {
         type: "user",
@@ -251,14 +244,14 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
-    expect(stats.turns).toBe(3);
-    expect(stats.assistantMessages).toBe(2);
+    expect(result.turns).toBe(3);
+    expect(result.assistantMessages).toBe(2);
   });
 
   it("counts tool uses in assistant content blocks", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
+    const { parseJsonlStats } = stats;
     const filePath = writeJsonl("tools.jsonl", [
       {
         type: "assistant",
@@ -286,13 +279,13 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
-    expect(stats.toolUses).toBe(3);
+    expect(result.toolUses).toBe(3);
   });
 
   it("determines primary model from mixed-model conversation", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
+    const { parseJsonlStats } = stats;
     const filePath = writeJsonl("mixed-model.jsonl", [
       {
         type: "assistant",
@@ -336,13 +329,13 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
-    expect(stats.model).toBe("claude-sonnet-4-6-20250514");
+    expect(result.model).toBe("claude-sonnet-4-6-20250514");
   });
 
   it("computes duration from first/last timestamp", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
+    const { parseJsonlStats } = stats;
     const filePath = writeJsonl("duration.jsonl", [
       {
         type: "user",
@@ -366,32 +359,32 @@ describe("parseJsonlStats", () => {
       },
     ]);
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
     // 10 minutes = 600,000 ms
-    expect(stats.durationMs).toBe(600_000);
+    expect(result.durationMs).toBe(600_000);
   });
 
   it("handles empty JSONL gracefully", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
-    const filePath = path.join(TMP_DIR, "empty.jsonl");
+    const { parseJsonlStats } = stats;
+    const filePath = env.resolve("empty.jsonl");
     fs.writeFileSync(filePath, "");
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
-    expect(stats.tokens.input).toBe(0);
-    expect(stats.tokens.output).toBe(0);
-    expect(stats.turns).toBe(0);
-    expect(stats.assistantMessages).toBe(0);
-    expect(stats.toolUses).toBe(0);
-    expect(stats.durationMs).toBe(0);
-    expect(stats.model).toBe(null);
-    expect(stats.estimatedCostUSD).toBe(0);
+    expect(result.tokens.input).toBe(0);
+    expect(result.tokens.output).toBe(0);
+    expect(result.turns).toBe(0);
+    expect(result.assistantMessages).toBe(0);
+    expect(result.toolUses).toBe(0);
+    expect(result.durationMs).toBe(0);
+    expect(result.model).toBe(null);
+    expect(result.estimatedCostUSD).toBe(0);
   });
 
   it("handles corrupt lines gracefully (skips them)", async () => {
-    const { parseJsonlStats } = loadParseJsonlStats();
-    const filePath = path.join(TMP_DIR, "corrupt.jsonl");
+    const { parseJsonlStats } = stats;
+    const filePath = env.resolve("corrupt.jsonl");
     const lines = [
       JSON.stringify({
         type: "user",
@@ -414,19 +407,19 @@ describe("parseJsonlStats", () => {
     ];
     fs.writeFileSync(filePath, lines.join("\n"));
 
-    const stats = await parseJsonlStats(filePath);
+    const result = await parseJsonlStats(filePath);
 
     // Should have parsed the valid lines, skipping corrupt ones
-    expect(stats.turns).toBe(1);
-    expect(stats.assistantMessages).toBe(1);
-    expect(stats.tokens.input).toBe(50);
-    expect(stats.tokens.output).toBe(25);
+    expect(result.turns).toBe(1);
+    expect(result.assistantMessages).toBe(1);
+    expect(result.tokens.input).toBe(50);
+    expect(result.tokens.output).toBe(25);
   });
 });
 
 describe("findChildSessionIds", () => {
   it("finds direct children in a session graph", () => {
-    const { findChildSessionIds } = loadParseJsonlStats();
+    const { findChildSessionIds } = stats;
     const graph = {
       "child-1": { parentSessionId: "parent-1" },
       "child-2": { parentSessionId: "parent-1" },
@@ -442,7 +435,7 @@ describe("findChildSessionIds", () => {
   });
 
   it("returns empty array when no children exist", () => {
-    const { findChildSessionIds } = loadParseJsonlStats();
+    const { findChildSessionIds } = stats;
     const graph = {
       "child-1": { parentSessionId: "other-parent" },
     };
@@ -453,7 +446,7 @@ describe("findChildSessionIds", () => {
 
 describe("findAllDescendants", () => {
   it("finds all descendants recursively", () => {
-    const { findAllDescendants } = loadParseJsonlStats();
+    const { findAllDescendants } = stats;
     const graph = {
       "child-1": { parentSessionId: "root" },
       "child-2": { parentSessionId: "root" },
@@ -473,7 +466,7 @@ describe("findAllDescendants", () => {
   });
 
   it("returns empty array for leaf nodes", () => {
-    const { findAllDescendants } = loadParseJsonlStats();
+    const { findAllDescendants } = stats;
     const graph = {
       "child-1": { parentSessionId: "root" },
     };
@@ -484,7 +477,7 @@ describe("findAllDescendants", () => {
 
 describe("getPricing", () => {
   it("matches partial model names with date suffix", () => {
-    const { getPricing, PRICING } = loadParseJsonlStats();
+    const { getPricing, PRICING } = stats;
 
     expect(getPricing("claude-sonnet-4-6-20250514")).toBe(
       PRICING["claude-sonnet-4-6"],
@@ -493,7 +486,7 @@ describe("getPricing", () => {
   });
 
   it("returns default (Sonnet) pricing for unknown models", () => {
-    const { getPricing, PRICING } = loadParseJsonlStats();
+    const { getPricing, PRICING } = stats;
 
     expect(getPricing("unknown-model")).toBe(PRICING["claude-sonnet-4-6"]);
     expect(getPricing(null)).toBe(PRICING["claude-sonnet-4-6"]);

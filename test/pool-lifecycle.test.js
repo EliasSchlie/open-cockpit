@@ -5,11 +5,13 @@ import { createTestEnv } from "./helpers/test-env.js";
 let env;
 let pool;
 let poolLock;
+let isPidAlive;
 
 beforeAll(() => {
   env = createTestEnv();
   pool = env.requireFresh("pool.js");
   poolLock = env.requireFresh("pool-lock.js");
+  ({ isPidAlive } = env.requireFresh("paths.js"));
 });
 
 afterAll(() => {
@@ -127,16 +129,7 @@ describe("pool.js", () => {
         { sessionId: "s3", status: "processing", alive: true },
       ];
 
-      const isAlive = (pid) => {
-        try {
-          process.kill(Number(pid), 0);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
-      const health = pool.computePoolHealth(poolData, sessions, isAlive);
+      const health = pool.computePoolHealth(poolData, sessions, isPidAlive);
 
       expect(health.initialized).toBe(true);
       expect(health.poolSize).toBe(4);

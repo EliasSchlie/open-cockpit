@@ -26,6 +26,10 @@ function sendMessage(sock, msg) {
   return new Promise((resolve, reject) => {
     const conn = net.createConnection(sock);
     let buf = "";
+    const timer = setTimeout(() => {
+      conn.destroy();
+      reject(new Error("API message timeout"));
+    }, 10_000);
     conn.on("connect", () => {
       conn.write(JSON.stringify(msg) + "\n");
     });
@@ -34,15 +38,15 @@ function sendMessage(sock, msg) {
       const idx = buf.indexOf("\n");
       if (idx !== -1) {
         const line = buf.slice(0, idx);
+        clearTimeout(timer);
         conn.destroy();
         resolve(JSON.parse(line));
       }
     });
-    conn.on("error", reject);
-    setTimeout(() => {
-      conn.destroy();
-      reject(new Error("API message timeout"));
-    }, 10_000);
+    conn.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
