@@ -38,6 +38,10 @@ const PENDING_RESTORE_FILE = path.join(
   OPEN_COCKPIT_DIR,
   OWN_POOL ? "pending-restore-dev.json" : "pending-restore.json",
 );
+const ACTIVE_SESSIONS_FILE = path.join(
+  OPEN_COCKPIT_DIR,
+  OWN_POOL ? "active-sessions-dev.json" : "active-sessions.json",
+);
 
 function isPidAlive(pid) {
   try {
@@ -74,4 +78,5 @@ module.exports = {
   DEFAULT_POOL_SIZE,
   ORPHAN_TERMINAL_TTL_MS,
   PENDING_RESTORE_FILE,
+  ACTIVE_SESSIONS_FILE,
 };
