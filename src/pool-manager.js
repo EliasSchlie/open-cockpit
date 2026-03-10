@@ -161,7 +161,7 @@ async function sendCommandToTerminal(termId, command) {
 }
 
 // Create a fresh idle signal file for a pool slot
-function createFreshIdleSignal(pid, sessionId) {
+function createFreshIdleSignal(pid, sessionId, trigger = "pool-init") {
   secureMkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
   secureWriteFileSync(
     path.join(IDLE_SIGNALS_DIR, String(pid)),
@@ -170,7 +170,7 @@ function createFreshIdleSignal(pid, sessionId) {
       session_id: sessionId,
       transcript: "",
       ts: Math.floor(Date.now() / 1000),
-      trigger: "pool-init",
+      trigger,
     }),
   );
 }
@@ -1780,7 +1780,9 @@ async function poolResume(sessionId) {
               }
               // /resume is a local command — no model processing happens, so
               // the Stop hook never fires. Create an idle signal immediately.
-              createFreshIdleSignal(slot.pid, newSessionId);
+              // Use "resume" trigger (not in FRESH_TRIGGERS) so the session is
+              // recognized as previously active → IDLE instead of fresh/typing.
+              createFreshIdleSignal(slot.pid, newSessionId, "resume");
             }
             invalidateSessionsCache();
           },
