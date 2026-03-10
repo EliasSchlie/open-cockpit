@@ -594,6 +594,25 @@ function jumpToRecentIdle() {
   if (idle) selectSession(idle);
 }
 
+// --- Jitter current terminal to clear artifacts ---
+
+async function jitterCurrentTerminal() {
+  const idx = getActiveTermIndex();
+  if (idx < 0) return;
+  const entry = state.terminals[idx];
+  if (!entry) return;
+  const { term, termId } = entry;
+  const cols = term.cols;
+  const rows = term.rows;
+  // Resize both xterm.js and PTY to cols+1, then back — mirrors manual window resize
+  term.resize(cols + 1, rows);
+  window.api.ptyResize(termId, cols + 1, rows);
+  // Small delay for Claude to redraw at new size
+  await new Promise((r) => setTimeout(r, 50));
+  term.resize(cols, rows);
+  window.api.ptyResize(termId, cols, rows);
+}
+
 // --- Focus external terminal for current session ---
 
 async function focusCurrentExternalTerminal() {
@@ -793,6 +812,7 @@ initCommandPalette({
   openSessionInfo,
   openSessionSearch: toggleSessionSearch,
   showAgentPicker,
+  jitterCurrentTerminal,
 });
 
 // Session search
@@ -1054,6 +1074,7 @@ window.api.onOpenInCursor(() => {
 });
 window.api.onOpenPoolSettings(() => showSettings());
 window.api.onOpenSessionInfo(() => openSessionInfo());
+window.api.onJitterTerminal(() => jitterCurrentTerminal());
 window.api.onToggleBell(toggleBellMuted);
 window.api.onSessionSearch(toggleSessionSearch);
 window.api.onRunAgent(showAgentPicker);
