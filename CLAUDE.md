@@ -33,6 +33,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `src/command-palette.js` — COMMANDS registry, pane navigation, palette UI
 - `src/session-search.js` — Fuzzy session search overlay (⌘K)
 - `src/session-stats.js` — On-demand JSONL parsing, token/cost stats, sub-agent aggregation
+- `src/agent-picker.js` — Agent picker overlay (discover and run named agents)
 - `src/stats-ui.js` — Session Info overlay dialog (⌘I)
 - `src/index.html` + `src/styles.css` — Layout, neon red dark theme
 - `bin/cockpit-cli` — CLI for observing and interacting with agents ([docs/api.md](docs/api.md))
@@ -53,6 +54,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `~/.open-cockpit/offloaded/<sessionId>/` — Offloaded/archived data
 - `~/.open-cockpit/shortcuts.json` — Keyboard shortcut overrides
 - `~/.open-cockpit/setup-scripts/` — Setup scripts for Cmd+N
+- `~/.open-cockpit/agents/` — Global agent scripts ([docs/agents.md](docs/agents.md))
 - `~/.open-cockpit/colors.json` — Directory color overrides
 - `~/.open-cockpit/debug.log` — Debug log (rotates at 2 MB)
 - `~/.open-cockpit/api.sock` / `api-dev.sock` — API sockets
@@ -140,6 +142,10 @@ git branch -d <branch>
 git pull
 ```
 
+## Plans
+
+Save plans to `docs/plans/` (e.g. `docs/plans/2026-03-09-feature-name.md`).
+
 ## Conventions
 
 - **Every user-facing action must have a keyboard shortcut.** See [docs/shortcuts.md](docs/shortcuts.md).
@@ -159,6 +165,7 @@ git pull
 - [docs/pty-daemon.md](docs/pty-daemon.md) — PTY daemon architecture, protocol, debugging
 - [docs/api.md](docs/api.md) — Programmatic API (Unix socket, CLI)
 - [docs/hooks.md](docs/hooks.md) — Plugin hooks
+- [docs/agents.md](docs/agents.md) — Custom agent scripts
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference
 - [docs/theme.md](docs/theme.md) — Color scheme, directory colors
 - [docs/debug-logging.md](docs/debug-logging.md) — Debug logging

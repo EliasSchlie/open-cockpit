@@ -318,6 +318,12 @@ function buildMenu() {
           click: () => send("session-info"),
         },
         {
+          label: "Run Agent",
+          accelerator: accel("run-agent"),
+          click: () => send("run-agent"),
+        },
+        { type: "separator" },
+        {
           label: "Settings",
           accelerator: accel("open-pool-settings"),
           click: () => send("open-pool-settings"),
@@ -649,6 +655,45 @@ app.whenReady().then(async () => {
       return null;
     }
   });
+  ipcMain.handle("run-agent", async (_e, scriptPath, args) => {
+    const { spawn } = require("child_process");
+    const { splitArgs } = require("./api-handlers");
+    const argList = splitArgs(args);
+    return new Promise((resolve) => {
+      const child = spawn(scriptPath, argList, {
+        stdio: ["ignore", "ignore", "pipe"],
+        detached: true,
+      });
+      const UUID_RE =
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+      let resolved = false;
+      let stderrBuf = "";
+
+      const timeout = setTimeout(() => finish(null), 30000);
+
+      const finish = (sessionId) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
+        child.stderr.destroy();
+        child.unref();
+        resolve(sessionId);
+      };
+
+      child.stderr.on("data", (chunk) => {
+        if (resolved) return;
+        stderrBuf += chunk.toString();
+        const match = stderrBuf.match(UUID_RE);
+        if (match) finish(match[0]);
+        // Cap buffer to prevent unbounded growth from noisy scripts
+        if (stderrBuf.length > 8192) stderrBuf = stderrBuf.slice(-4096);
+      });
+
+      child.on("error", () => finish(null));
+      child.on("close", () => finish(null));
+    });
+  });
+
   // --- Layout persistence ---
   ipcMain.handle("save-layout", (_e, sessionId, layout) => {
     try {

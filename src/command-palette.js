@@ -218,6 +218,12 @@ export function initCommandPalette(actions) {
       shortcutAction: "session-info",
       action: () => _actions.openSessionInfo(),
     },
+    {
+      id: "run-agent",
+      label: "Run Agent",
+      shortcutAction: "run-agent",
+      action: () => _actions.showAgentPicker(),
+    },
   ];
 
   // Also add Tab 1-9 commands

@@ -811,6 +811,13 @@ async function getSessionsUncached() {
         const jsonlPath = jsonlPathCache.get(sessionId);
         if (isActivated) {
           status = STATUS.PROCESSING;
+        } else if (poolSlot) {
+          // Pool sessions always have idle signals when idle (pool-init,
+          // stop, tool, permission, session-clear). syncPoolStatuses
+          // recreates missing pool-init signals for fresh slots. So a
+          // missing idle signal on a pool session means UserPromptSubmit
+          // cleared it — the session is processing its first prompt.
+          status = STATUS.PROCESSING;
         } else {
           // "user" needle: this path only runs when idle signal is absent
           // (prompt just submitted), so "user" entries are real, not /clear artifacts.
@@ -1116,7 +1123,17 @@ async function getSessions() {
       sessionsCache = result;
       sessionsCacheTs = Date.now();
       lastFullRefreshTs = Date.now();
-      lastDirFingerprint = computeDirFingerprint();
+      // Don't store fingerprint if any live session has no idle signal and
+      // was classified as fresh/typing. That's an ambiguous state (may be
+      // processing but transcriptContains hasn't found the user entry yet).
+      // Clearing the fingerprint forces re-evaluation on the next poll.
+      const hasAmbiguous = result.some(
+        (s) =>
+          s.alive &&
+          !s.idleTs &&
+          (s.status === STATUS.FRESH || s.status === STATUS.TYPING),
+      );
+      lastDirFingerprint = hasAmbiguous ? null : computeDirFingerprint();
       return result;
     })
     .finally(() => {

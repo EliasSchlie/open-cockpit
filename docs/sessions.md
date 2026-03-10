@@ -25,6 +25,8 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 - **Safety:** `UserPromptSubmit` always clears the signal before processing begins. Stop-hook re-prompts happen within an already-cleared cycle, so no stale signal persists during processing.
 - **No false idle positives.** The app may trigger notifications on idle transitions — a premature "idle" is worse than a delayed one.
 - **Activation tracking:** Sessions with a non-`pool-init` idle signal trigger are marked "activated" in an in-memory Set. Activated sessions always classify as `idle`/`processing`, never `fresh`/`typing` — prevents misclassification when transcript checks fail (e.g. after `/resume` or `/clear`).
+- **Pool session shortcut:** Pool sessions always have idle signals when idle (pool-init, stop, tool, permission, session-clear). Missing idle signal on a non-activated pool session = `UserPromptSubmit` cleared it = processing. No `transcriptContains` check needed.
+- **Fingerprint cache bypass:** Sessions in ambiguous states (alive, no idle signal, classified as fresh/typing) prevent fingerprint caching, forcing re-evaluation next poll cycle. Without this, `transcriptContains` race failures could be cached for up to `MAX_FINGERPRINT_AGE` (30s).
 
 ## Archiving
 
