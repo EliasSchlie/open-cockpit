@@ -9,35 +9,66 @@ Named, reusable shell scripts that compose `cockpit-cli` commands into higher-le
 | `.open-cockpit/agents/<name>.sh` | Project-local | Higher (overrides global) |
 | `~/.open-cockpit/agents/<name>.sh` | Global | Lower |
 
-## Creating an agent
-
-1. Create the script file:
+## Quick start
 
 ```bash
 mkdir -p ~/.open-cockpit/agents
-cat > ~/.open-cockpit/agents/code-review.sh << 'EOF'
+cat > ~/.open-cockpit/agents/review.sh << 'EOF'
 #!/usr/bin/env bash
 # Description: Review staged changes and suggest improvements
+# Arg: focus | Area to focus on | optional | default: general
+
 diff=$(git diff --cached)
 if [[ -z "$diff" ]]; then
   echo "No staged changes to review." >&2
   exit 1
 fi
-id=$(cockpit-cli start "Review this diff and suggest improvements:\n$diff")
-echo "$id"
+cockpit-cli start "Review this diff (focus: ${1:-general}):\n$diff"
 EOF
-chmod +x ~/.open-cockpit/agents/code-review.sh
+chmod +x ~/.open-cockpit/agents/review.sh
 ```
 
-2. The first `# Description:` comment is shown in `cockpit-cli agents` output and in the UI picker.
+## Metadata comments
 
-3. Make it executable (`chmod +x`).
+Agent scripts support header comments for self-documentation:
+
+```bash
+#!/usr/bin/env bash
+# Description: One-line summary shown in listings and UI
+# Arg: target | Files to review
+# Arg: --format | Output format | optional | default: markdown
+```
+
+### `# Description:`
+
+First occurrence is shown in `cockpit-cli agents`, `--help`, and the UI picker.
+
+### `# Arg:` format
+
+```
+# Arg: name | description | optional | default: value
+```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `name` | Yes | Argument name (e.g. `target`, `--format`) |
+| `description` | No | Shown in `--help` and UI fields |
+| `optional` | No | Omit for required args |
+| `default: value` | No | Default value hint |
+
+Arguments are passed positionally (`$1`, `$2`, ...) regardless of metadata.
 
 ## CLI usage
 
 ```bash
 # List available agents
 cockpit-cli agents
+
+# List with argument details
+cockpit-cli agents -v
+
+# Show agent help
+cockpit-cli agent <name> --help
 
 # Run an agent
 cockpit-cli agent <name> [args...]
@@ -54,7 +85,9 @@ id=$(cockpit-cli start "$*" --block --quiet)
 cockpit-cli result "$id" -v response
 ```
 
-### Interactive (returns session ID)
+### Interactive (non-blocking)
+
+`cockpit-cli start` prints the session ID to both stdout and stderr. In non-blocking mode, the caller gets the ID on stdout for scripting:
 
 ```bash
 #!/usr/bin/env bash
@@ -90,13 +123,22 @@ cockpit-cli result "$id2" -v response
 
 ## UI integration
 
-Agents appear in the command palette via **Run Agent** (Cmd+Shift+A). The picker shows all discovered agents with their descriptions.
+Agents appear in the command palette via **Run Agent** (⌘⇧A). The picker shows all discovered agents with descriptions and typed input fields for each `# Arg:` definition.
+
+### Stderr side-channel
+
+When the UI invokes an agent, it captures the session ID from the script's **stderr** (not stdout). This works because `cockpit-cli start` always writes the session ID to stderr. The UI navigates to the session immediately while the script continues in background.
+
+This means agent scripts don't need special UI handling — `cockpit-cli start` handles it automatically.
 
 ## API
 
-The `list-agents` API endpoint returns discovered agents:
+The `list-agents` API endpoint returns discovered agents with metadata:
 
 ```json
 {"type": "list-agents", "cwd": "/path/to/project"}
-→ {"type": "agents", "agents": [{"name": "code-review", "path": "...", "description": "...", "scope": "global"}]}
+→ {"type": "agents", "agents": [
+    {"name": "review", "path": "...", "description": "Review staged changes", "scope": "global",
+     "args": [{"name": "focus", "description": "Area to focus on", "required": false, "default": "general"}]}
+  ]}
 ```

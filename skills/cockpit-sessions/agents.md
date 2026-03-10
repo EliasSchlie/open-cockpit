@@ -13,20 +13,22 @@ Named, reusable shell scripts that compose `cockpit-cli` commands. Agents live i
 ## List available agents
 
 ```bash
-cockpit-cli agents
+cockpit-cli agents        # compact listing
+cockpit-cli agents -v     # with argument details
 ```
 
 ## Run an agent
 
 ```bash
 cockpit-cli agent <name> [args...]
+cockpit-cli agent <name> --help   # show usage info
 ```
 
-The agent script owns the full lifecycle — it may be one-shot (blocking, prints result) or interactive (prints a session ID for follow-up).
+The agent script owns the full lifecycle — it may be one-shot (blocking, prints result) or interactive (non-blocking, prints a session ID).
 
 ## Follow up on an agent's session
 
-If an agent prints a session ID, use existing commands:
+`cockpit-cli start` prints the session ID to stdout (for capture) and stderr (for UI):
 
 ```bash
 id=$(cockpit-cli agent analyze-code src/)
@@ -38,14 +40,23 @@ cockpit-cli result "$id" -v response
 
 ## Writing agent scripts
 
-Agent scripts are executable `.sh` files. First `# Description:` comment is shown in listings.
+Agent scripts are executable `.sh` files with optional metadata comments:
 
 ```bash
 #!/usr/bin/env bash
 # Description: Review staged changes
+# Arg: focus | Area to focus on | optional | default: general
+
 diff=$(git diff --cached)
-id=$(cockpit-cli start "Review this diff:\n$diff" --block --quiet)
-cockpit-cli result "$id" -v response
+cockpit-cli start "Review this diff (focus: ${1:-general}):\n$diff"
 ```
 
-Make executable: `chmod +x ~/.open-cockpit/agents/code-review.sh`
+Make executable: `chmod +x ~/.open-cockpit/agents/review.sh`
+
+### Arg metadata format
+
+```
+# Arg: name | description | optional | default: value
+```
+
+Arguments are passed positionally (`$1`, `$2`, ...). Metadata provides documentation and typed UI fields in the agent picker (⌘⇧A).
