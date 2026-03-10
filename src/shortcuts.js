@@ -1,17 +1,13 @@
 // Shortcut configuration system
-// Stores user overrides in ~/.open-cockpit/shortcuts.json
+// Stores user overrides in $OPEN_COCKPIT_DIR/shortcuts.json
 // Missing keys use defaults from DEFAULT_SHORTCUTS
 
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const { secureMkdirSync, secureWriteFileSync } = require("./secure-fs");
+const { OPEN_COCKPIT_DIR } = require("./paths");
 
-const SHORTCUTS_FILE = path.join(
-  os.homedir(),
-  ".open-cockpit",
-  "shortcuts.json",
-);
+const SHORTCUTS_FILE = path.join(OPEN_COCKPIT_DIR, "shortcuts.json");
 
 // Default shortcut mappings: action ID -> Electron accelerator string
 // Empty string = unbound by default

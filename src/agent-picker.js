@@ -60,7 +60,7 @@ export async function showAgentPicker() {
 
   if (allAgents.length === 0) {
     _actions.showNotification(
-      "No agents found. Create scripts in ~/.open-cockpit/agents/",
+      "No agents found. Create scripts in the agents/ directory.",
     );
     return;
   }
