@@ -49,8 +49,16 @@ const {
   ORPHAN_TERMINAL_TTL_MS,
   OPEN_COCKPIT_DIR,
   PENDING_RESTORE_FILE,
+  ACTIVE_SESSIONS_FILE,
   isPidAlive,
 } = require("./paths");
+const {
+  registerActiveSession,
+  unregisterActiveSession,
+  getSessionsToRestore,
+  syncRegistryWithPool,
+  readActiveRegistry,
+} = require("./active-sessions");
 
 // Lazy require to avoid circular dependency with session-discovery
 function getSessionDiscovery() {
@@ -194,6 +202,10 @@ async function offloadSession(
     snapshot,
     origin: "pool",
   });
+  // Session is no longer active — remove from crash-recovery registry
+  try {
+    unregisterActiveSession(sessionId);
+  } catch {}
   // Clean up terminal input cache for the offloaded slot
   const { terminalHasInputCache } = getSessionDiscovery();
   if (termId) terminalHasInputCache.delete(termId);
@@ -838,6 +850,121 @@ async function restorePendingSessions() {
   }
 }
 
+// Restore sessions from the active-sessions registry.
+// Compares registry entries against live pool slots and resumes any missing ones.
+// This is the primary crash-recovery mechanism — runs on every reconcilePool cycle.
+let _registryRestoreInProgress = false;
+async function restoreFromActiveRegistry() {
+  if (_registryRestoreInProgress) return;
+  _registryRestoreInProgress = true;
+  try {
+    const pool = readPool();
+    if (!pool) return;
+
+    // Build set of live session IDs from pool
+    const liveSessionIds = new Set();
+    for (const slot of pool.slots) {
+      if (slot.sessionId) liveSessionIds.add(slot.sessionId);
+    }
+
+    const toRestore = getSessionsToRestore(liveSessionIds);
+    if (toRestore.length === 0) return;
+
+    // Filter: skip agent-spawned sessions
+    const graph = readSessionGraph();
+    const userSessions = toRestore.filter((entry) => {
+      const graphEntry = graph[entry.sessionId];
+      return !graphEntry || graphEntry.initiator !== INITIATOR.MODEL;
+    });
+
+    if (userSessions.length === 0) {
+      // Clean stale agent entries from registry
+      for (const entry of toRestore) {
+        try {
+          unregisterActiveSession(entry.sessionId);
+        } catch {}
+      }
+      return;
+    }
+
+    _debugLog(
+      "main",
+      `Active registry: restoring ${userSessions.length} sessions`,
+    );
+
+    // Wait for fresh slots to become available
+    try {
+      await poll(
+        () => {
+          const p = readPool();
+          if (!p) return false;
+          const freshCount = p.slots.filter(
+            (s) => s.status === POOL_STATUS.FRESH,
+          ).length;
+          return freshCount >= userSessions.length;
+        },
+        {
+          interval: 500,
+          timeout: 60000,
+          label: "wait for fresh slots (registry)",
+        },
+      );
+    } catch {
+      _debugLog(
+        "main",
+        "Timed out waiting for fresh slots for registry restore",
+      );
+      return;
+    }
+
+    let restored = 0;
+    for (const entry of userSessions) {
+      try {
+        // Ensure offload meta exists so poolResume can find the claudeSessionId
+        const offloadDir = path.join(OFFLOADED_DIR, entry.sessionId);
+        if (!readOffloadMeta(entry.sessionId)) {
+          secureMkdirSync(offloadDir, { recursive: true });
+          secureWriteFileSync(
+            path.join(offloadDir, "meta.json"),
+            JSON.stringify(
+              {
+                sessionId: entry.sessionId,
+                claudeSessionId: entry.claudeSessionId,
+                origin: "pool",
+                lastInteractionTs: Math.floor(Date.now() / 1000),
+                offloadedAt: new Date().toISOString(),
+              },
+              null,
+              2,
+            ),
+          );
+        }
+        await poolResume(entry.sessionId);
+        restored++;
+        _debugLog("main", `Registry-restored session ${entry.sessionId}`);
+      } catch (err) {
+        _debugLog(
+          "main",
+          `Failed to registry-restore ${entry.sessionId}: ${err.message}`,
+        );
+      }
+      // Remove from registry regardless (now either restored or unrestorable)
+      try {
+        unregisterActiveSession(entry.sessionId);
+      } catch {}
+    }
+
+    if (restored > 0) {
+      _debugLog(
+        "main",
+        `Registry restore complete: ${restored}/${userSessions.length}`,
+      );
+    }
+  } finally {
+    _registryRestoreInProgress = false;
+  }
+}
+
 // Initialize pool: spawn N Claude sessions via PTY daemon.
 // Returns immediately after spawning — slot tracking (session ID discovery)
 // happens in the background. Slots start as "starting" and transition to
@@ -876,9 +1003,16 @@ async function poolInit(size) {
 
   // Auto-restore sessions from a previous pool (fire-and-forget).
   // Runs after slot tracking starts so fresh slots become available.
-  restorePendingSessions().catch((err) =>
-    _debugLog("main", `Session restore failed: ${err.message}`),
-  );
+  // Try pending-restore first (legacy), then active registry (new).
+  restorePendingSessions()
+    .then(() =>
+      restoreFromActiveRegistry().catch((err) =>
+        _debugLog("main", `Registry restore after init failed: ${err.message}`),
+      ),
+    )
+    .catch((err) =>
+      _debugLog("main", `Session restore failed: ${err.message}`),
+    );
 
   return readPool();
 }
@@ -1193,6 +1327,14 @@ async function reconcilePool() {
       ),
     );
   }
+
+  // Check active-sessions registry for sessions that need restoring.
+  // This catches cases where the app was killed before pending-restore was written.
+  try {
+    restoreFromActiveRegistry().catch((err) =>
+      _debugLog("main", `Active registry restore failed: ${err.message}`),
+    );
+  } catch {}
 }
 
 function getPoolTermIds() {
@@ -1378,13 +1520,20 @@ function pruneSessionGraph(pool) {
 
 // Sync pool.json slot statuses with live session state.
 // Returns the (possibly updated) pool object, or null if no pool.
+// Also updates the active-sessions registry so it survives crashes.
 async function syncPoolStatuses(sessions) {
   return withPoolLock(() => {
     const pool = readPool();
     if (!pool) return null;
     const updated = syncStatuses(pool, sessions);
     if (updated) writePool(updated);
-    return updated || pool;
+    const currentPool = updated || pool;
+    try {
+      syncRegistryWithPool(currentPool.slots);
+    } catch (err) {
+      _debugLog("main", `Failed to sync active registry: ${err.message}`);
+    }
+    return currentPool;
   });
 }
 
@@ -1814,6 +1963,7 @@ module.exports = {
   poolDestroy,
   extractPendingRestore,
   restorePendingSessions,
+  restoreFromActiveRegistry,
   validateTermId,
   readIntention,
   writeIntention,
