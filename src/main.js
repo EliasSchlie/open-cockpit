@@ -1,3 +1,24 @@
+// --- Instance bootstrap (must run before any require that imports paths.js) ---
+// Parse --instance flag and set OPEN_COCKPIT_DIR for dev instances.
+(function bootstrap() {
+  const argv = process.argv;
+  let instanceName = null;
+  const instanceIdx = argv.indexOf("--instance");
+  if (instanceIdx !== -1 && argv[instanceIdx + 1]) {
+    instanceName = argv[instanceIdx + 1];
+  }
+  if (instanceName) {
+    process.env.OPEN_COCKPIT_INSTANCE_NAME = instanceName;
+    if (!process.env.OPEN_COCKPIT_DIR) {
+      process.env.OPEN_COCKPIT_DIR = require("path").join(
+        require("os").homedir(),
+        ".open-cockpit-dev",
+        instanceName,
+      );
+    }
+  }
+})();
+
 const { app, BrowserWindow, ipcMain, Menu } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -18,8 +39,7 @@ const {
   readJsonSync,
 } = require("./secure-fs");
 const {
-  IS_DEV,
-  OWN_POOL,
+  INSTANCE_NAME,
   COLORS_FILE,
   SESSION_PIDS_DIR,
   IDLE_SIGNALS_DIR,
@@ -91,14 +111,17 @@ let dialogOpen = false;
 const pendingPolls = new Set();
 
 function createWindow() {
-  if (IS_DEV) {
-    app.setPath("userData", path.join(app.getPath("userData"), "-dev"));
+  if (INSTANCE_NAME) {
+    app.setPath(
+      "userData",
+      path.join(app.getPath("userData"), `-${INSTANCE_NAME}`),
+    );
   }
 
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
-    title: IS_DEV ? "Open Cockpit (DEV)" : "Open Cockpit",
+    title: INSTANCE_NAME ? `Open Cockpit [${INSTANCE_NAME}]` : "Open Cockpit",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -383,7 +406,10 @@ function buildMenu() {
 let ownsApiSocket = false;
 
 app.whenReady().then(async () => {
-  debugLog("main", `starting${IS_DEV ? " (dev)" : ""} pid=${process.pid}`);
+  debugLog(
+    "main",
+    `starting${INSTANCE_NAME ? ` (instance=${INSTANCE_NAME})` : ""} pid=${process.pid}`,
+  );
 
   const cachedAppVersion = app.getVersion();
 
@@ -815,23 +841,23 @@ app.whenReady().then(async () => {
   });
 });
 
-let ownPoolDestroyed = false;
+let instancePoolDestroyed = false;
 app.on("before-quit", (e) => {
-  // Dev instances with --own-pool auto-destroy their pool on quit.
-  // Production instances intentionally leave the daemon and pool alive —
+  // Dev instances auto-destroy their pool on quit.
+  // The base instance intentionally leaves the daemon and pool alive —
   // terminals persist across app restarts so users don't lose sessions.
-  if (OWN_POOL && !ownPoolDestroyed) {
+  if (INSTANCE_NAME && !instancePoolDestroyed) {
     e.preventDefault();
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("timeout")), 5000),
     );
     Promise.race([poolManager.poolDestroy(), timeout])
-      .then(() => debugLog("main", "own-pool destroyed on quit"))
+      .then(() => debugLog("main", "instance pool destroyed on quit"))
       .catch((err) =>
-        debugLog("main", "own-pool destroy failed on quit:", err.message),
+        debugLog("main", "instance pool destroy failed on quit:", err.message),
       )
       .finally(() => {
-        ownPoolDestroyed = true;
+        instancePoolDestroyed = true;
         app.quit();
       });
     return;

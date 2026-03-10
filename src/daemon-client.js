@@ -61,6 +61,7 @@ function startDaemon() {
         ELECTRON_RUN_AS_NODE: "1",
         OPEN_COCKPIT_DAEMON_SOCKET: DAEMON_SOCKET,
         OPEN_COCKPIT_DAEMON_PID: DAEMON_PID_FILE,
+        OPEN_COCKPIT_DIR: OPEN_COCKPIT_DIR,
       },
     });
     child.unref();

@@ -245,6 +245,28 @@ describe("hooks.json - regression guards", () => {
   });
 });
 
+describe("OPEN_COCKPIT_DIR support", () => {
+  it("hooks respect OPEN_COCKPIT_DIR env var", () => {
+    const customDir = path.join(tmpHome, "custom-instance");
+    fs.mkdirSync(path.join(customDir, "session-pids"), { recursive: true });
+    fs.mkdirSync(path.join(customDir, "idle-signals"), { recursive: true });
+
+    const customEnv = { ...env, OPEN_COCKPIT_DIR: customDir };
+
+    // Run hook with OPEN_COCKPIT_DIR pointing to custom dir
+    execFileSync("bash", [path.join(HOOKS_DIR, "session-pid-map.sh")], {
+      env: customEnv,
+      input: JSON.stringify({ session_id: "custom-session-id" }),
+      timeout: 5000,
+      encoding: "utf-8",
+    });
+
+    const pidFile = path.join(customDir, "session-pids", hookPid());
+    expect(fs.existsSync(pidFile)).toBe(true);
+    expect(fs.readFileSync(pidFile, "utf-8").trim()).toBe("custom-session-id");
+  });
+});
+
 describe("all hooks - robustness", () => {
   const hookScripts = [
     "session-pid-map.sh",

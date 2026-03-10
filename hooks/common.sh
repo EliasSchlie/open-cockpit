@@ -13,7 +13,9 @@ umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/log-error.sh"
 
 # --- Directory constants (used by sourcing scripts) ---
-OC_DIR="$HOME/.open-cockpit"
+# OPEN_COCKPIT_DIR is set by pool-manager for dev instance sessions.
+# Falls back to ~/.open-cockpit for base instance and non-pool sessions.
+OC_DIR="${OPEN_COCKPIT_DIR:-$HOME/.open-cockpit}"
 SESSION_PIDS_DIR="$OC_DIR/session-pids"
 SIGNAL_DIR="$OC_DIR/idle-signals"
 INTENTIONS_DIR="$OC_DIR/intentions"
