@@ -140,6 +140,10 @@ git branch -d <branch>
 git pull
 ```
 
+## Plans
+
+Save plans to `docs/plans/` (e.g. `docs/plans/2026-03-09-feature-name.md`).
+
 ## Conventions
 
 - **Every user-facing action must have a keyboard shortcut.** See [docs/shortcuts.md](docs/shortcuts.md).
