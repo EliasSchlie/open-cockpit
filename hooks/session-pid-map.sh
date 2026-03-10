@@ -42,7 +42,7 @@ for f in "$SESSION_PIDS_DIR"/*; do
     [ -f "$f" ] || continue
     pid=$(basename "$f")
     if ! kill -0 "$pid" 2>/dev/null; then
-        echo "[session-pid-map] Cleanup: removing session-pids/$pid (process dead)" >> "$OC_DIR/debug.log" 2>/dev/null || true
+        printf '%s [hook:session-pid-map] Cleanup: removing session-pids/%s (process dead)\n' "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" "$pid" >> "$OC_DIR/debug.log" 2>/dev/null || true
         rm -f "$f"
     fi
 done
@@ -56,7 +56,7 @@ for f in "$SESSION_PIDS_DIR"/*; do
     other_sid=$(cat "$f" 2>/dev/null) || continue
     if [ "$other_sid" = "$session_id" ]; then
         if [ "$f" -ot "$SESSION_PIDS_DIR/$PPID" ]; then
-            echo "[session-pid-map] Dedup: removing session-pids/$pid (same session_id=$session_id as PID $PPID, older file)" >> "$OC_DIR/debug.log" 2>/dev/null || true
+            printf '%s [hook:session-pid-map] Dedup: removing session-pids/%s (same session_id=%s as PID %s, older file)\n' "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" "$pid" "$session_id" "$PPID" >> "$OC_DIR/debug.log" 2>/dev/null || true
             rm -f "$f"
         fi
     fi

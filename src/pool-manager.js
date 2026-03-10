@@ -1682,10 +1682,10 @@ async function poolResume(sessionId) {
   const { invalidateSessionsCache } = getSessionDiscovery();
   validateSessionId(sessionId);
 
-  // Prevent double-restore: if another caller is already restoring this session,
-  // skip silently. This guards against the race where restorePendingSessions and
-  // restoreFromActiveRegistry both try to restore the same session before
-  // trackNewSlot updates pool.json.
+  // Prevent double-restore: guards against the race where restorePendingSessions
+  // and restoreFromActiveRegistry both try to restore the same session before
+  // trackNewSlot updates pool.json. The guard is added after validation so
+  // early throws don't need manual cleanup.
   if (_pendingRestores.has(sessionId)) {
     _debugLog(
       "main",
@@ -1693,16 +1693,14 @@ async function poolResume(sessionId) {
     );
     throw new Error("Session is already being restored");
   }
-  _pendingRestores.add(sessionId);
 
-  // Also check if this session is already live in a pool slot
+  // Check if this session is already live in a pool slot
   const currentPool = readPool();
   if (currentPool) {
     const alreadyLive = currentPool.slots.find(
       (s) => s.sessionId === sessionId,
     );
     if (alreadyLive) {
-      _pendingRestores.delete(sessionId);
       _debugLog(
         "main",
         `poolResume skipped: session ${sessionId} already in slot ${alreadyLive.index} (termId=${alreadyLive.termId})`,
@@ -1712,15 +1710,13 @@ async function poolResume(sessionId) {
   }
 
   const meta = readOffloadMeta(sessionId);
-  if (!meta) {
-    _pendingRestores.delete(sessionId);
-    throw new Error("No offload data for session");
-  }
+  if (!meta) throw new Error("No offload data for session");
   const claudeSessionId = meta.claudeSessionId || meta.sessionId;
-  if (!claudeSessionId) {
-    _pendingRestores.delete(sessionId);
-    throw new Error("No Claude session ID stored");
-  }
+  if (!claudeSessionId) throw new Error("No Claude session ID stored");
+
+  // Add guard after all validation — stays active until trackNewSlot resolves
+  // (which happens async after poolResume returns).
+  _pendingRestores.add(sessionId);
 
   let result;
   try {
