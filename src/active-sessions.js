@@ -1,4 +1,5 @@
-const { ACTIVE_SESSIONS_FILE } = require("./paths");
+const fs = require("fs");
+const { ACTIVE_SESSIONS_FILE, PENDING_RESTORE_FILE } = require("./paths");
 const { secureWriteFileSync, readJsonSync } = require("./secure-fs");
 const { POOL_STATUS } = require("./session-statuses");
 
@@ -58,6 +59,23 @@ function syncRegistryWithPool(slots) {
     if (!ACTIVE_STATUSES.has(slot.status)) continue;
     newKeys.add(slot.sessionId);
     newRegistry[slot.sessionId] = { claudeSessionId: slot.sessionId };
+  }
+
+  // Preserve entries from pending-restore file — they represent sessions that
+  // need restoring but aren't yet in active pool slots. Without this, a failed
+  // restore timeout would wipe the registry, preventing the backup restore path.
+  try {
+    const pending = JSON.parse(fs.readFileSync(PENDING_RESTORE_FILE, "utf-8"));
+    if (Array.isArray(pending)) {
+      for (const sessionId of pending) {
+        if (sessionId && !newKeys.has(sessionId)) {
+          newKeys.add(sessionId);
+          newRegistry[sessionId] = { claudeSessionId: sessionId };
+        }
+      }
+    }
+  } catch {
+    /* no pending-restore file — nothing to preserve */
   }
 
   // Skip write if registry hasn't changed (key-set equality is sufficient

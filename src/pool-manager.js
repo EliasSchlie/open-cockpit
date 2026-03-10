@@ -604,8 +604,9 @@ async function acceptTrustPrompt(termId) {
     // Small delay after prompt appears to ensure the TUI is ready for input
     await new Promise((r) => setTimeout(r, 200));
     daemonSendSafe({ type: "write", termId, data: "\r" });
+    _debugLog("main", `Trust prompt accepted for termId=${termId}`);
   } catch {
-    _debugLog("main", `Trust prompt not detected for termId=${termId}`);
+    // No trust prompt within 15s — expected with --dangerously-skip-permissions
   }
 }
 
@@ -768,7 +769,18 @@ async function extractPendingRestore(pool) {
 // Restore sessions from pending-restore.json by resuming them into fresh pool slots.
 // Reuses poolResume for each entry (handles slot claiming, /resume, tracking, orphan re-tagging).
 // Fire-and-forget: runs in background, doesn't block poolInit/reconcilePool.
+// Called from every reconcilePool cycle if the file exists — guarded against concurrent runs.
+let _pendingRestoreInProgress = false;
 async function restorePendingSessions() {
+  if (_pendingRestoreInProgress) return;
+  _pendingRestoreInProgress = true;
+  try {
+    return await _restorePendingSessionsInner();
+  } finally {
+    _pendingRestoreInProgress = false;
+  }
+}
+async function _restorePendingSessionsInner() {
   let sessionIds;
   try {
     sessionIds = JSON.parse(fs.readFileSync(PENDING_RESTORE_FILE, "utf-8"));
@@ -807,7 +819,7 @@ async function restorePendingSessions() {
     );
   } catch {
     _debugLog("main", "Timed out waiting for fresh slots for restore");
-    // Don't delete the file — let the next poolInit try again
+    // Don't delete the file — reconcilePool retries if it still exists
     return;
   }
 
@@ -1069,10 +1081,21 @@ function trackNewSlot(
             if (sessionId) {
               createFreshIdleSignal(s.pid, sessionId);
             } else {
+              const alive = isPidAlive(slot.pid);
               _debugLog(
                 "main",
-                `Slot init failed: termId=${slot.termId} pid=${slot.pid} — no session ID`,
+                `Slot init failed: termId=${slot.termId} pid=${slot.pid} — no session ID (alive=${alive})`,
               );
+              // Dump terminal buffer for diagnosis
+              readTerminalBuffer(slot.termId)
+                .then((buf) => {
+                  const clean = stripAnsi(buf).trim().slice(-500);
+                  _debugLog(
+                    "main",
+                    `Slot ${slot.termId} buffer: ${clean || "(empty)"}`,
+                  );
+                })
+                .catch(() => {});
             }
           }
           writePool(p);
@@ -1309,7 +1332,10 @@ async function reconcilePool() {
 
   // Trigger restore OUTSIDE the pool lock to avoid deadlock
   // (restorePendingSessions acquires its own locks internally)
-  if (shouldRestore) {
+  // Always retry if pending-restore file exists — previous attempt may have timed out.
+  const hasPendingRestore =
+    shouldRestore || fs.existsSync(PENDING_RESTORE_FILE);
+  if (hasPendingRestore) {
     restorePendingSessions().catch((err) =>
       _debugLog(
         "main",

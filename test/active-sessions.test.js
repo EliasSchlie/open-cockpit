@@ -172,5 +172,75 @@ describe("active-sessions registry", () => {
         activeSessionsModule.setRestoreInProgress(false);
       }
     });
+
+    it("preserves entries from pending-restore.json", () => {
+      // No active pool slots, but pending-restore has sessions to preserve
+      env.writeJson("pending-restore.json", ["restore-001", "restore-002"]);
+
+      activeSessionsModule.syncRegistryWithPool([]);
+      const registry = activeSessionsModule.readActiveRegistry();
+
+      expect(registry["restore-001"]).toEqual({
+        claudeSessionId: "restore-001",
+      });
+      expect(registry["restore-002"]).toEqual({
+        claudeSessionId: "restore-002",
+      });
+    });
+
+    it("merges active pool slots with pending-restore entries", () => {
+      env.writeJson("pending-restore.json", ["restore-001"]);
+
+      const slots = [
+        { sessionId: "active-001", status: "idle" },
+        { sessionId: "active-002", status: "busy" },
+      ];
+
+      activeSessionsModule.syncRegistryWithPool(slots);
+      const registry = activeSessionsModule.readActiveRegistry();
+
+      // Both active slots and pending-restore entry should be present
+      expect(registry["active-001"]).toBeDefined();
+      expect(registry["active-002"]).toBeDefined();
+      expect(registry["restore-001"]).toBeDefined();
+      expect(Object.keys(registry)).toHaveLength(3);
+    });
+
+    it("does not duplicate entries present in both pool and pending-restore", () => {
+      // Session is both active in pool and listed in pending-restore
+      env.writeJson("pending-restore.json", ["sess-001"]);
+
+      const slots = [{ sessionId: "sess-001", status: "idle" }];
+
+      activeSessionsModule.syncRegistryWithPool(slots);
+      const registry = activeSessionsModule.readActiveRegistry();
+
+      expect(Object.keys(registry)).toHaveLength(1);
+      expect(registry["sess-001"]).toBeDefined();
+    });
+
+    it("handles missing pending-restore.json gracefully", () => {
+      // No pending-restore file — should work exactly as before
+      const slots = [{ sessionId: "sess-001", status: "idle" }];
+
+      activeSessionsModule.syncRegistryWithPool(slots);
+      const registry = activeSessionsModule.readActiveRegistry();
+
+      expect(Object.keys(registry)).toHaveLength(1);
+      expect(registry["sess-001"]).toBeDefined();
+    });
+
+    it("handles corrupt pending-restore.json gracefully", () => {
+      env.writeFile("pending-restore.json", "not valid json{{{");
+
+      const slots = [{ sessionId: "sess-001", status: "idle" }];
+
+      activeSessionsModule.syncRegistryWithPool(slots);
+      const registry = activeSessionsModule.readActiveRegistry();
+
+      // Should still sync pool slots despite corrupt file
+      expect(Object.keys(registry)).toHaveLength(1);
+      expect(registry["sess-001"]).toBeDefined();
+    });
   });
 });
