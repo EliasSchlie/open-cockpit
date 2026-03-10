@@ -1534,6 +1534,16 @@ async function syncPoolStatuses(sessions) {
   });
 }
 
+// Remove idle-signal and session-pid files for a PID so it doesn't appear
+// as a ghost session after process death.
+function cleanupPidFiles(pidStr) {
+  for (const dir of [IDLE_SIGNALS_DIR, SESSION_PIDS_DIR]) {
+    try {
+      fs.unlinkSync(path.join(dir, pidStr));
+    } catch {}
+  }
+}
+
 // Kill a pool slot's process: try daemon first, then fall back to PID kill.
 // This prevents orphans when the daemon was restarted and termIds are stale.
 async function killSlotProcess(slot) {
@@ -1573,14 +1583,26 @@ async function poolDestroy() {
       getSessionDiscovery();
     for (const slot of pool.slots) {
       await killSlotProcess(slot);
-      // Clean up idle-signal and session-pid files so destroyed slots
-      // don't appear as ghost "ext fresh" sessions after pool removal.
-      for (const dir of [IDLE_SIGNALS_DIR, SESSION_PIDS_DIR]) {
-        try {
-          fs.unlinkSync(path.join(dir, String(slot.pid)));
-        } catch {}
-      }
+      cleanupPidFiles(String(slot.pid));
     }
+
+    // Kill orphan processes (sub-agents, stale slots) that have PID files
+    // but weren't tracked as pool slots (slot loop already unlinked its own).
+    try {
+      for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
+        const pid = Number(file);
+        if (!Number.isFinite(pid)) continue;
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* ESRCH — already dead */
+        }
+        cleanupPidFiles(file);
+      }
+    } catch {
+      /* SESSION_PIDS_DIR may not exist */
+    }
+
     terminalHasInputCache.clear();
     try {
       fs.unlinkSync(POOL_FILE);
