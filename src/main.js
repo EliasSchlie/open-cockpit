@@ -399,6 +399,25 @@ function buildMenu() {
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
+        {
+          label: "Relaunch App",
+          accelerator: accel("relaunch-app"),
+          click: () => {
+            relaunchingForBuild = true;
+            const { execSync } = require("child_process");
+            try {
+              execSync("npm run build", {
+                cwd: path.join(__dirname, ".."),
+                stdio: "ignore",
+                timeout: 30000,
+              });
+            } catch {
+              /* build may fail — relaunch anyway to pick up whatever changed */
+            }
+            app.relaunch();
+            app.exit(0);
+          },
+        },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
@@ -918,6 +937,25 @@ app.whenReady().then(async () => {
   }
   // Check after daemon is connected and on each relaunch
   setTimeout(checkDaemonStale, 3000);
+
+  // --- Relaunch app handler (rebuild + restart main process) ---
+  ipcMain.handle("relaunch-app", async () => {
+    debugLog("main", "relaunch-app: rebuilding and relaunching");
+    try {
+      const { execSync } = require("child_process");
+      execSync("npm run build", {
+        cwd: path.join(__dirname, ".."),
+        stdio: "ignore",
+        timeout: 30000,
+      });
+    } catch (err) {
+      debugLog("main", "relaunch-app: build failed:", err.message);
+      throw new Error("Build failed: " + err.message);
+    }
+    relaunchingForBuild = true;
+    app.relaunch();
+    app.exit(0);
+  });
 
   // --- Daemon restart handler ---
   ipcMain.handle("restart-daemon", async () => {

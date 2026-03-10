@@ -1246,6 +1246,7 @@ case "$CMD" in
   pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":$(printf '%s' "${1:?cwd required}" | jq -Rs .),\"cmd\":$(printf '%s' "${2:?cmd required}" | jq -Rs .),\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
   pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
   ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
+  relaunch)     json="{\"type\":\"relaunch\",\"id\":1}"; send_api "$json" ;;
   get-session-graph) json="{\"type\":\"get-session-graph\",\"id\":1}"; send_api "$json" ;;
   pool-min-fresh)
     if [ -z "${1:-}" ]; then
@@ -1472,6 +1473,7 @@ Targets: Most commands accept a <target> which can be:
 ─── LOW-LEVEL ───────────────────────────────────────────────────────────────
 
   ping                           Health check
+  relaunch                       Rebuild and relaunch the app
   get-sessions                   List all sessions (raw JSON)
   read-intention <id>            Read intention file (raw JSON)
   write-intention <id> <text>    Write intention file

@@ -51,6 +51,8 @@ const DEFAULT_SHORTCUTS = {
   "run-agent": "CmdOrCtrl+Shift+A",
   // Debug: jitter current terminal to clear artifacts
   "jitter-terminal": "CmdOrCtrl+Shift+J",
+  // Relaunch app (rebuild + restart main process)
+  "relaunch-app": "CmdOrCtrl+Shift+R",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",

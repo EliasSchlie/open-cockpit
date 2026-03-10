@@ -117,7 +117,7 @@ Tag push → CI builds all platforms → publish the draft. See [docs/releasing.
 ## Reloading after changes
 
 - **With `dev:watch`**: automatic — edit src/, app rebuilds and relaunches within ~2s
-- **Without `dev:watch`**: `npm run build`, then Cmd+R (renderer only) or kill + restart (main process)
+- **Without `dev:watch`**: `npm run build`, then Cmd+R (renderer only) or Cmd+Shift+R (full rebuild + relaunch)
 - **Daemon** (`pty-daemon.js`): in-app banner warns when daemon code is stale, click "Restart daemon" (kills all terminals)
 
 ## Native modules

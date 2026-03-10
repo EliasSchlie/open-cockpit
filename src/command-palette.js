@@ -230,6 +230,12 @@ export function initCommandPalette(actions) {
       shortcutAction: "jitter-terminal",
       action: () => _actions.jitterCurrentTerminal(),
     },
+    {
+      id: "relaunch-app",
+      label: "Relaunch App (Rebuild + Restart)",
+      shortcutAction: "relaunch-app",
+      action: () => window.api.relaunchApp(),
+    },
   ];
 
   // Also add Tab 1-9 commands
