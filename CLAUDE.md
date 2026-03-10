@@ -128,8 +128,18 @@ Tag push → CI builds all platforms → publish the draft. See [docs/releasing.
 
 `.githooks/` (auto-configured via `prepare` script):
 - `pre-commit` — prettier
+- `pre-push` — runs tests + rejects merge commits in feature branches
 - `post-checkout` — auto-install deps + build for worktrees
 - `post-merge` — auto-build after pull
+
+## Branching
+
+**Rebase, never merge.** Feature branches must not contain merge commits — the pre-push hook and CI (`no-merge-commits.yml`) enforce this. To update a branch:
+```bash
+git fetch origin
+git rebase origin/main
+```
+Merge commits inside feature branches can silently drop code during conflict resolution (see #340).
 
 ## Worktree setup
 
