@@ -2,6 +2,30 @@
 
 Dev instances run Open Cockpit in isolated sandboxes — separate state directories, sockets, and daemons — so you can test changes without touching the base (production) instance.
 
+## Launching
+
+Do not use `open -a Electron.app`, `electron .`, or `npx electron .` — these skip `npm run build` and set `ELECTRON_RUN_AS_NODE=1`.
+
+### Restart production
+
+```bash
+cd ~/projects/open-cockpit && DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm start > /dev/null 2>&1 &
+```
+
+Confirm with the user before restarting production — it disrupts all active sessions.
+
+**No window?** Stale instances. Kill all: `pkill -f "Electron.*open-cockpit"`, then relaunch.
+
+### Launch dev instance
+
+`cd` into your worktree first:
+
+```bash
+DAEMON_PID=$(cat ~/.open-cockpit/pty-daemon.pid 2>/dev/null || echo NONE); lsof -c Electron 2>/dev/null | awk -v dir="$(pwd)" '/cwd/ && $NF == dir {print $2}' | grep -v "^${DAEMON_PID}$" | sort -u | xargs kill 2>/dev/null; sleep 0.5; unset ELECTRON_RUN_AS_NODE && nohup npm run dev > /dev/null 2>&1 &
+```
+
+Do not use `pkill -f electron` or `killall Electron` — these can kill other instances.
+
 ## Quick start
 
 ```bash
