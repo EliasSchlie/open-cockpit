@@ -665,8 +665,6 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
     row.classList.toggle("custom", isCustom);
   }
 
-  return cleanupRecording;
-
   function showConflictWarning(row, conflicts) {
     row.querySelector(".shortcut-conflict")?.remove();
     if (conflicts.length === 0) return;
@@ -795,6 +793,8 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
       updateResetBtn(row, actionId, defaultVal);
     });
   });
+
+  return cleanupRecording;
 }
 
 // --- Updates tab ---
