@@ -402,6 +402,8 @@ async function openInApp(appName, target) {
 async function openInCursor(target) {
   try {
     await execFileAsync("cursor", [target], { timeout: 10000 });
+    // CLI opens the folder but doesn't activate — bring Cursor to front
+    await activateApp("Cursor");
   } catch {
     await openInApp("Cursor", target);
   }
