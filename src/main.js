@@ -329,6 +329,11 @@ function buildMenu() {
           click: () => send("open-pool-settings"),
         },
         {
+          label: "Jitter Terminal",
+          accelerator: accel("jitter-terminal"),
+          click: () => send("jitter-terminal"),
+        },
+        {
           label: "Toggle Bell",
           accelerator: accel("toggle-bell"),
           click: () => send("toggle-bell"),
