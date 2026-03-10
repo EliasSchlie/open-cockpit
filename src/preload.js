@@ -45,6 +45,7 @@ const channels = [
   "pool-slots-recovered",
   "update-status-changed",
   "daemon-stale",
+  "api-session-select",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
@@ -270,4 +271,10 @@ contextBridge.exposeInMainWorld("api", {
 
   // Relaunch app (rebuild + restart main process)
   relaunchApp: () => ipcRenderer.invoke("relaunch-app"),
+
+  // Remote control: session select via API
+  onApiSessionSelect: (callback) =>
+    ipcRenderer.on("api-session-select", (_e, sessionId) =>
+      callback(sessionId),
+    ),
 });

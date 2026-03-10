@@ -12,6 +12,10 @@
     const wtMatch = process.cwd().match(/\/\.wt\/([^/]+)/);
     if (wtMatch) instanceName = wtMatch[1];
   }
+  // --hidden flag: run without a visible window (agents interact via API)
+  if (argv.includes("--hidden")) {
+    process.env.OPEN_COCKPIT_HIDDEN = "1";
+  }
   // --dev flag requires an instance name (from --instance or worktree auto-detect)
   if (argv.includes("--dev") && !instanceName) {
     console.error(
@@ -137,9 +141,11 @@ function createWindow() {
     );
   }
 
+  const isHidden = process.env.OPEN_COCKPIT_HIDDEN === "1";
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
+    show: !isHidden,
     title: INSTANCE_NAME ? `Open Cockpit [${INSTANCE_NAME}]` : "Open Cockpit",
     titleBarStyle: "hiddenInset",
     webPreferences: {

@@ -68,6 +68,13 @@ function init({ getMainWindow }) {
   _getMainWindow = getMainWindow;
 }
 
+/** Get main window or throw if unavailable. */
+function _requireMainWindow() {
+  const win = _getMainWindow();
+  if (!win || win.isDestroyed()) throw new Error("No window");
+  return win;
+}
+
 // --- Pool interaction helpers (used by API-only handlers) ---
 
 function findSlotBySessionId(sessionId) {
@@ -390,6 +397,55 @@ function buildApiHandlers() {
       app.exit(0);
     }, 100);
     return { type: "ok", message: "Relaunching..." };
+  };
+
+  // --- Window visibility (Phase 3: Hidden Dev Mode) ---
+  handlers["show"] = async () => {
+    _requireMainWindow().show();
+    return { type: "ok" };
+  };
+
+  handlers["hide"] = async () => {
+    _requireMainWindow().hide();
+    return { type: "ok" };
+  };
+
+  // --- Remote control (Phase 5) ---
+  handlers["screenshot"] = async () => {
+    const win = _requireMainWindow();
+    // Hidden windows that were never shown don't paint the DOM.
+    // Move off-screen, show briefly to force a paint, then re-hide.
+    const wasVisible = win.isVisible();
+    if (!wasVisible) {
+      const pos = win.getPosition();
+      win.setPosition(-9999, -9999);
+      win.showInactive();
+      await new Promise((r) => setTimeout(r, 200));
+      const image = await win.webContents.capturePage();
+      win.hide();
+      win.setPosition(pos[0], pos[1]);
+      return { type: "screenshot", image: image.toPNG().toString("base64") };
+    }
+    const image = await win.webContents.capturePage();
+    return { type: "screenshot", image: image.toPNG().toString("base64") };
+  };
+
+  handlers["ui-state"] = async () => {
+    const win = _requireMainWindow();
+    // executeJavaScript is the standard Electron pattern for main→renderer data retrieval.
+    // The global is set up in renderer.js and returns a plain object (safe to serialize).
+    const uiState = await win.webContents.executeJavaScript(
+      `window.__getUiState ? window.__getUiState() : null`,
+    );
+    if (!uiState)
+      throw new Error("UI state not available (renderer not ready)");
+    return { type: "ui-state", ...uiState };
+  };
+
+  handlers["session-select"] = async (msg) => {
+    if (!msg.sessionId) throw new Error("sessionId required");
+    _requireMainWindow().webContents.send("api-session-select", msg.sessionId);
+    return { type: "ok" };
   };
 
   handlers["pty-read"] = async (msg) => {
