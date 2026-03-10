@@ -1,0 +1,88 @@
+name: No merge commits
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for merge commits
+        id: check
+        run: |
+          MERGE_COMMITS=$(git rev-list --merges origin/main..HEAD)
+          if [ -z "$MERGE_COMMITS" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "✅ No merge commits found"
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+          # Build details for the comment
+          {
+            echo 'details<<EOF'
+            for sha in $MERGE_COMMITS; do
+              echo "- \`$(git log --format='%h %s' -1 "$sha")\`"
+            done
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          echo "❌ Found merge commits in PR branch"
+          exit 1
+
+      - name: Comment on PR
+        if: failure() && steps.check.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- no-merge-commits-bot -->';
+            const body = [
+              marker,
+              '## ❌ Merge commits detected',
+              '',
+              'This PR contains merge commits, which can silently drop code during conflict resolution ([example: #340](https://github.com/${{ github.repository }}/pull/340)).',
+              '',
+              '**Found:**',
+              '${{ steps.check.outputs.details }}',
+              '',
+              '**To fix:** rebase your branch onto main instead of merging:',
+              '```bash',
+              'git fetch origin',
+              'git rebase origin/main',
+              'git push --force-with-lease',
+              '```',
+              '',
+              'If you have conflicts, resolve them per-commit during rebase — this is safer than merge resolution because each conflict is scoped to a single commit.',
+            ].join('\n');
+
+            // Delete previous bot comments to avoid spam
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments) {
+              if (comment.body.includes(marker)) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
