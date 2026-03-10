@@ -1563,6 +1563,35 @@ body.dock-resizing-v {
   color: var(--text);
 }
 
+/* Daemon stale banner */
+.daemon-stale-banner {
+  position: fixed;
+  top: 38px;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: rgba(255, 160, 0, 0.15);
+  border-bottom: 1px solid rgba(255, 160, 0, 0.4);
+  color: var(--text);
+  font-size: 13px;
+}
+.daemon-stale-banner button {
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 160, 0, 0.5);
+  border-radius: 4px;
+  background: rgba(255, 160, 0, 0.2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+.daemon-stale-banner button:hover {
+  background: rgba(255, 160, 0, 0.35);
+}
+
 /* Toast notifications */
 #toast-container {
   position: fixed;

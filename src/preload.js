@@ -44,6 +44,7 @@ const channels = [
   "run-agent",
   "pool-slots-recovered",
   "update-status-changed",
+  "daemon-stale",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
@@ -262,4 +263,8 @@ contextBridge.exposeInMainWorld("api", {
 
   onPoolSlotsRecovered: (callback) =>
     ipcRenderer.on("pool-slots-recovered", (_e, slots) => callback(slots)),
+
+  // Daemon stale notification
+  onDaemonStale: (callback) => ipcRenderer.on("daemon-stale", () => callback()),
+  restartDaemon: () => ipcRenderer.invoke("restart-daemon"),
 });

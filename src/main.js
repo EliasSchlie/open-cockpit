@@ -1,11 +1,24 @@
 // --- Instance bootstrap (must run before any require that imports paths.js) ---
 // Parse --instance flag and set OPEN_COCKPIT_DIR for dev instances.
+// Auto-derives instance name from .wt/<name>/ worktree path if no flag given.
 (function bootstrap() {
   const argv = process.argv;
   let instanceName = null;
   const instanceIdx = argv.indexOf("--instance");
   if (instanceIdx !== -1 && argv[instanceIdx + 1]) {
     instanceName = argv[instanceIdx + 1];
+  } else {
+    // Auto-detect worktree: if cwd contains /.wt/<name>/, use <name>
+    const wtMatch = process.cwd().match(/\/\.wt\/([^/]+)/);
+    if (wtMatch) instanceName = wtMatch[1];
+  }
+  // --dev flag requires an instance name (from --instance or worktree auto-detect)
+  if (argv.includes("--dev") && !instanceName) {
+    console.error(
+      "Error: --dev requires an instance name.\n" +
+        "  Run from a worktree (.wt/<name>/) for auto-detection, or pass --instance <name>.",
+    );
+    process.exit(1);
   }
   if (instanceName) {
     process.env.OPEN_COCKPIT_INSTANCE_NAME = instanceName;
@@ -16,6 +29,11 @@
         instanceName,
       );
     }
+    console.log(`[open-cockpit] Instance: ${instanceName}`);
+    console.log(`[open-cockpit] Dir:      ${process.env.OPEN_COCKPIT_DIR}`);
+    console.log(
+      `[open-cockpit] CLI:      cockpit-cli --instance ${instanceName} <command>`,
+    );
   }
 })();
 
@@ -46,6 +64,7 @@ const {
   SETUP_SCRIPTS_DIR,
   LAYOUTS_DIR,
   API_SOCKET,
+  DAEMON_PID_FILE,
   DEBUG_LOG_FILE,
   DEBUG_LOG_MAX_SIZE,
   isPidAlive,
@@ -836,17 +855,94 @@ app.whenReady().then(async () => {
     buildMenu();
   });
 
+  // --- Build output polling (dev instances only) ---
+  // When a file watcher rebuilds dist/renderer.js, this detects the mtime
+  // change and relaunches the app. Sessions survive via the daemon.
+  if (INSTANCE_NAME) {
+    const buildOutput = path.join(__dirname, "..", "dist", "renderer.js");
+    let lastBuildMtime = 0;
+    try {
+      lastBuildMtime = fs.statSync(buildOutput).mtimeMs;
+    } catch {
+      /* dist/ may not exist yet */
+    }
+    setInterval(() => {
+      try {
+        const mtime = fs.statSync(buildOutput).mtimeMs;
+        if (lastBuildMtime > 0 && mtime > lastBuildMtime && !quitting) {
+          debugLog("main", "build output changed, relaunching");
+          relaunchingForBuild = true;
+          app.relaunch();
+          app.exit(0);
+        }
+        lastBuildMtime = mtime;
+      } catch {
+        /* file may be mid-write */
+      }
+    }, 2000);
+  }
+
+  // --- Daemon stale detection ---
+  // Compare daemon source file mtimes with daemon process start time.
+  // If daemon code is newer, notify renderer to show a restart banner.
+  async function checkDaemonStale() {
+    try {
+      if (!daemonClient.isDaemonRunning()) return;
+      const pidStr = fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim();
+      const { execFileSync } = require("child_process");
+      const lstart = execFileSync("ps", ["-o", "lstart=", "-p", pidStr], {
+        encoding: "utf-8",
+        timeout: 2000,
+      }).trim();
+      if (!lstart) return;
+      const daemonStartMs = new Date(lstart).getTime();
+      const daemonSources = [
+        "pty-daemon.js",
+        "platform.js",
+        "secure-fs.js",
+      ].map((f) => path.join(__dirname, f));
+      for (const src of daemonSources) {
+        try {
+          const mtime = fs.statSync(src).mtimeMs;
+          if (mtime > daemonStartMs) {
+            send("daemon-stale");
+            return;
+          }
+        } catch {
+          /* file may not exist */
+        }
+      }
+    } catch {
+      /* ps failed or daemon not running — skip */
+    }
+  }
+  // Check after daemon is connected and on each relaunch
+  setTimeout(checkDaemonStale, 3000);
+
+  // --- Daemon restart handler ---
+  ipcMain.handle("restart-daemon", async () => {
+    await daemonClient.stopDaemon();
+    await daemonClient.ensureDaemon();
+    debugLog("main", "daemon restarted");
+    return true;
+  });
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 let instancePoolDestroyed = false;
+// Safety: app.exit(0) skips before-quit, but this flag guards against
+// pool destroy if that ever changes.
+let relaunchingForBuild = false;
+let quitting = false;
 app.on("before-quit", (e) => {
+  quitting = true;
   // Dev instances auto-destroy their pool on quit.
   // The base instance intentionally leaves the daemon and pool alive —
   // terminals persist across app restarts so users don't lose sessions.
-  if (INSTANCE_NAME && !instancePoolDestroyed) {
+  if (INSTANCE_NAME && !instancePoolDestroyed && !relaunchingForBuild) {
     e.preventDefault();
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("timeout")), 5000),
