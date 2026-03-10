@@ -60,7 +60,7 @@ Pool slots can be pinned to prevent LRU offloading:
 - `pool-pin { sessionId, duration }` — pin for N seconds (default 120)
 - `pool-unpin { sessionId }` — release pin
 - `pinnedUntil` field in pool.json slots; expired pins auto-cleared on eviction check
-- CLI: `cockpit-cli pin <id> [seconds]` / `cockpit-cli unpin <id>`
+- CLI: `cockpit-cli pin <target> [seconds]` / `cockpit-cli unpin <target>`
 
 ## Origin tags
 

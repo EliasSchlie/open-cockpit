@@ -58,16 +58,19 @@ cockpit-cli key @0 escape                           # Send Escape
 ```bash
 cockpit-cli start "fix the login bug"               # Start new session
 cockpit-cli start "fix the bug" --block              # Start + wait for result
-cockpit-cli followup <id> "also add tests"           # Follow up on idle session
-cockpit-cli resume <id>                              # Resume offloaded session
-cockpit-cli wait <id>                                # Wait for session to finish
+cockpit-cli followup <target> "also add tests"        # Follow up on idle session
+cockpit-cli resume <target>                           # Resume offloaded session
+cockpit-cli wait <target>                             # Wait for session to finish
 cockpit-cli wait                                     # Wait for any session
-cockpit-cli capture <id>                             # Live terminal content (raw)
-cockpit-cli result <id>                              # Output (errors if running)
-cockpit-cli input <id> "y"                           # Send raw input
+cockpit-cli capture <target>                          # Live terminal content (raw)
+cockpit-cli result <target>                           # Output (errors if running)
+cockpit-cli input <target> "y"                        # Send raw input
 cockpit-cli clean                                    # Offload finished sessions
-cockpit-cli archive <id>                             # Archive a session
-cockpit-cli unarchive <id>                           # Move archived → recent
+cockpit-cli pin <target> [seconds]                    # Prevent offloading (default 120s)
+cockpit-cli unpin <target>                            # Allow offloading again
+cockpit-cli stop <target>                             # Interrupt running session
+cockpit-cli archive <target>                          # Archive a session
+cockpit-cli unarchive <target>                        # Move archived → recent
 ```
 
 ### Session terminals (per-session tab access)
