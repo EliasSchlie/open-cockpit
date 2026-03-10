@@ -136,7 +136,7 @@ Tag push → CI builds all platforms → publish the draft. See [docs/releasing.
 
 ## Branching
 
-**Rebase, never merge.** Feature branches must not contain merge commits — the pre-push hook and CI (`no-merge-commits.yml`) enforce this. To update a branch:
+**Rebase, never merge.** Feature branches must not contain merge commits — the pre-push hook enforces this locally. To update a branch:
 ```bash
 git fetch origin
 git rebase origin/main
