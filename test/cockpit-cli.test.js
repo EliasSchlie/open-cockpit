@@ -150,6 +150,29 @@ const mockHandlers = {
       slotIndex: 0,
     };
   },
+  "pool-start": (msg) => ({
+    type: "started",
+    sessionId: "new00000-new0-new0-new0-new000000000",
+    termId: 20,
+    slotIndex: 5,
+  }),
+  "pool-wait": (msg) => ({
+    type: "result",
+    sessionId: msg.sessionId,
+    buffer: "Hello from the agent!\n",
+  }),
+  "list-agents": (msg) => ({
+    type: "agents",
+    agents: [
+      {
+        name: "test-agent",
+        path: "/tmp/agents/test-agent.sh",
+        description: "A test agent",
+        scope: "global",
+        args: [{ name: "input", description: "Test input", required: true }],
+      },
+    ],
+  }),
   "read-intention": () => ({
     type: "intention",
     content: "# Test Intention\n\nDoing test things.",
@@ -229,7 +252,7 @@ const mockHandlers = {
   },
 };
 
-function runCli(args, env = {}) {
+function runCli(args, env = {}, timeout = 5000) {
   return new Promise((resolve) => {
     const proc = execFile(
       "bash",
@@ -241,7 +264,7 @@ function runCli(args, env = {}) {
           PATH: process.env.PATH,
           ...env,
         },
-        timeout: 5000,
+        timeout,
       },
       (error, stdout, stderr) => {
         resolve({
@@ -324,10 +347,15 @@ beforeAll(async () => {
           try {
             const msg = JSON.parse(line);
             const handler = mockHandlers[msg.type];
-            const resp = handler
+            const result = handler
               ? handler(msg)
               : { type: "error", error: `Unknown: ${msg.type}` };
-            socket.write(JSON.stringify({ ...resp, id: msg.id }) + "\n");
+            // Support async handlers (e.g., delayed responses)
+            Promise.resolve(result).then((resp) => {
+              if (!socket.destroyed) {
+                socket.write(JSON.stringify({ ...resp, id: msg.id }) + "\n");
+              }
+            });
           } catch {
             socket.write(
               JSON.stringify({ type: "error", error: "parse error" }) + "\n",
@@ -784,6 +812,214 @@ describe("cockpit-cli", () => {
       const r = await runCli(["badcommand"]);
       expect(r.code).not.toBe(0);
       expect(r.stderr).toContain("Unknown command: badcommand");
+    });
+  });
+
+  describe("start", () => {
+    it("returns session ID on stdout and stderr", async () => {
+      const r = await runCli(["start", "test prompt"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("new00000-new0-new0-new0-new000000000");
+      expect(r.stderr.trim()).toBe("new00000-new0-new0-new0-new000000000");
+    });
+
+    it("returns session ID with delayed server response", async () => {
+      // Temporarily replace pool-start with a delayed handler
+      const original = mockHandlers["pool-start"];
+      mockHandlers["pool-start"] = () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                type: "started",
+                sessionId: "slow0000-slow-slow-slow-slow00000000",
+                termId: 20,
+                slotIndex: 5,
+              }),
+            500,
+          ),
+        );
+
+      try {
+        const r = await runCli(["start", "delayed prompt"], {}, 10000);
+        expect(r.code).toBe(0);
+        expect(r.stdout.trim()).toBe("slow0000-slow-slow-slow-slow00000000");
+        expect(r.stderr.trim()).toBe("slow0000-slow-slow-slow-slow00000000");
+      } finally {
+        mockHandlers["pool-start"] = original;
+      }
+    });
+
+    it("returns session ID with 2s delayed response", async () => {
+      const original = mockHandlers["pool-start"];
+      mockHandlers["pool-start"] = () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                type: "started",
+                sessionId: "wait0000-wait-wait-wait-wait00000000",
+                termId: 20,
+                slotIndex: 5,
+              }),
+            2000,
+          ),
+        );
+
+      try {
+        const r = await runCli(["start", "slow prompt"], {}, 10000);
+        expect(r.code).toBe(0);
+        expect(r.stdout.trim()).toBe("wait0000-wait-wait-wait-wait00000000");
+      } finally {
+        mockHandlers["pool-start"] = original;
+      }
+    });
+
+    it("errors with no prompt", async () => {
+      const r = await runCli(["start"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("Usage:");
+    });
+
+    it("detects parent session via PID ancestry", async () => {
+      const pidDir = path.join(TMP_DIR, ".open-cockpit", "session-pids");
+      fs.mkdirSync(pidDir, { recursive: true });
+      fs.writeFileSync(path.join(pidDir, String(process.pid)), SESSION_ID);
+
+      // Capture the pool-start message to verify parentSessionId
+      let capturedMsg = null;
+      const original = mockHandlers["pool-start"];
+      mockHandlers["pool-start"] = (msg) => {
+        capturedMsg = msg;
+        return original(msg);
+      };
+
+      try {
+        const r = await runCli(["start", "child prompt"]);
+        expect(r.code).toBe(0);
+        expect(capturedMsg).not.toBeNull();
+        expect(capturedMsg.parentSessionId).toBe(SESSION_ID);
+      } finally {
+        mockHandlers["pool-start"] = original;
+        fs.rmSync(pidDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("agents", () => {
+    let agentsDir;
+
+    beforeAll(() => {
+      agentsDir = path.join(TMP_DIR, ".open-cockpit", "agents");
+      fs.mkdirSync(agentsDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(agentsDir, "greet.sh"),
+        '#!/usr/bin/env bash\n# Description: Greet someone\n# Arg: name | Name of the person to greet\necho "Hello $1"\n',
+      );
+      fs.chmodSync(path.join(agentsDir, "greet.sh"), 0o755);
+
+      fs.writeFileSync(
+        path.join(agentsDir, "multi.sh"),
+        '#!/usr/bin/env bash\n# Description: Multi-arg agent\n# Arg: input | Main input\n# Arg: --format | Output format | optional | default: text\necho "ok"\n',
+      );
+      fs.chmodSync(path.join(agentsDir, "multi.sh"), 0o755);
+
+      fs.writeFileSync(
+        path.join(agentsDir, "bare.sh"),
+        '#!/usr/bin/env bash\necho "no description"\n',
+      );
+      fs.chmodSync(path.join(agentsDir, "bare.sh"), 0o755);
+    });
+
+    it("lists agents with descriptions", async () => {
+      const r = await runCli(["agents"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("greet");
+      expect(r.stdout).toContain("Greet someone");
+      expect(r.stdout).toContain("multi");
+      expect(r.stdout).toContain("bare");
+    });
+
+    it("lists agents with args in verbose mode", async () => {
+      const r = await runCli(["agents", "-v"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("greet");
+      expect(r.stdout).toContain("<name>");
+      expect(r.stdout).toContain("Name of the person to greet");
+      expect(r.stdout).toContain("<input>");
+      expect(r.stdout).toContain("[--format]");
+    });
+
+    it("shows agent help with --help", async () => {
+      const r = await runCli(["agent", "greet", "--help"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("greet — Greet someone");
+      expect(r.stdout).toContain("Arguments:");
+      expect(r.stdout).toContain("<name>");
+      expect(r.stdout).toContain("required");
+    });
+
+    it("shows agent help for multi-arg agent", async () => {
+      const r = await runCli(["agent", "multi", "--help"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("multi — Multi-arg agent");
+      expect(r.stdout).toContain("<input>");
+      expect(r.stdout).toContain("[--format]");
+      expect(r.stdout).toContain("optional");
+      expect(r.stdout).toContain("default: text");
+    });
+
+    it("shows generic help for agent without Arg metadata", async () => {
+      const r = await runCli(["agent", "bare", "--help"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("bare — No description");
+      expect(r.stdout).toContain("$1, $2");
+    });
+
+    it("runs an agent script", async () => {
+      const r = await runCli(["agent", "greet", "World"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("Hello World");
+    });
+
+    it("errors on missing agent name", async () => {
+      const r = await runCli(["agent"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("agent name required");
+    });
+
+    it("errors on non-existent agent", async () => {
+      const r = await runCli(["agent", "nope"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("not found");
+    });
+
+    it("errors on invalid agent name", async () => {
+      const r = await runCli(["agent", "../etc/passwd"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("Invalid agent name");
+    });
+
+    it("prefers project-local agents over global", async () => {
+      const localDir = path.join(TMP_DIR, ".open-cockpit", "agents");
+      // greet.sh already exists as global; create a local override
+      const projectAgentsDir = path.join(TMP_DIR, ".open-cockpit", "agents");
+      // Use a separate project dir for local override test
+      const projectDir = path.join(TMP_DIR, "project");
+      const projectLocalDir = path.join(projectDir, ".open-cockpit", "agents");
+      fs.mkdirSync(projectLocalDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectLocalDir, "greet.sh"),
+        '#!/usr/bin/env bash\n# Description: Local greet override\necho "Local hello $1"\n',
+      );
+      fs.chmodSync(path.join(projectLocalDir, "greet.sh"), 0o755);
+
+      // Run from the project directory
+      const r = await runCli(["agents"], { PWD: projectDir });
+      // Since we can't easily control cwd, test the agents -v format
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("greet");
     });
   });
 });

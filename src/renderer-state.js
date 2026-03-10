@@ -39,6 +39,9 @@ export const dom = {
   sessionSearch: null,
   sessionSearchInput: null,
   sessionSearchList: null,
+  agentPicker: null,
+  agentPickerInput: null,
+  agentPickerList: null,
 };
 
 // --- Mutable state ---

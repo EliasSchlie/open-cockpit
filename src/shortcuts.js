@@ -51,6 +51,8 @@ const DEFAULT_SHORTCUTS = {
   "session-search": "CmdOrCtrl+K",
   // Session info
   "session-info": "CmdOrCtrl+I",
+  // Agents
+  "run-agent": "CmdOrCtrl+Shift+A",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",

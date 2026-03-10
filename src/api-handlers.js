@@ -1,6 +1,15 @@
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
+const { AGENTS_DIR } = require("./paths");
+
+/** Split a shell-like args string into an array, respecting quotes. */
+function splitArgs(str) {
+  if (!str) return [];
+  return (str.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || []).map((a) =>
+    a.replace(/^["']|["']$/g, ""),
+  );
+}
 const {
   findSlotBySessionId: findSlotBySessionIdInPool,
   findSlotByIndex: findSlotByIndexInPool,
@@ -216,13 +225,68 @@ const sharedHandlers = {
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
   "archive-session": async ({ sessionId }) => archiveSession(sessionId),
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
+  "list-agents": async ({ cwd }) => {
+    const agents = new Map(); // name -> { name, path, description, scope, args }
+
+    function parseAgentFile(filePath) {
+      let description = "";
+      const args = [];
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        const descMatch = content.match(/^# Description:\s*(.+)$/m);
+        if (descMatch) description = descMatch[1].trim();
+        const argRe = /^# Arg:\s*(.+)$/gm;
+        let m;
+        while ((m = argRe.exec(content)) !== null) {
+          const parts = m[1].split("|").map((s) => s.trim());
+          const arg = { name: parts[0] };
+          if (parts[1]) arg.description = parts[1];
+          if (parts.includes("optional")) arg.required = false;
+          else arg.required = true;
+          const defPart = parts.find((p) => p.startsWith("default:"));
+          if (defPart) arg.default = defPart.slice(8).trim();
+          args.push(arg);
+        }
+      } catch {
+        /* ignore read errors */
+      }
+      return { description, args };
+    }
+
+    function scanDir(dir, scope) {
+      try {
+        const entries = fs.readdirSync(dir);
+        for (const entry of entries) {
+          if (!entry.endsWith(".sh")) continue;
+          const name = entry.slice(0, -3);
+          const filePath = path.join(dir, entry);
+          try {
+            if (!fs.statSync(filePath).isFile()) continue;
+          } catch {
+            continue;
+          }
+          const { description, args } = parseAgentFile(filePath);
+          agents.set(name, { name, path: filePath, description, scope, args });
+        }
+      } catch {
+        /* directory doesn't exist, skip */
+      }
+    }
+
+    scanDir(AGENTS_DIR, "global");
+    if (cwd) {
+      scanDir(path.join(cwd, ".open-cockpit", "agents"), "local");
+    }
+
+    return Array.from(agents.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  },
   "spawn-custom-session": async ({ cwd, flags }) => {
     const claudePath = getCachedClaudePath();
     const args = ["--dangerously-skip-permissions"];
     if (flags) {
-      // Split flags string into args (simple space-split, respects quotes)
-      const extraArgs = flags.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-      args.push(...extraArgs.map((a) => a.replace(/^["']|["']$/g, "")));
+      args.push(...splitArgs(flags));
     }
     // Expand ~ to home directory
     let resolvedCwd = cwd || "~";
@@ -265,6 +329,7 @@ const ipcArgMap = {
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
   "spawn-custom-session": (cwd, flags) => ({ cwd, flags }),
+  "list-agents": (cwd) => ({ cwd }),
 };
 
 // API response wrappers: transform raw handler results into API protocol
@@ -290,6 +355,7 @@ const apiResponseMap = {
   "archive-session": () => ({ type: "ok" }),
   "unarchive-session": () => ({ type: "ok" }),
   "spawn-custom-session": (result) => ({ type: "spawned", ...result }),
+  "list-agents": (agents) => ({ type: "agents", agents }),
 };
 
 // Build the complete API handler map (shared + API-only)
@@ -677,6 +743,7 @@ function buildApiHandlers() {
 
 module.exports = {
   init,
+  splitArgs,
   sharedHandlers,
   ipcArgMap,
   apiResponseMap,
