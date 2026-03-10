@@ -94,6 +94,11 @@ const { withPoolLock } = createPoolLock();
 // Added synchronously at poolResume entry, removed when tracking completes.
 const _pendingRestores = new Set();
 
+// Sessions currently being offloaded by withFreshSlot (prevents TOCTOU race
+// where two concurrent callers both offload an idle session but only one
+// gets a fresh slot). Added inside the lock, removed after slot claim.
+const _pendingOffloads = new Set();
+
 // Poll a condition until it returns a truthy value, with timeout.
 // Returns the truthy value, or throws on timeout.
 async function poll(
@@ -1558,32 +1563,54 @@ async function poolClean() {
 // Returns whatever claimFn returns.
 async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
-  // Phase 1: check if offload is needed (inside lock)
-  const needsOffload = await checkOffloadNeeded();
+
+  // Phase 1: inside lock, find offload target AND reserve it atomically.
+  // Excluding _pendingOffloads from the session map prevents two concurrent
+  // callers from both deciding to offload (TOCTOU race).
+  const needsOffload = await withPoolLock(async () => {
+    const pool = readPool();
+    if (!pool) return false;
+    const sessions = await getSessions();
+    enrichSessionsWithGraphData(sessions);
+    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+    for (const sid of _pendingOffloads) sessionMap.delete(sid);
+    const target = findOffloadTarget(pool, sessionMap);
+    if (target) _pendingOffloads.add(target.sessionId);
+    return target;
+  });
   if (needsOffload === false) throw new Error("Pool not initialized");
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
   if (needsOffload) {
-    await executeOffload(needsOffload);
-    await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
+    try {
+      await executeOffload(needsOffload);
+      await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
+    } catch (err) {
+      _pendingOffloads.delete(needsOffload.sessionId);
+      throw err;
+    }
   }
 
   // Phase 3: claim fresh slot atomically (inside lock — no gap for races)
-  return withPoolLock(async () => {
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const sessions = await getSessions();
-    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+  try {
+    return await withPoolLock(async () => {
+      const pool = readPool();
+      if (!pool) throw new Error("Pool not initialized");
+      const sessions = await getSessions();
+      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
-    const slot = pool.slots.find((s) => {
-      if (s.status === POOL_STATUS.FRESH) return true;
-      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-      return session && session.status === STATUS.FRESH;
+      const slot = pool.slots.find((s) => {
+        if (s.status === POOL_STATUS.FRESH) return true;
+        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+        return session && session.status === STATUS.FRESH;
+      });
+      if (!slot) throw new Error("No fresh slots available");
+
+      return claimFn(pool, slot);
     });
-    if (!slot) throw new Error("No fresh slots available");
-
-    return claimFn(pool, slot);
-  });
+  } finally {
+    if (needsOffload) _pendingOffloads.delete(needsOffload.sessionId);
+  }
 }
 
 async function poolResume(sessionId) {
