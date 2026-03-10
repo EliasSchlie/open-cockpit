@@ -295,9 +295,32 @@ apply_verbosity() {
 }
 
 # Send JSON to API socket. Args: <json> [timeout_seconds]
+# Retries up to 3 times on empty responses (server connected but didn't reply).
 send_api() {
   local json="$1"
   local timeout="${2:-5}"
+  local attempt result
+
+  for attempt in 1 2 3; do
+    result=$(_send_api_once "$json" "$timeout") && true
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+      return $rc
+    fi
+    if [[ -n "$result" ]]; then
+      printf '%s' "$result"
+      return 0
+    fi
+    # Empty response — retry after brief delay
+    sleep 0.2
+  done
+  echo "Error: API returned empty response after 3 attempts" >&2
+  return 1
+}
+
+_send_api_once() {
+  local json="$1"
+  local timeout="$2"
 
   if command -v node &>/dev/null; then
     local tmpf
@@ -313,11 +336,16 @@ send_api() {
       setTimeout(() => { console.error('timeout'); process.exit(1); }, ${timeout}000);
     " "$SOCKET" "$json" "$tmpf"
     local rc=$?
+    local out=""
     if [[ $rc -eq 0 && -s "$tmpf" ]]; then
-      cat "$tmpf"
+      out=$(cat "$tmpf")
     fi
     rm -f "$tmpf"
-    return $rc
+    if [[ $rc -ne 0 ]]; then
+      return $rc
+    fi
+    printf '%s' "$out"
+    return 0
   elif command -v socat &>/dev/null; then
     printf '%s\n' "$json" | socat -t"$timeout" - UNIX-CONNECT:"$SOCKET"
   else
