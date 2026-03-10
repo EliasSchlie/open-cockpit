@@ -1,48 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
-import path from "path";
-import os from "os";
+import { createTestEnv } from "./helpers/test-env.js";
 
-const SHORTCUTS_FILE = path.join(
-  os.homedir(),
-  ".open-cockpit",
-  "shortcuts.json",
-);
-
-// Fresh require for each test to reset module state
+let env;
 let shortcuts;
+
 function loadModule() {
-  // Clear module cache
-  delete require.cache[require.resolve("../src/shortcuts.js")];
-  return require("../src/shortcuts.js");
+  return env.requireFresh("shortcuts.js");
 }
 
 describe("Shortcut config system", () => {
-  let originalFile;
-
   beforeEach(() => {
-    try {
-      originalFile = fs.readFileSync(SHORTCUTS_FILE, "utf-8");
-    } catch {
-      originalFile = null;
-    }
-    // Start clean
-    try {
-      fs.unlinkSync(SHORTCUTS_FILE);
-    } catch {}
+    env = createTestEnv();
     shortcuts = loadModule();
     shortcuts.loadShortcuts();
   });
 
   afterEach(() => {
-    // Restore original file
-    if (originalFile !== null) {
-      fs.writeFileSync(SHORTCUTS_FILE, originalFile);
-    } else {
-      try {
-        fs.unlinkSync(SHORTCUTS_FILE);
-      } catch {}
-    }
+    env.cleanup();
   });
 
   it("returns default shortcuts when no config file exists", () => {
@@ -71,7 +46,8 @@ describe("Shortcut config system", () => {
     expect(shortcuts.getShortcut("new-session")).toBe("CmdOrCtrl+Shift+N");
 
     shortcuts.setShortcut("new-session", "CmdOrCtrl+N"); // back to default
-    const data = JSON.parse(fs.readFileSync(SHORTCUTS_FILE, "utf-8"));
+    const shortcutsFile = env.resolve("shortcuts.json");
+    const data = JSON.parse(fs.readFileSync(shortcutsFile, "utf-8"));
     expect(data["new-session"]).toBeUndefined();
   });
 
@@ -98,7 +74,17 @@ describe("Shortcut config system", () => {
 });
 
 describe("matchesInput", () => {
-  const { matchesInput } = loadModule();
+  let env2;
+  let mod;
+
+  beforeEach(() => {
+    env2 = createTestEnv();
+    mod = loadModule();
+  });
+
+  afterEach(() => {
+    env2.cleanup();
+  });
 
   it("matches Ctrl+Tab", () => {
     const input = {
@@ -108,8 +94,8 @@ describe("matchesInput", () => {
       shift: false,
       alt: false,
     };
-    expect(matchesInput(input, "Ctrl+Tab")).toBe(true);
-    expect(matchesInput(input, "Ctrl+Shift+Tab")).toBe(false);
+    expect(mod.matchesInput(input, "Ctrl+Tab")).toBe(true);
+    expect(mod.matchesInput(input, "Ctrl+Shift+Tab")).toBe(false);
   });
 
   it("matches CmdOrCtrl+Shift+Tab on macOS (meta)", () => {
@@ -120,7 +106,7 @@ describe("matchesInput", () => {
       shift: true,
       alt: false,
     };
-    expect(matchesInput(input, "CmdOrCtrl+Shift+Tab")).toBe(true);
+    expect(mod.matchesInput(input, "CmdOrCtrl+Shift+Tab")).toBe(true);
   });
 
   it("matches Alt+Down", () => {
@@ -131,8 +117,8 @@ describe("matchesInput", () => {
       shift: false,
       alt: true,
     };
-    expect(matchesInput(input, "Alt+Down")).toBe(true);
-    expect(matchesInput(input, "Alt+Up")).toBe(false);
+    expect(mod.matchesInput(input, "Alt+Down")).toBe(true);
+    expect(mod.matchesInput(input, "Alt+Up")).toBe(false);
   });
 
   it("returns false for empty accelerator", () => {
@@ -143,7 +129,7 @@ describe("matchesInput", () => {
       shift: false,
       alt: false,
     };
-    expect(matchesInput(input, "")).toBe(false);
+    expect(mod.matchesInput(input, "")).toBe(false);
   });
 
   it("matches CmdOrCtrl+E (meta on macOS)", () => {
@@ -154,11 +140,21 @@ describe("matchesInput", () => {
       shift: false,
       alt: false,
     };
-    expect(matchesInput(input, "CmdOrCtrl+E")).toBe(true);
+    expect(mod.matchesInput(input, "CmdOrCtrl+E")).toBe(true);
   });
 });
 
 describe("findMatchingInputAction", () => {
+  let env3;
+
+  beforeEach(() => {
+    env3 = createTestEnv();
+  });
+
+  afterEach(() => {
+    env3.cleanup();
+  });
+
   it("finds matching action from cached accelerators", () => {
     const mod = loadModule();
     mod.loadShortcuts();
