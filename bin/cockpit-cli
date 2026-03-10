@@ -1247,6 +1247,23 @@ case "$CMD" in
   pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
   ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
   relaunch)     json="{\"type\":\"relaunch\",\"id\":1}"; send_api "$json" ;;
+  show)         json="{\"type\":\"show\",\"id\":1}"; send_api "$json" ;;
+  hide)         json="{\"type\":\"hide\",\"id\":1}"; send_api "$json" ;;
+  screenshot)
+    RESULT=$(send_api "{\"type\":\"screenshot\",\"id\":1}" 10)
+    check_error "$RESULT"
+    if [ "${1:-}" = "--raw" ]; then
+      echo "$RESULT" | jq -r '.image' | base64 -d
+    else
+      echo "$RESULT"
+    fi
+    ;;
+  ui-state)     json="{\"type\":\"ui-state\",\"id\":1}"; send_api "$json" ;;
+  session-select)
+    SID="${1:?sessionId required}"
+    json="{\"type\":\"session-select\",\"id\":1,\"sessionId\":$(printf '%s' "$SID" | jq -Rs .)}"
+    send_api "$json"
+    ;;
   get-session-graph) json="{\"type\":\"get-session-graph\",\"id\":1}"; send_api "$json" ;;
   pool-min-fresh)
     if [ -z "${1:-}" ]; then
@@ -1469,6 +1486,14 @@ Targets: Most commands accept a <target> which can be:
   slot read <index>              Read terminal buffer
   slot write <index> <data>      Write to terminal (interprets escape sequences)
   slot status <index>            Slot details (status, sessionId, termId, pid)
+
+─── WINDOW CONTROL ──────────────────────────────────────────────────────────
+
+  show                           Show the window
+  hide                           Hide the window
+  screenshot [--raw]             Capture window screenshot (base64 JSON, or --raw PNG)
+  ui-state                       Get UI state (active session, session list)
+  session-select <id>            Switch the active session in the UI
 
 ─── LOW-LEVEL ───────────────────────────────────────────────────────────────
 

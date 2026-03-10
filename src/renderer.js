@@ -1175,6 +1175,27 @@ window.api.onIntentionChanged((content) => {
   }
 });
 
+// --- Remote control (Phase 5) ---
+
+// Expose UI state for the `ui-state` API endpoint (called via executeJavaScript)
+window.__getUiState = () => ({
+  activeSessionId: state.currentSessionId,
+  sessions: state.cachedSessions.map((s) => ({
+    sessionId: s.sessionId,
+    status: s.status,
+    project: s.project || null,
+    cwd: s.cwd || null,
+    origin: s.origin || null,
+    poolStatus: s.poolStatus || null,
+  })),
+});
+
+// Select session via API
+window.api.onApiSessionSelect(async (sessionId) => {
+  const session = state.cachedSessions.find((s) => s.sessionId === sessionId);
+  if (session) selectSession(session);
+});
+
 // --- Startup ---
 
 loadDirColors()

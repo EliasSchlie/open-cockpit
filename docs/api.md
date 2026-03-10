@@ -124,6 +124,19 @@ cockpit-cli slot write 3 "hello"                     # Write to terminal
 cockpit-cli slot status 3                            # Slot details
 ```
 
+### Window control
+
+```bash
+cockpit-cli show                                     # Show the window
+cockpit-cli hide                                     # Hide the window
+cockpit-cli screenshot                               # Capture screenshot (base64 JSON)
+cockpit-cli screenshot --raw > shot.png              # Save screenshot as PNG file
+cockpit-cli ui-state                                 # Get UI state (active session, session list)
+cockpit-cli session-select <id>                      # Switch active session in the UI
+```
+
+These work on any instance: `cockpit-cli --instance my-dev show`.
+
 ### Low-level
 
 ```bash
@@ -212,6 +225,22 @@ Direct slot access by pool index. Works even on error-status slots that have no 
 `session-term-open` spawns a new shell at the session's cwd (or an explicit `cwd`). `session-term-close` refuses to close the TUI tab on pool sessions.
 
 `session-term-run` sends a command to a shell tab, polls for a shell prompt to reappear, and returns the output (everything between the command echo and the next prompt). Refuses TUI tabs. Throws on timeout with partial output.
+
+### Window Control
+| Command | Fields | Response |
+|---------|--------|----------|
+| `show` | -- | `{ type: "ok" }` |
+| `hide` | -- | `{ type: "ok" }` |
+| `screenshot` | -- | `{ type: "screenshot", image }` — `image` is base64-encoded PNG |
+| `ui-state` | -- | `{ type: "ui-state", activeSessionId, sessions }` |
+| `session-select` | `sessionId` | `{ type: "ok" }` |
+| `relaunch` | -- | `{ type: "ok", message }` — rebuilds from source then restarts |
+
+`screenshot` captures the BrowserWindow contents. If the window has never been shown (hidden mode), it briefly shows the window off-screen to force a paint, then re-hides it.
+
+`ui-state` returns the renderer's view of the world: which session is selected and the full session list with status, project, cwd, origin, and pool status. Unlike `get-sessions` (which queries from the main process), this reflects what the user sees in the sidebar.
+
+`session-select` switches the active session in the UI (sidebar highlight, terminal view, editor). Fire-and-forget — does not wait for the switch to complete.
 
 ### Terminals (low-level)
 | Command | Fields | Response |

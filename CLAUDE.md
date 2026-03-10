@@ -182,5 +182,6 @@ Save plans to `docs/plans/` (e.g. `docs/plans/2026-03-09-feature-name.md`).
 - [docs/agents.md](docs/agents.md) — Custom agent scripts
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference
 - [docs/theme.md](docs/theme.md) — Color scheme, directory colors
+- [docs/dev-instances.md](docs/dev-instances.md) — Dev instances, hidden mode, remote control
 - [docs/debug-logging.md](docs/debug-logging.md) — Debug logging
 - [docs/testing/](docs/testing/) — Testing philosophy, isolation strategy
