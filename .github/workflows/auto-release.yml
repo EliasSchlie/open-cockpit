@@ -3,6 +3,10 @@ name: Auto-release plugin
 on:
   push:
     branches: [main]
+    paths:
+      - "hooks/**"
+      - "skills/**"
+      - ".claude-plugin/**"
   workflow_dispatch:
 
 jobs:
