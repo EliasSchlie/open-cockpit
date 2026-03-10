@@ -1847,7 +1847,7 @@ function watchIntention(sessionId) {
 // Checks for .code-workspace files (matching project name or inside folder).
 async function openInCursor(cwd) {
   if (!cwd) return;
-  debugLog("main", "openInCursor", cwd);
+  _debugLog("main", "openInCursor", cwd);
 
   const projectName = path.basename(cwd);
   const workspaceDir = path.join(

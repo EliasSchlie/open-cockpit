@@ -549,7 +549,7 @@ async function showSettings(initialTab = "general") {
   wirePoolTab(overlay, health, close, applyNavHighlight);
 
   // --- Wire Shortcuts tab ---
-  wireShortcutsTab(overlay, shortcuts, defaults);
+  cleanupRecordingFn = wireShortcutsTab(overlay, shortcuts, defaults);
 
   // --- Wire General tab (update status listener) ---
   updateStatusCleanup = wireGeneralUpdates(overlay);
@@ -665,8 +665,7 @@ function wireShortcutsTab(overlay, shortcuts, defaults) {
     row.classList.toggle("custom", isCustom);
   }
 
-  // Store cleanup for dialog close
-  cleanupRecordingFn = cleanupRecording;
+  return cleanupRecording;
 
   function showConflictWarning(row, conflicts) {
     row.querySelector(".shortcut-conflict")?.remove();
