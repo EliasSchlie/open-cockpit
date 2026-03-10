@@ -811,6 +811,13 @@ async function getSessionsUncached() {
         const jsonlPath = jsonlPathCache.get(sessionId);
         if (isActivated) {
           status = STATUS.PROCESSING;
+        } else if (poolSlot) {
+          // Pool sessions always have idle signals when idle (pool-init,
+          // stop, tool, permission, session-clear). syncPoolStatuses
+          // recreates missing pool-init signals for fresh slots. So a
+          // missing idle signal on a pool session means UserPromptSubmit
+          // cleared it — the session is processing its first prompt.
+          status = STATUS.PROCESSING;
         } else {
           // "user" needle: this path only runs when idle signal is absent
           // (prompt just submitted), so "user" entries are real, not /clear artifacts.
