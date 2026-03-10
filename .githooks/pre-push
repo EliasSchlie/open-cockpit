@@ -1,14 +1,49 @@
 #!/bin/bash
 set -euo pipefail
 
-# Skip tests for delete-only pushes (branch cleanup)
+# Skip everything for delete-only pushes (branch cleanup)
+is_delete_only=true
 while read local_ref local_oid remote_ref remote_oid; do
   if [ "$local_oid" != "0000000000000000000000000000000000000000" ]; then
-    echo "Running tests before push..."
-    npm test
-    exit $?
+    is_delete_only=false
+    break
   fi
 done
 
-echo "Delete-only push — skipping tests."
+if [ "$is_delete_only" = true ]; then
+  echo "Delete-only push — skipping checks."
+  exit 0
+fi
+
+# --- Reject merge commits in feature branches ---
+# Merge commits inside feature branches can silently drop code during
+# conflict resolution (see #340). Use 'git rebase origin/main' instead.
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$BRANCH" != "main" ]; then
+  # Compare against origin/main if available, fall back to main
+  BASE=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true)
+  if [ -n "$BASE" ]; then
+    MERGE_COMMITS=$(git rev-list --merges "$BASE"..HEAD)
+    if [ -n "$MERGE_COMMITS" ]; then
+      echo ""
+      echo "❌ Push rejected: merge commits found in branch '$BRANCH'"
+      echo ""
+      echo "Merge commits can silently drop code during conflict resolution."
+      echo "Found:"
+      for sha in $MERGE_COMMITS; do
+        echo "  - $(git log --format='%h %s' -1 "$sha")"
+      done
+      echo ""
+      echo "Fix: rebase onto main instead:"
+      echo "  git fetch origin"
+      echo "  git rebase origin/main"
+      echo "  git push --force-with-lease"
+      echo ""
+      exit 1
+    fi
+  fi
+fi
+
+echo "Running tests before push..."
+npm test
 
