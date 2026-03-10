@@ -1778,6 +1778,9 @@ async function poolResume(sessionId) {
                   `Failed to re-tag orphaned terminals: ${err.message}`,
                 );
               }
+              // /resume is a local command — no model processing happens, so
+              // the Stop hook never fires. Create an idle signal immediately.
+              createFreshIdleSignal(slot.pid, newSessionId);
             }
             invalidateSessionsCache();
           },
