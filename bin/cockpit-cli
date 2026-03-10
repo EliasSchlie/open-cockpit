@@ -462,13 +462,13 @@ case "$CMD" in
 
   log)
     # Read conversation history from JSONL transcript
-    TARGET="${1:?target required (sessionId or prefix)}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
     TAIL_N="${2:-20}"
-    resolve_target "$TARGET"
+    resolve_to_session_id "$TARGET"
 
-    JSONL_PATH=$(find_jsonl "$RESOLVED_VALUE")
+    JSONL_PATH=$(find_jsonl "$RESOLVED_SESSION_ID")
     if [[ -z "$JSONL_PATH" ]]; then
-      echo "Error: no transcript found for session $RESOLVED_VALUE" >&2
+      echo "Error: no transcript found for session $RESOLVED_SESSION_ID" >&2
       exit 1
     fi
 
@@ -499,21 +499,21 @@ case "$CMD" in
 
   intention)
     # Read or write a session's intention file
-    TARGET="${1:?target required (sessionId or prefix)}"
-    resolve_target "$TARGET"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_to_session_id "$TARGET"
 
     if [[ $# -ge 2 ]]; then
       # Write mode
       shift
       CONTENT="$*"
       CONTENT_JSON=$(printf '%s' "$CONTENT" | jq -Rs .)
-      json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"content\":$CONTENT_JSON}"
+      json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"content\":$CONTENT_JSON}"
       RESULT=$(send_api "$json")
       check_error "$RESULT"
       echo "Intention updated."
     else
       # Read mode
-      json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+      json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
       RESULT=$(send_api "$json")
       check_error "$RESULT"
       json_field "$RESULT" "content"
@@ -784,51 +784,51 @@ case "$CMD" in
     ;;
 
   pin)
-    SESSION_ID="${1:?sessionId required}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
     DURATION="${2:-120}"
     validate_int "$DURATION" "duration"
-    resolve_target "$SESSION_ID"
-    json="{\"type\":\"pool-pin\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\",\"duration\":$DURATION}"
+    resolve_to_session_id "$TARGET"
+    json="{\"type\":\"pool-pin\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\",\"duration\":$DURATION}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     UNTIL=$(json_field "$RESULT" "pinnedUntil")
-    echo "Pinned $RESOLVED_VALUE until $UNTIL"
+    echo "Pinned $RESOLVED_SESSION_ID until $UNTIL"
     ;;
 
   unpin)
-    SESSION_ID="${1:?sessionId required}"
-    resolve_target "$SESSION_ID"
-    json="{\"type\":\"pool-unpin\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_to_session_id "$TARGET"
+    json="{\"type\":\"pool-unpin\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
-    echo "Unpinned $RESOLVED_VALUE"
+    echo "Unpinned $RESOLVED_SESSION_ID"
     ;;
 
   stop)
-    SESSION_ID="${1:?sessionId required}"
-    resolve_target "$SESSION_ID"
-    json="{\"type\":\"pool-stop-session\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_to_session_id "$TARGET"
+    json="{\"type\":\"pool-stop-session\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
-    echo "Stop signal sent to $RESOLVED_VALUE"
+    echo "Stop signal sent to $RESOLVED_SESSION_ID"
     ;;
 
   archive)
-    SESSION_ID="${1:?sessionId required}"
-    resolve_target "$SESSION_ID"
-    json="{\"type\":\"archive-session\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_to_session_id "$TARGET"
+    json="{\"type\":\"archive-session\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
     RESULT=$(send_api "$json" 30)
     check_error "$RESULT"
-    echo "Archived $RESOLVED_VALUE"
+    echo "Archived $RESOLVED_SESSION_ID"
     ;;
 
   unarchive)
-    SESSION_ID="${1:?sessionId required}"
-    resolve_target "$SESSION_ID"
-    json="{\"type\":\"unarchive-session\",\"id\":1,\"sessionId\":\"$RESOLVED_VALUE\"}"
+    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
+    resolve_to_session_id "$TARGET"
+    json="{\"type\":\"unarchive-session\",\"id\":1,\"sessionId\":\"$RESOLVED_SESSION_ID\"}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
-    echo "Unarchived $RESOLVED_VALUE"
+    echo "Unarchived $RESOLVED_SESSION_ID"
     ;;
 
   # ==========================================================================
@@ -1435,11 +1435,11 @@ Targets: Most commands accept a <target> which can be:
   result <target>                Print output (error if still running)
   input <target> <text>          Send raw input to terminal
   clean                          Free slots occupied by finished sessions
-  pin <id> [seconds]             Prevent offloading (default: 120s)
-  unpin <id>                     Allow offloading again
-  stop <id>                      Interrupt running session (sends Escape)
-  archive <id>                   Archive a session
-  unarchive <id>                 Move archived session back to recent
+  pin <target> [seconds]          Prevent offloading (default: 120s)
+  unpin <target>                  Allow offloading again
+  stop <target>                   Interrupt running session (sends Escape)
+  archive <target>                Archive a session
+  unarchive <target>              Move archived session back to recent
 
 ─── AGENTS ──────────────────────────────────────────────────────────────
 
