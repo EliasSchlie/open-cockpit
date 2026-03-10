@@ -651,10 +651,22 @@ export async function reconnectAllPtys() {
       }
       continue;
     }
+    const results = await Promise.allSettled(
+      sessionPtys.map((p) => reconnectTerminal(p)),
+    );
     const entries = [];
-    for (const p of sessionPtys) {
-      entries.push(await reconnectTerminal(p));
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === "fulfilled") {
+        entries.push(r.value);
+      } else {
+        debugLog(
+          "startup",
+          `failed to reconnect termId=${sessionPtys[i].termId} session=${sid}: ${r.reason.message}`,
+        );
+      }
     }
+    if (entries.length === 0) continue; // All terminals failed — skip session
     const savedLayout = await window.api.loadLayout(sid);
     sessionTerminals.set(sid, {
       terminals: entries,
