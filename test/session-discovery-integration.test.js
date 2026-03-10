@@ -6,6 +6,7 @@ import { createTestEnv } from "./helpers/test-env.js";
 let env;
 let discovery;
 let paths;
+let STATUS;
 
 const ALIVE_PID = String(process.pid);
 const DEAD_PID = "99999";
@@ -22,6 +23,7 @@ beforeAll(() => {
   env = createTestEnv();
   discovery = env.requireFresh("session-discovery.js");
   paths = env.requireFresh("paths.js");
+  ({ STATUS } = env.requireFresh("session-statuses.js"));
   discovery.init({ debugLog: () => {}, onSessionsChanged: () => {} });
 });
 
@@ -104,7 +106,7 @@ describe("session-discovery integration", () => {
     const found = sessions.find((s) => s.sessionId === sessionId);
 
     expect(found).toBeDefined();
-    expect(found.status).toBe("idle");
+    expect(found.status).toBe(STATUS.IDLE);
     expect(found.alive).toBe(true);
 
     // Cleanup
@@ -122,7 +124,9 @@ describe("session-discovery integration", () => {
     expect(found).toBeDefined();
     expect(found.alive).toBe(true);
     // Without idle signal and without transcript, should be fresh
-    expect(["fresh", "typing", "processing"]).toContain(found.status);
+    expect([STATUS.FRESH, STATUS.TYPING, STATUS.PROCESSING]).toContain(
+      found.status,
+    );
 
     // Cleanup
     fs.unlinkSync(env.resolve(`session-pids/${ALIVE_PID}`));
@@ -146,7 +150,7 @@ describe("session-discovery integration", () => {
     const found = sessions.find((s) => s.sessionId === sessionId);
 
     expect(found).toBeDefined();
-    expect(found.status).toBe("offloaded");
+    expect(found.status).toBe(STATUS.OFFLOADED);
     expect(found.alive).toBe(false);
     expect(found.intentionHeading).toBe("Test Offloaded");
 
@@ -173,7 +177,7 @@ describe("session-discovery integration", () => {
     const found = sessions.find((s) => s.sessionId === sessionId);
 
     expect(found).toBeDefined();
-    expect(found.status).toBe("archived");
+    expect(found.status).toBe(STATUS.ARCHIVED);
     expect(found.alive).toBe(false);
 
     // Cleanup

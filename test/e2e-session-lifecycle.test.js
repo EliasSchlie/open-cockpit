@@ -13,10 +13,12 @@ import {
 } from "./helpers/claude-harness.js";
 
 let env;
+let STATUS;
 const spawnedProcs = [];
 
 beforeAll(() => {
   env = createTestEnv();
+  ({ STATUS } = env.requireFresh("session-statuses.js"));
 });
 
 afterAll(() => {
@@ -66,7 +68,7 @@ describe("session lifecycle", { timeout: 120_000 }, () => {
       (s) => s.sessionId === session.sessionId,
     );
     expect(archivedSess).toBeDefined();
-    expect(archivedSess.status).toBe("archived");
+    expect(archivedSess.status).toBe(STATUS.ARCHIVED);
   });
 
   it("Test B: prompt with stats verification", async () => {
@@ -106,7 +108,7 @@ describe("session lifecycle", { timeout: 120_000 }, () => {
     let sessions = await sd.getSessions();
     let sess = sessions.find((s) => s.sessionId === id);
     expect(sess).toBeDefined();
-    expect(sess.status).toBe("offloaded");
+    expect(sess.status).toBe(STATUS.OFFLOADED);
 
     // 3. Archive: update meta
     writeOffloadMeta(env, id, {
@@ -119,7 +121,7 @@ describe("session lifecycle", { timeout: 120_000 }, () => {
     sessions = await sd.getSessions();
     sess = sessions.find((s) => s.sessionId === id);
     expect(sess).toBeDefined();
-    expect(sess.status).toBe("archived");
+    expect(sess.status).toBe(STATUS.ARCHIVED);
 
     // 4. Unarchive: remove archived flag
     writeOffloadMeta(env, id, {
@@ -130,6 +132,6 @@ describe("session lifecycle", { timeout: 120_000 }, () => {
     sessions = await sd.getSessions();
     sess = sessions.find((s) => s.sessionId === id);
     expect(sess).toBeDefined();
-    expect(sess.status).toBe("offloaded");
+    expect(sess.status).toBe(STATUS.OFFLOADED);
   });
 });

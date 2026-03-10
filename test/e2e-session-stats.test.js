@@ -47,20 +47,5 @@ describe("session stats E2E", { timeout: 120_000 }, () => {
     expect(stats.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("Test E: PRICING is exported and has correct structure", () => {
-    const { PRICING } = env.requireFresh("session-stats.js");
-
-    // Verify PRICING has entries for opus, sonnet, haiku
-    expect(PRICING["claude-opus-4-6"]).toBeDefined();
-    expect(PRICING["claude-sonnet-4-6"]).toBeDefined();
-    expect(PRICING["claude-haiku-4-5"]).toBeDefined();
-
-    // Each entry has positive pricing fields
-    for (const [, pricing] of Object.entries(PRICING)) {
-      expect(pricing.input).toBeGreaterThan(0);
-      expect(pricing.output).toBeGreaterThan(0);
-      expect(pricing.cacheWrite).toBeGreaterThan(0);
-      expect(pricing.cacheRead).toBeGreaterThan(0);
-    }
-  });
+  // PRICING structure is tested in session-stats.test.js (unit tests)
 });

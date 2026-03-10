@@ -17,6 +17,7 @@ import { createApiServer } from "../src/api-server.js";
 let env;
 let server;
 let socketPath;
+let STATUS;
 const spawnedProcs = [];
 
 /**
@@ -53,6 +54,7 @@ function sendMessage(sock, msg) {
 beforeAll(() => {
   env = createTestEnv();
   socketPath = env.resolve("test-api.sock");
+  ({ STATUS } = env.requireFresh("session-statuses.js"));
 });
 
 afterAll(() => {
@@ -179,7 +181,7 @@ describe("API E2E", { timeout: 120_000 }, () => {
     });
     let sess = resp.sessions.find((s) => s.sessionId === id);
     expect(sess).toBeDefined();
-    expect(sess.status).toBe("offloaded");
+    expect(sess.status).toBe(STATUS.OFFLOADED);
 
     // Archive via API
     resp = await sendMessage(socketPath, {
@@ -196,7 +198,7 @@ describe("API E2E", { timeout: 120_000 }, () => {
     });
     sess = resp.sessions.find((s) => s.sessionId === id);
     expect(sess).toBeDefined();
-    expect(sess.status).toBe("archived");
+    expect(sess.status).toBe(STATUS.ARCHIVED);
 
     // Unarchive via API
     resp = await sendMessage(socketPath, {
@@ -213,7 +215,7 @@ describe("API E2E", { timeout: 120_000 }, () => {
     });
     sess = resp.sessions.find((s) => s.sessionId === id);
     expect(sess).toBeDefined();
-    expect(sess.status).toBe("offloaded");
+    expect(sess.status).toBe(STATUS.OFFLOADED);
 
     // Ping still works
     resp = await sendMessage(socketPath, { type: "ping", id: 99 });

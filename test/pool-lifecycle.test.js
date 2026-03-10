@@ -6,12 +6,15 @@ let env;
 let pool;
 let poolLock;
 let isPidAlive;
+let STATUS;
+let POOL_STATUS;
 
 beforeAll(() => {
   env = createTestEnv();
   pool = env.requireFresh("pool.js");
   poolLock = env.requireFresh("pool-lock.js");
   ({ isPidAlive } = env.requireFresh("paths.js"));
+  ({ STATUS, POOL_STATUS } = env.requireFresh("session-statuses.js"));
 });
 
 afterAll(() => {
@@ -59,31 +62,31 @@ describe("pool.js", () => {
 
   describe("isSlotUncommitted", () => {
     it("returns true for fresh", () => {
-      expect(pool.isSlotUncommitted("fresh")).toBe(true);
+      expect(pool.isSlotUncommitted(POOL_STATUS.FRESH)).toBe(true);
     });
 
     it("returns true for typing", () => {
-      expect(pool.isSlotUncommitted("typing")).toBe(true);
+      expect(pool.isSlotUncommitted(POOL_STATUS.TYPING)).toBe(true);
     });
 
     it("returns false for idle", () => {
-      expect(pool.isSlotUncommitted("idle")).toBe(false);
+      expect(pool.isSlotUncommitted(POOL_STATUS.IDLE)).toBe(false);
     });
 
     it("returns false for busy", () => {
-      expect(pool.isSlotUncommitted("busy")).toBe(false);
+      expect(pool.isSlotUncommitted(POOL_STATUS.BUSY)).toBe(false);
     });
 
     it("returns false for starting", () => {
-      expect(pool.isSlotUncommitted("starting")).toBe(false);
+      expect(pool.isSlotUncommitted(POOL_STATUS.STARTING)).toBe(false);
     });
 
     it("returns false for dead", () => {
-      expect(pool.isSlotUncommitted("dead")).toBe(false);
+      expect(pool.isSlotUncommitted(POOL_STATUS.DEAD)).toBe(false);
     });
 
     it("returns false for error", () => {
-      expect(pool.isSlotUncommitted("error")).toBe(false);
+      expect(pool.isSlotUncommitted(POOL_STATUS.ERROR)).toBe(false);
     });
   });
 
@@ -96,37 +99,43 @@ describe("pool.js", () => {
             index: 0,
             termId: 1,
             pid: process.pid,
-            status: "fresh",
+            status: POOL_STATUS.FRESH,
             sessionId: "s1",
           },
           {
             index: 1,
             termId: 2,
             pid: process.pid,
-            status: "idle",
+            status: POOL_STATUS.IDLE,
             sessionId: "s2",
           },
           {
             index: 2,
             termId: 3,
             pid: process.pid,
-            status: "busy",
+            status: POOL_STATUS.BUSY,
             sessionId: "s3",
           },
-          { index: 3, termId: 4, pid: 99999, status: "fresh", sessionId: "s4" },
+          {
+            index: 3,
+            termId: 4,
+            pid: 99999,
+            status: POOL_STATUS.FRESH,
+            sessionId: "s4",
+          },
         ],
       };
 
       const sessions = [
-        { sessionId: "s1", status: "fresh", alive: true },
+        { sessionId: "s1", status: STATUS.FRESH, alive: true },
         {
           sessionId: "s2",
-          status: "idle",
+          status: STATUS.IDLE,
           alive: true,
           intentionHeading: "Task",
           cwd: "/tmp",
         },
-        { sessionId: "s3", status: "processing", alive: true },
+        { sessionId: "s3", status: STATUS.PROCESSING, alive: true },
       ];
 
       const health = pool.computePoolHealth(poolData, sessions, isPidAlive);
@@ -150,29 +159,29 @@ describe("pool.js", () => {
     it("updates slot status from session data", () => {
       const poolData = {
         slots: [
-          { index: 0, sessionId: "s1", status: "fresh" },
-          { index: 1, sessionId: "s2", status: "fresh" },
+          { index: 0, sessionId: "s1", status: POOL_STATUS.FRESH },
+          { index: 1, sessionId: "s2", status: POOL_STATUS.FRESH },
         ],
       };
 
       const sessions = [
-        { sessionId: "s1", status: "idle", alive: true },
-        { sessionId: "s2", status: "processing", alive: true },
+        { sessionId: "s1", status: STATUS.IDLE, alive: true },
+        { sessionId: "s2", status: STATUS.PROCESSING, alive: true },
       ];
 
       const result = pool.syncStatuses(poolData, sessions);
 
       expect(result).not.toBeNull();
-      expect(result.slots[0].status).toBe("idle");
-      expect(result.slots[1].status).toBe("busy");
+      expect(result.slots[0].status).toBe(POOL_STATUS.IDLE);
+      expect(result.slots[1].status).toBe(POOL_STATUS.BUSY);
     });
 
     it("returns null when nothing changed", () => {
       const poolData = {
-        slots: [{ index: 0, sessionId: "s1", status: "idle" }],
+        slots: [{ index: 0, sessionId: "s1", status: POOL_STATUS.IDLE }],
       };
 
-      const sessions = [{ sessionId: "s1", status: "idle", alive: true }];
+      const sessions = [{ sessionId: "s1", status: STATUS.IDLE, alive: true }];
 
       const result = pool.syncStatuses(poolData, sessions);
       expect(result).toBeNull();
@@ -180,10 +189,10 @@ describe("pool.js", () => {
 
     it("skips starting slots", () => {
       const poolData = {
-        slots: [{ index: 0, sessionId: "s1", status: "starting" }],
+        slots: [{ index: 0, sessionId: "s1", status: POOL_STATUS.STARTING }],
       };
 
-      const sessions = [{ sessionId: "s1", status: "idle", alive: true }];
+      const sessions = [{ sessionId: "s1", status: STATUS.IDLE, alive: true }];
 
       const result = pool.syncStatuses(poolData, sessions);
       expect(result).toBeNull();
