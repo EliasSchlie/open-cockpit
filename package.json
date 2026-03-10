@@ -12,7 +12,8 @@
   "scripts": {
     "build": "esbuild src/renderer.js --bundle --outfile=dist/renderer.js --platform=browser --format=iife",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron . --instance dev",
+    "dev": "npm run build && electron . --dev",
+    "dev:watch": "node scripts/dev-watch.js",
     "postinstall": "command -v electron-builder >/dev/null && electron-builder install-app-deps || true",
     "prepare": "git config core.hooksPath .githooks",
     "test": "vitest run",

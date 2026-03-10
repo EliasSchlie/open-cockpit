@@ -1127,6 +1127,35 @@ window.api.onPoolSlotsRecovered((slots) => {
   }
 })();
 
+// Daemon stale notification — persistent banner with restart button
+window.api.onDaemonStale(() => {
+  if (document.getElementById("daemon-stale-banner")) return;
+  const banner = document.createElement("div");
+  banner.id = "daemon-stale-banner";
+  banner.className = "daemon-stale-banner";
+  const span = document.createElement("span");
+  span.textContent = "Daemon code updated. Restart to apply?";
+  const restartBtn = document.createElement("button");
+  restartBtn.textContent = "Restart daemon";
+  const dismissBtn = document.createElement("button");
+  dismissBtn.textContent = "Dismiss";
+  banner.append(span, restartBtn, dismissBtn);
+  document.body.appendChild(banner);
+  restartBtn.addEventListener("click", async () => {
+    banner.textContent = "Restarting daemon...";
+    try {
+      await window.api.restartDaemon();
+      banner.remove();
+      showToast("Daemon restarted.", "info");
+    } catch (err) {
+      banner.textContent = `Restart failed: ${err.message}`;
+    }
+  });
+  dismissBtn.addEventListener("click", () => {
+    banner.remove();
+  });
+});
+
 // Handle external file changes
 window.api.onIntentionChanged((content) => {
   if (!state.editorView) return;

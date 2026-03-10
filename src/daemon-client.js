@@ -183,6 +183,32 @@ async function daemonRequest(msg) {
   });
 }
 
+async function stopDaemon() {
+  try {
+    const pidStr = fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim();
+    const pid = parseInt(pidStr, 10);
+    if (isPidAlive(pid)) {
+      process.kill(pid, "SIGTERM");
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (!isPidAlive(pid)) break;
+      }
+      // Escalate to SIGKILL if still alive
+      if (isPidAlive(pid)) {
+        _debugLog("daemon SIGTERM timed out, sending SIGKILL");
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already dead */
+        }
+      }
+    }
+  } catch {
+    /* daemon may already be dead */
+  }
+  destroySocket();
+}
+
 function destroySocket() {
   if (daemonSocket && !daemonSocket.destroyed) {
     daemonSocket.destroy();
@@ -191,7 +217,9 @@ function destroySocket() {
 
 module.exports = {
   init,
+  isDaemonRunning,
   ensureDaemon,
+  stopDaemon,
   daemonSend,
   daemonSendSafe,
   daemonRequest,

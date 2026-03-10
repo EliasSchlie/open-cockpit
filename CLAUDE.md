@@ -108,15 +108,17 @@ Tag push → CI builds all platforms → publish the draft. See [docs/releasing.
 
 ## Dev vs production
 
-- `npm start` — production (don't touch during dev)
-- `npm run dev` — dev instance (`--instance dev`), fully isolated via `OPEN_COCKPIT_DIR`
-- Custom: `npm run build && electron . --instance my-feature` — any name works
+- `npm start` — base instance (no isolation, don't touch during dev)
+- `npm run dev` — dev instance, auto-named from worktree (e.g. `.wt/my-feature/` → `--instance my-feature`)
+- `npm run dev:watch` — same + auto-rebuild on `src/` changes, app auto-relaunches
+- Custom: `electron . --instance my-name` — explicit name
+- Dev instances require a name — `npm run dev` from root repo (not a worktree) errors
 
 ## Reloading after changes
 
-- **Renderer** (`renderer.js`, `styles.css`, `index.html`): `npm run build`, then Cmd+R
-- **Main process** (`main.js`, `preload.js`): kill and restart dev instance
-- **Daemon** (`pty-daemon.js`): `kill $(cat ~/.open-cockpit/pty-daemon.pid)`, restart app (kills all terminals)
+- **With `dev:watch`**: automatic — edit src/, app rebuilds and relaunches within ~2s
+- **Without `dev:watch`**: `npm run build`, then Cmd+R (renderer only) or kill + restart (main process)
+- **Daemon** (`pty-daemon.js`): in-app banner warns when daemon code is stale, click "Restart daemon" (kills all terminals)
 
 ## Native modules
 
