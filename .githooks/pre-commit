@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+# Ensure node/npm are on PATH (nvm isn't loaded in non-interactive shells)
+if ! command -v node &>/dev/null && [ -d "$HOME/.nvm/versions/node" ]; then
+  _nvm_node=$(ls -d "$HOME/.nvm/versions/node"/* 2>/dev/null | tail -1)
+  [ -n "$_nvm_node" ] && export PATH="$_nvm_node/bin:$PATH"
+fi
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
 [ -f "$HOME/.config/git-hooks/pre-commit-base.sh" ] && source "$HOME/.config/git-hooks/pre-commit-base.sh" || true
