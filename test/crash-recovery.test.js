@@ -9,19 +9,16 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import fs from "fs";
-import path from "path";
 import { createTestEnv } from "./helpers/test-env.js";
 
 let env;
 let activeSessions;
-let pool;
 let secureFsModule;
 let STATUS;
 
 beforeAll(() => {
   env = createTestEnv("crash-recovery");
   activeSessions = env.requireFresh("active-sessions.js");
-  pool = env.requireFresh("pool.js");
   secureFsModule = env.requireFresh("secure-fs.js");
   const statuses = env.requireFresh("session-statuses.js");
   STATUS = statuses.POOL_STATUS;
