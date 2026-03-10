@@ -88,7 +88,7 @@ function setTerminalDims(cols, rows) {
   _terminalDims = { cols, rows };
 }
 
-const { withPoolLock } = createPoolLock(POOL_FILE);
+const { withPoolLock } = createPoolLock();
 
 // Sessions currently being restored (prevents double-restore races).
 // Added synchronously at poolResume entry, removed when tracking completes.
