@@ -6,6 +6,7 @@ on:
     paths:
       - "hooks/**"
       - "skills/**"
+      - "bin/**"
       - ".claude-plugin/**"
   workflow_dispatch:
 
