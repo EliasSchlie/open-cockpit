@@ -1060,6 +1060,17 @@ function cleanupStaleIdleSignals() {
 async function reconcilePool() {
   let shouldRestore = false;
   await withPoolLock(async () => {
+    // Clean up stale temp files from previous writes/crashes
+    try {
+      const dir = path.dirname(POOL_FILE);
+      const base = path.basename(POOL_FILE);
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith(base) && f.endsWith(".tmp")) {
+          fs.unlinkSync(path.join(dir, f));
+        }
+      }
+    } catch {}
+
     const pool = readPool();
     if (!pool) return;
 
