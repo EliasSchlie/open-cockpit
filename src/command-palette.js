@@ -224,12 +224,6 @@ export function initCommandPalette(actions) {
       shortcutAction: "run-agent",
       action: () => _actions.showAgentPicker(),
     },
-    {
-      id: "jitter-terminal",
-      label: "Jitter Terminal (Clear Artifacts)",
-      shortcutAction: "jitter-terminal",
-      action: () => _actions.jitterCurrentTerminal(),
-    },
   ];
 
   // Also add Tab 1-9 commands

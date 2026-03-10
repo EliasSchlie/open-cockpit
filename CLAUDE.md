@@ -138,10 +138,8 @@ Merging: always merge from root worktree without `--delete-branch`:
 cd ~/projects/open-cockpit
 gh pr merge <number> --squash
 git worktree remove .wt/<name>
+git branch -d <branch>
 git pull
-# Safe force-delete: -d won't work after squash merge (history is rewritten),
-# so verify PR is merged via GitHub first, then -D
-gh pr view <number> --json state -q '.state' | grep -q MERGED && git branch -D <branch>
 ```
 
 ## Plans
@@ -171,3 +169,4 @@ Save plans to `docs/plans/` (e.g. `docs/plans/2026-03-09-feature-name.md`).
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference
 - [docs/theme.md](docs/theme.md) — Color scheme, directory colors
 - [docs/debug-logging.md](docs/debug-logging.md) — Debug logging
+- [docs/testing/](docs/testing/) — Testing philosophy, isolation strategy

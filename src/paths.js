@@ -3,7 +3,8 @@ const os = require("os");
 
 const IS_DEV = process.argv.includes("--dev");
 const OWN_POOL = process.argv.includes("--own-pool");
-const OPEN_COCKPIT_DIR = path.join(os.homedir(), ".open-cockpit");
+const OPEN_COCKPIT_DIR =
+  process.env.OPEN_COCKPIT_TEST_DIR || path.join(os.homedir(), ".open-cockpit");
 const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
 const COLORS_FILE = path.join(OPEN_COCKPIT_DIR, "colors.json");
 const SESSION_PIDS_DIR = path.join(OPEN_COCKPIT_DIR, "session-pids");
