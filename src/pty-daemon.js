@@ -6,7 +6,7 @@
  * Multiple clients (Electron instances) can attach to the same terminals.
  * Terminals survive client disconnects and app restarts.
  *
- * Socket: ~/.open-cockpit/pty-daemon.sock
+ * Socket: ~/.open-cockpit/pty-daemon.sock (or pty-daemon-dev.sock for --own-pool)
  */
 
 const net = require("net");
@@ -25,7 +25,12 @@ const {
 
 const OPEN_COCKPIT_DIR =
   process.env.OPEN_COCKPIT_TEST_DIR || path.join(os.homedir(), ".open-cockpit");
-const SOCKET_PATH = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const SOCKET_PATH =
+  process.env.OPEN_COCKPIT_DAEMON_SOCKET ||
+  path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const PID_FILE =
+  process.env.OPEN_COCKPIT_DAEMON_PID ||
+  path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
 const BUFFER_SIZE = 100_000; // bytes of output to buffer per terminal for replay
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // exit after 30 min with no terminals and no clients
 const ALLOWED_SHELLS = getAllowedShells();
@@ -98,7 +103,7 @@ function cleanup() {
     }
   }
   try {
-    fs.unlinkSync(path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"));
+    fs.unlinkSync(PID_FILE);
   } catch (err) {
     if (err.code !== "ENOENT") {
       console.error("[pty-daemon] Failed to remove PID file:", err.message);
@@ -439,10 +444,7 @@ function startServer() {
     chmodSync(SOCKET_PATH, 0o600);
     console.log(`[pty-daemon] Listening on ${SOCKET_PATH}`);
     // Write PID file so clients can check if daemon is alive
-    secureWriteFileSync(
-      path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid"),
-      String(process.pid),
-    );
+    secureWriteFileSync(PID_FILE, String(process.pid));
     resetIdleTimer();
   });
 

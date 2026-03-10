@@ -9,9 +9,15 @@ const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
 const COLORS_FILE = path.join(OPEN_COCKPIT_DIR, "colors.json");
 const SESSION_PIDS_DIR = path.join(OPEN_COCKPIT_DIR, "session-pids");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
-const DAEMON_SOCKET = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
+const DAEMON_SOCKET = path.join(
+  OPEN_COCKPIT_DIR,
+  OWN_POOL ? "pty-daemon-dev.sock" : "pty-daemon.sock",
+);
 const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
-const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
+const DAEMON_PID_FILE = path.join(
+  OPEN_COCKPIT_DIR,
+  OWN_POOL ? "pty-daemon-dev.pid" : "pty-daemon.pid",
+);
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
 const POOL_FILE = path.join(
@@ -26,6 +32,8 @@ const AGENTS_DIR = path.join(OPEN_COCKPIT_DIR, "agents");
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const LAYOUTS_DIR = path.join(OPEN_COCKPIT_DIR, "layouts");
 const SESSION_GRAPH_FILE = path.join(OPEN_COCKPIT_DIR, "session-graph.json");
+// API socket uses IS_DEV (not OWN_POOL) because each Electron instance runs
+// its own API server — two processes can't bind the same socket.
 const API_SOCKET = path.join(
   OPEN_COCKPIT_DIR,
   IS_DEV ? "api-dev.sock" : "api.sock",

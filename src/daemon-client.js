@@ -36,7 +36,7 @@ function isDaemonRunning() {
 
 function getDaemonExecPath() {
   if (process.platform !== "darwin") return process.execPath;
-  const link = path.join(os.homedir(), ".open-cockpit", "electron-node");
+  const link = path.join(OPEN_COCKPIT_DIR, "electron-node");
   try {
     const target = fs.readlinkSync(link);
     if (target === process.execPath) return link;
@@ -56,7 +56,12 @@ function startDaemon() {
       detached: true,
       stdio: "ignore",
       cwd: os.homedir(),
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        OPEN_COCKPIT_DAEMON_SOCKET: DAEMON_SOCKET,
+        OPEN_COCKPIT_DAEMON_PID: DAEMON_PID_FILE,
+      },
     });
     child.unref();
     let attempts = 0;
