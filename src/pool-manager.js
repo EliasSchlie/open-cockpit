@@ -53,11 +53,10 @@ const {
   isPidAlive,
 } = require("./paths");
 const {
-  registerActiveSession,
   unregisterActiveSession,
   getSessionsToRestore,
   syncRegistryWithPool,
-  readActiveRegistry,
+  setRestoreInProgress,
 } = require("./active-sessions");
 
 // Lazy require to avoid circular dependency with session-discovery
@@ -857,6 +856,7 @@ let _registryRestoreInProgress = false;
 async function restoreFromActiveRegistry() {
   if (_registryRestoreInProgress) return;
   _registryRestoreInProgress = true;
+  setRestoreInProgress(true);
   try {
     const pool = readPool();
     if (!pool) return;
@@ -882,7 +882,12 @@ async function restoreFromActiveRegistry() {
       for (const entry of toRestore) {
         try {
           unregisterActiveSession(entry.sessionId);
-        } catch {}
+        } catch (err) {
+          _debugLog(
+            "main",
+            `Failed to unregister agent session: ${err.message}`,
+          );
+        }
       }
       return;
     }
@@ -921,23 +926,11 @@ async function restoreFromActiveRegistry() {
     for (const entry of userSessions) {
       try {
         // Ensure offload meta exists so poolResume can find the claudeSessionId
-        const offloadDir = path.join(OFFLOADED_DIR, entry.sessionId);
         if (!readOffloadMeta(entry.sessionId)) {
-          secureMkdirSync(offloadDir, { recursive: true });
-          secureWriteFileSync(
-            path.join(offloadDir, "meta.json"),
-            JSON.stringify(
-              {
-                sessionId: entry.sessionId,
-                claudeSessionId: entry.claudeSessionId,
-                origin: "pool",
-                lastInteractionTs: Math.floor(Date.now() / 1000),
-                offloadedAt: new Date().toISOString(),
-              },
-              null,
-              2,
-            ),
-          );
+          await writeOffloadMeta(entry.sessionId, {
+            claudeSessionId: entry.claudeSessionId,
+            origin: "pool",
+          });
         }
         await poolResume(entry.sessionId);
         restored++;
@@ -951,7 +944,9 @@ async function restoreFromActiveRegistry() {
       // Remove from registry regardless (now either restored or unrestorable)
       try {
         unregisterActiveSession(entry.sessionId);
-      } catch {}
+      } catch (err) {
+        _debugLog("main", `Failed to unregister session: ${err.message}`);
+      }
     }
 
     if (restored > 0) {
@@ -962,6 +957,7 @@ async function restoreFromActiveRegistry() {
     }
   } finally {
     _registryRestoreInProgress = false;
+    setRestoreInProgress(false);
   }
 }
 

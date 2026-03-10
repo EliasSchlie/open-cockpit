@@ -143,5 +143,34 @@ describe("active-sessions registry", () => {
       // old session should be removed
       expect(registry["old-sess"]).toBeUndefined();
     });
+
+    it("skips write when registry is unchanged", () => {
+      const slots = [
+        { sessionId: "sess-001", status: "idle" },
+        { sessionId: "sess-002", status: "busy" },
+      ];
+
+      activeSessionsModule.syncRegistryWithPool(slots);
+      const mtime1 = fs.statSync(env.resolve("active-sessions.json")).mtimeMs;
+
+      // Sync again with same slots — should not write
+      activeSessionsModule.syncRegistryWithPool(slots);
+      const mtime2 = fs.statSync(env.resolve("active-sessions.json")).mtimeMs;
+
+      expect(mtime2).toBe(mtime1);
+    });
+
+    it("skips sync when restore is in progress", () => {
+      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
+      activeSessionsModule.setRestoreInProgress(true);
+      try {
+        // This should be a no-op — registry should keep sess-001
+        activeSessionsModule.syncRegistryWithPool([]);
+        const registry = activeSessionsModule.readActiveRegistry();
+        expect(registry["sess-001"]).toBeDefined();
+      } finally {
+        activeSessionsModule.setRestoreInProgress(false);
+      }
+    });
   });
 });
