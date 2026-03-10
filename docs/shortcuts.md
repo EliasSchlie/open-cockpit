@@ -55,7 +55,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Ctrl+Alt+Cmd+C` | Open in Cursor |
 | `Escape` | Focus Terminal |
 | `Cmd+K` | Search Sessions |
-| `Cmd+/` | Command Palette |
+| `Cmd+Shift+P` | Command Palette |
 | `Cmd+,` | Pool Settings |
 | `Cmd+Alt+]` / `[` | Focus Next / Previous Pane |
 | `Alt+Right` | Toggle Child Sessions (expand/collapse) |
