@@ -47,7 +47,7 @@ Two independent pipelines: **plugin** (automatic) and **app** (manual).
 
 ## Plans
 
-Save plans to `docs/plans/` (e.g. `docs/plans/2026-03-09-feature-name.md`).
+Save plans in intention files, not `docs/plans/`.
 
 ## Conventions
 
