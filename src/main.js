@@ -398,7 +398,11 @@ function buildMenu() {
       label: "View",
       submenu: [
         { role: "reload" },
-        { role: "forceReload" },
+        {
+          label: "Force Reload",
+          role: "forceReload",
+          accelerator: "CmdOrCtrl+Alt+R",
+        },
         {
           label: "Relaunch App",
           accelerator: accel("relaunch-app"),
