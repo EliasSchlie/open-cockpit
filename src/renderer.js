@@ -1148,37 +1148,42 @@ window.api.onIntentionChanged((content) => {
 
 // --- Startup ---
 
-loadDirColors().then(async () => {
-  // Load shortcut config for command palette display
-  try {
-    const shortcuts = await window.api.getShortcuts();
-    setShortcutConfig(shortcuts);
-  } catch {}
+loadDirColors()
+  .then(async () => {
+    // Load shortcut config for command palette display
+    try {
+      const shortcuts = await window.api.getShortcuts();
+      setShortcutConfig(shortcuts);
+    } catch {}
 
-  await reconnectAllPtys();
-  const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh
-  let sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
-  loadSessions();
+    await reconnectAllPtys();
 
-  // Event-driven refresh: main process pushes (already debounced) when
-  // idle-signals/session-pids change. Reset poll timer on each event since
-  // polling only needs to kick in when events stop working.
-  window.api.onSessionsChanged(() => {
+    const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh
+    let sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
     loadSessions();
-    clearInterval(sessionPollInterval);
-    sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
-  });
 
-  // Pause polling when window is hidden to save CPU
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
+    // Event-driven refresh: main process pushes (already debounced) when
+    // idle-signals/session-pids change. Reset poll timer on each event since
+    // polling only needs to kick in when events stop working.
+    window.api.onSessionsChanged(() => {
+      loadSessions();
       clearInterval(sessionPollInterval);
-      sessionPollInterval = null;
-    } else {
-      if (!sessionPollInterval) {
-        loadSessions();
-        sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
+      sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
+    });
+
+    // Pause polling when window is hidden to save CPU
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        clearInterval(sessionPollInterval);
+        sessionPollInterval = null;
+      } else {
+        if (!sessionPollInterval) {
+          loadSessions();
+          sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
+        }
       }
-    }
+    });
+  })
+  .catch((err) => {
+    debugLog("startup", "renderer startup failed:", err.message);
   });
-});
