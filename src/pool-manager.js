@@ -161,14 +161,18 @@ async function sendCommandToTerminal(termId, command) {
 }
 
 // Create a fresh idle signal file for a pool slot
-function createFreshIdleSignal(pid, sessionId, trigger = "pool-init") {
+function createFreshIdleSignal(
+  pid,
+  sessionId,
+  { trigger = "pool-init", transcript = "" } = {},
+) {
   secureMkdirSync(IDLE_SIGNALS_DIR, { recursive: true });
   secureWriteFileSync(
     path.join(IDLE_SIGNALS_DIR, String(pid)),
     JSON.stringify({
       cwd: os.homedir(),
       session_id: sessionId,
-      transcript: "",
+      transcript,
       ts: Math.floor(Date.now() / 1000),
       trigger,
     }),
@@ -1782,7 +1786,14 @@ async function poolResume(sessionId) {
               // the Stop hook never fires. Create an idle signal immediately.
               // Use "resume" trigger (not in FRESH_TRIGGERS) so the session is
               // recognized as previously active → IDLE instead of fresh/typing.
-              createFreshIdleSignal(slot.pid, newSessionId, "resume");
+              // Include real transcript path so transcriptContains can also
+              // detect prior assistant messages as a secondary signal.
+              const { findJsonlPath } = getSessionDiscovery();
+              const transcriptPath = (await findJsonlPath(newSessionId)) || "";
+              createFreshIdleSignal(slot.pid, newSessionId, {
+                trigger: "resume",
+                transcript: transcriptPath,
+              });
             }
             invalidateSessionsCache();
           },
