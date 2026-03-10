@@ -719,7 +719,7 @@ async function spawnPoolSlot(index, args) {
 // Called before pool destruction (explicit or daemon crash) so poolInit can resume them.
 // Accepts pool object to avoid redundant disk read (callers already hold it).
 // Only saves user-spawned sessions with active statuses (busy/idle/typing).
-function extractPendingRestore(pool) {
+async function extractPendingRestore(pool) {
   if (!pool) return [];
 
   const graph = readSessionGraph();
@@ -739,24 +739,12 @@ function extractPendingRestore(pool) {
     const graphEntry = graph[slot.sessionId];
     if (graphEntry?.initiator === INITIATOR.MODEL) continue;
 
-    // Create minimal offload metadata so poolResume can find the session
-    const offloadDir = path.join(OFFLOADED_DIR, slot.sessionId);
-    if (!fs.existsSync(path.join(offloadDir, "meta.json"))) {
-      secureMkdirSync(offloadDir, { recursive: true });
-      secureWriteFileSync(
-        path.join(offloadDir, "meta.json"),
-        JSON.stringify(
-          {
-            sessionId: slot.sessionId,
-            claudeSessionId: slot.sessionId,
-            origin: "pool",
-            lastInteractionTs: Math.floor(Date.now() / 1000),
-            offloadedAt: new Date().toISOString(),
-          },
-          null,
-          2,
-        ),
-      );
+    // Create offload metadata so poolResume can find the session
+    if (!readOffloadMeta(slot.sessionId)) {
+      await writeOffloadMeta(slot.sessionId, {
+        claudeSessionId: slot.sessionId,
+        origin: "pool",
+      });
     }
 
     restorableIds.push(slot.sessionId);
@@ -1223,7 +1211,7 @@ async function reconcilePool() {
       return !pty || pty.exited;
     });
     if (allDead) {
-      extractPendingRestore(pool);
+      await extractPendingRestore(pool);
       shouldRestore = true;
     }
 
@@ -1566,7 +1554,7 @@ async function poolDestroy() {
     if (!pool) return;
 
     // Save restorable sessions BEFORE killing anything
-    const savedIds = new Set(extractPendingRestore(pool));
+    const savedIds = new Set(await extractPendingRestore(pool));
 
     const { terminalHasInputCache, getOffloadedSessions } =
       getSessionDiscovery();
