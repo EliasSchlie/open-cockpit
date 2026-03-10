@@ -48,6 +48,7 @@ const {
   DEFAULT_POOL_SIZE,
   ORPHAN_TERMINAL_TTL_MS,
   OPEN_COCKPIT_DIR,
+  PENDING_RESTORE_FILE,
   isPidAlive,
 } = require("./paths");
 
@@ -703,6 +704,140 @@ async function spawnPoolSlot(index, args) {
   return createSlot(index, resp.termId, resp.pid);
 }
 
+// Extract restorable sessions from the current pool and save to pending-restore.json.
+// Called before pool destruction (explicit or daemon crash) so poolInit can resume them.
+// Accepts pool object to avoid redundant disk read (callers already hold it).
+// Only saves user-spawned sessions with active statuses (busy/idle/typing).
+function extractPendingRestore(pool) {
+  if (!pool) return [];
+
+  const graph = readSessionGraph();
+  const restorableIds = [];
+
+  for (const slot of pool.slots) {
+    if (!slot.sessionId) continue;
+    // Only save active sessions (busy, idle, typing)
+    if (
+      slot.status !== POOL_STATUS.BUSY &&
+      slot.status !== POOL_STATUS.IDLE &&
+      slot.status !== POOL_STATUS.TYPING
+    ) {
+      continue;
+    }
+    // Skip agent-spawned sessions (initiator: model)
+    const graphEntry = graph[slot.sessionId];
+    if (graphEntry?.initiator === INITIATOR.MODEL) continue;
+
+    // Create minimal offload metadata so poolResume can find the session
+    const offloadDir = path.join(OFFLOADED_DIR, slot.sessionId);
+    if (!fs.existsSync(path.join(offloadDir, "meta.json"))) {
+      secureMkdirSync(offloadDir, { recursive: true });
+      secureWriteFileSync(
+        path.join(offloadDir, "meta.json"),
+        JSON.stringify(
+          {
+            sessionId: slot.sessionId,
+            claudeSessionId: slot.sessionId,
+            origin: "pool",
+            lastInteractionTs: Math.floor(Date.now() / 1000),
+            offloadedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
+    restorableIds.push(slot.sessionId);
+  }
+
+  if (restorableIds.length > 0) {
+    secureWriteFileSync(
+      PENDING_RESTORE_FILE,
+      JSON.stringify(restorableIds, null, 2),
+    );
+    _debugLog("main", `Saved ${restorableIds.length} sessions for restore`);
+  }
+
+  return restorableIds;
+}
+
+// Restore sessions from pending-restore.json by resuming them into fresh pool slots.
+// Reuses poolResume for each entry (handles slot claiming, /resume, tracking, orphan re-tagging).
+// Fire-and-forget: runs in background, doesn't block poolInit/reconcilePool.
+async function restorePendingSessions() {
+  let sessionIds;
+  try {
+    sessionIds = JSON.parse(fs.readFileSync(PENDING_RESTORE_FILE, "utf-8"));
+  } catch {
+    return; // No pending restore file — nothing to do
+  }
+  if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
+    try {
+      fs.unlinkSync(PENDING_RESTORE_FILE);
+    } catch {}
+    return;
+  }
+
+  _debugLog(
+    "main",
+    `Restoring ${sessionIds.length} sessions from pending-restore`,
+  );
+
+  // Wait for enough fresh slots to restore into (slots start as "starting").
+  const needed = sessionIds.length;
+  try {
+    await poll(
+      () => {
+        const pool = readPool();
+        if (!pool) return false;
+        const freshCount = pool.slots.filter(
+          (s) => s.status === POOL_STATUS.FRESH,
+        ).length;
+        const nonStarting = pool.slots.filter(
+          (s) => s.status !== POOL_STATUS.STARTING,
+        ).length;
+        // Ready when we have enough fresh slots, or all slots have settled
+        return freshCount >= needed || nonStarting === pool.slots.length;
+      },
+      { interval: 500, timeout: 60000, label: "wait for fresh slots" },
+    );
+  } catch {
+    _debugLog("main", "Timed out waiting for fresh slots for restore");
+    // Don't delete the file — let the next poolInit try again
+    return;
+  }
+
+  let restored = 0;
+
+  for (const sessionId of sessionIds) {
+    if (!sessionId) continue;
+    try {
+      await poolResume(sessionId);
+      restored++;
+      _debugLog("main", `Restored session ${sessionId}`);
+    } catch (err) {
+      _debugLog(
+        "main",
+        `Failed to restore session ${sessionId}: ${err.message}`,
+      );
+      // Session stays in offloaded — user can manually resume
+    }
+  }
+
+  // Clean up pending restore file
+  try {
+    fs.unlinkSync(PENDING_RESTORE_FILE);
+  } catch {}
+
+  if (restored > 0) {
+    _debugLog(
+      "main",
+      `Session restore complete: ${restored}/${sessionIds.length} restored`,
+    );
+  }
+}
+
 // Initialize pool: spawn N Claude sessions via PTY daemon.
 // Returns immediately after spawning — slot tracking (session ID discovery)
 // happens in the background. Slots start as "starting" and transition to
@@ -738,6 +873,12 @@ async function poolInit(size) {
   for (const slot of pool.slots) {
     trackNewSlot(slot);
   }
+
+  // Auto-restore sessions from a previous pool (fire-and-forget).
+  // Runs after slot tracking starts so fresh slots become available.
+  restorePendingSessions().catch((err) =>
+    _debugLog("main", `Session restore failed: ${err.message}`),
+  );
 
   return readPool();
 }
@@ -917,7 +1058,8 @@ function cleanupStaleIdleSignals() {
 // Daemon terminals survive app restarts, so pool slots should still be alive.
 // Update any stale state (dead terminals, changed PIDs, etc.)
 async function reconcilePool() {
-  return withPoolLock(async () => {
+  let shouldRestore = false;
+  await withPoolLock(async () => {
     // Clean up stale temp files from previous writes/crashes
     try {
       const dir = path.dirname(POOL_FILE);
@@ -942,6 +1084,17 @@ async function reconcilePool() {
       daemonPtys = new Map(resp.ptys.map((p) => [p.termId, p]));
     } catch {
       return; // Daemon not running — can't reconcile
+    }
+
+    // If all slots are dead (daemon crash), save restore list
+    // BEFORE overwriting slots with fresh ones.
+    const allDead = pool.slots.every((slot) => {
+      const pty = daemonPtys.get(slot.termId);
+      return !pty || pty.exited;
+    });
+    if (allDead) {
+      extractPendingRestore(pool);
+      shouldRestore = true;
     }
 
     for (const slot of pool.slots) {
@@ -1029,6 +1182,17 @@ async function reconcilePool() {
     // Prune session graph — remove entries for sessions that no longer exist
     pruneSessionGraph(pool);
   });
+
+  // Trigger restore OUTSIDE the pool lock to avoid deadlock
+  // (restorePendingSessions acquires its own locks internally)
+  if (shouldRestore) {
+    restorePendingSessions().catch((err) =>
+      _debugLog(
+        "main",
+        `Session restore after reconcile failed: ${err.message}`,
+      ),
+    );
+  }
 }
 
 function getPoolTermIds() {
@@ -1248,11 +1412,17 @@ async function killSlotProcess(slot) {
   }
 }
 
-// Destroy pool: kill all slots and remove pool.json
+// Destroy pool: kill all slots and remove pool.json.
+// Saves restorable sessions to pending-restore.json before destroying,
+// so the next poolInit can automatically resume them.
 async function poolDestroy() {
   return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) return;
+
+    // Save restorable sessions BEFORE killing anything
+    const savedIds = new Set(extractPendingRestore(pool));
+
     const { terminalHasInputCache, getOffloadedSessions } =
       getSessionDiscovery();
     for (const slot of pool.slots) {
@@ -1275,9 +1445,11 @@ async function poolDestroy() {
         err.message,
       );
     }
-    // Archive non-archived offloaded sessions so they don't linger in Recent
+    // Archive non-archived offloaded sessions, except those pending restore
     for (const s of await getOffloadedSessions()) {
-      if (s.status === STATUS.OFFLOADED) await archiveSession(s.sessionId);
+      if (s.status === STATUS.OFFLOADED && !savedIds.has(s.sessionId)) {
+        await archiveSession(s.sessionId);
+      }
     }
   });
 }
@@ -1640,6 +1812,8 @@ module.exports = {
   syncPoolStatuses,
   killSlotProcess,
   poolDestroy,
+  extractPendingRestore,
+  restorePendingSessions,
   validateTermId,
   readIntention,
   writeIntention,
