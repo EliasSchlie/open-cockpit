@@ -596,21 +596,28 @@ function jumpToRecentIdle() {
 
 // --- Jitter current terminal to clear artifacts ---
 
+let jitterInFlight = false;
 async function jitterCurrentTerminal() {
+  if (jitterInFlight) return;
   const idx = getActiveTermIndex();
   if (idx < 0) return;
   const entry = state.terminals[idx];
   if (!entry) return;
-  const { term, termId } = entry;
-  const cols = term.cols;
-  const rows = term.rows;
-  // Resize both xterm.js and PTY to cols+1, then back — mirrors manual window resize
-  term.resize(cols + 1, rows);
-  window.api.ptyResize(termId, cols + 1, rows);
-  // Small delay for Claude to redraw at new size
-  await new Promise((r) => setTimeout(r, 50));
-  term.resize(cols, rows);
-  window.api.ptyResize(termId, cols, rows);
+  jitterInFlight = true;
+  try {
+    const { term, termId } = entry;
+    const cols = term.cols;
+    const rows = term.rows;
+    // Resize both xterm.js and PTY to cols+1, then back — mirrors manual window resize
+    term.resize(cols + 1, rows);
+    window.api.ptyResize(termId, cols + 1, rows);
+    // Small delay for Claude to redraw at new size
+    await new Promise((r) => setTimeout(r, 50));
+    term.resize(cols, rows);
+    window.api.ptyResize(termId, cols, rows);
+  } finally {
+    jitterInFlight = false;
+  }
 }
 
 // --- Focus external terminal for current session ---
