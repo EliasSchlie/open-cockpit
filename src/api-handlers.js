@@ -372,7 +372,6 @@ function buildApiHandlers() {
   handlers["ping"] = async () => ({ type: "pong" });
 
   handlers["relaunch"] = async () => {
-    const { app } = require("electron");
     const { execSync } = require("child_process");
     const path = require("path");
     try {
@@ -384,12 +383,13 @@ function buildApiHandlers() {
     } catch (err) {
       return { type: "error", error: "Build failed: " + err.message };
     }
-    // Delay to let the response reach the client
+    // Delay to let the response reach the client before exit
+    const { app } = require("electron");
     setTimeout(() => {
       app.relaunch();
       app.exit(0);
     }, 100);
-    return { type: "ok", message: "Rebuilding and relaunching..." };
+    return { type: "ok", message: "Relaunching..." };
   };
 
   handlers["pty-read"] = async (msg) => {
