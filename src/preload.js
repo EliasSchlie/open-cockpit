@@ -267,4 +267,7 @@ contextBridge.exposeInMainWorld("api", {
   // Daemon stale notification
   onDaemonStale: (callback) => ipcRenderer.on("daemon-stale", () => callback()),
   restartDaemon: () => ipcRenderer.invoke("restart-daemon"),
+
+  // Relaunch app (rebuild + restart main process)
+  relaunchApp: () => ipcRenderer.invoke("relaunch-app"),
 });

@@ -36,6 +36,9 @@ const menuActions = shortcutActionIds.filter(
 // reachable via input events or have special handling
 const MENU_EXEMPT = new Set([]);
 
+// Actions handled entirely in the main process (no renderer IPC channel needed)
+const MAIN_PROCESS_ONLY = new Set(["relaunch-app", "restart-daemon"]);
+
 // Shortcut action IDs that map to a different IPC channel name
 // (e.g. "next-tab" shortcut sends "next-terminal-tab" IPC message)
 const CHANNEL_ALIASES = {
@@ -75,7 +78,9 @@ describe("Shortcut completeness", () => {
     // (input-event actions still send IPC messages for the renderer)
     // Check both the action ID and any alias
     const missing = shortcutActionIds.filter(
-      (id) => !channelsSet.has(CHANNEL_ALIASES[id] || id),
+      (id) =>
+        !MAIN_PROCESS_ONLY.has(id) &&
+        !channelsSet.has(CHANNEL_ALIASES[id] || id),
     );
 
     // -alt variants don't have their own channels (they map to existing ones)
@@ -96,6 +101,7 @@ describe("Shortcut completeness", () => {
 
     const missing = shortcutActionIds
       .filter((id) => !id.endsWith("-alt"))
+      .filter((id) => !MAIN_PROCESS_ONLY.has(id))
       .filter((id) => !listenerSet.has(CHANNEL_ALIASES[id] || id));
 
     expect(

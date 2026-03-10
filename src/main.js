@@ -399,6 +399,20 @@ function buildMenu() {
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
+        {
+          label: "Relaunch App",
+          accelerator: accel("relaunch-app"),
+          click: () => buildAndRelaunch(),
+        },
+        {
+          label: "Restart Daemon",
+          accelerator: accel("restart-daemon"),
+          click: async () => {
+            await daemonClient.stopDaemon();
+            await daemonClient.ensureDaemon();
+            debugLog("main", "daemon restarted via menu");
+          },
+        },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
@@ -919,6 +933,9 @@ app.whenReady().then(async () => {
   // Check after daemon is connected and on each relaunch
   setTimeout(checkDaemonStale, 3000);
 
+  // --- Relaunch app handler (rebuild + restart main process) ---
+  ipcMain.handle("relaunch-app", () => buildAndRelaunch());
+
   // --- Daemon restart handler ---
   ipcMain.handle("restart-daemon", async () => {
     await daemonClient.stopDaemon();
@@ -937,6 +954,21 @@ let instancePoolDestroyed = false;
 // pool destroy if that ever changes.
 let relaunchingForBuild = false;
 let quitting = false;
+
+// Shared build+relaunch: rebuilds from source, then restarts the app.
+// Throws on build failure. Sessions survive via the daemon.
+function buildAndRelaunch() {
+  debugLog("main", "buildAndRelaunch: rebuilding and relaunching");
+  const { execSync } = require("child_process");
+  execSync("npm run build", {
+    cwd: path.join(__dirname, ".."),
+    stdio: "ignore",
+    timeout: 30000,
+  });
+  relaunchingForBuild = true;
+  app.relaunch();
+  app.exit(0);
+}
 app.on("before-quit", (e) => {
   quitting = true;
   // Dev instances auto-destroy their pool on quit.

@@ -63,6 +63,7 @@ All shortcuts appear in the command palette (`Cmd+/`). The `COMMANDS` array in `
 | `Cmd+I` | Session Info |
 | `Cmd+Shift+B` | Toggle Bell (mute/unmute notifications) |
 | `Cmd+Shift+A` | Run Agent (open agent picker) |
+| `Cmd+Shift+R` | Relaunch App (rebuild + restart main process) |
 | *(unbound)* | Toggle Pane Focus (editor ↔ terminal) |
 | *(unbound)* | Split Right |
 | *(unbound)* | Split Down |

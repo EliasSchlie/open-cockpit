@@ -371,6 +371,27 @@ function buildApiHandlers() {
 
   handlers["ping"] = async () => ({ type: "pong" });
 
+  handlers["relaunch"] = async () => {
+    const { execSync } = require("child_process");
+    const path = require("path");
+    try {
+      execSync("npm run build", {
+        cwd: path.join(__dirname, ".."),
+        stdio: "ignore",
+        timeout: 30000,
+      });
+    } catch (err) {
+      return { type: "error", error: "Build failed: " + err.message };
+    }
+    // Delay to let the response reach the client before exit
+    const { app } = require("electron");
+    setTimeout(() => {
+      app.relaunch();
+      app.exit(0);
+    }, 100);
+    return { type: "ok", message: "Relaunching..." };
+  };
+
   handlers["pty-read"] = async (msg) => {
     validateTermId(msg.termId);
     const resp = await daemonRequest({ type: "list" });
