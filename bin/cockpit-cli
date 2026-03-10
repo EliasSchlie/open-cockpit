@@ -18,6 +18,7 @@ else
 fi
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$HOME/.open-cockpit/session-pids}"
+GLOBAL_AGENTS_DIR="$OC_DIR/agents"
 
 # --- Global flags ---
 VERBOSITY="raw"
@@ -126,9 +127,7 @@ send_api() {
   local json="$1"
   local timeout="${2:-5}"
 
-  if command -v socat &>/dev/null; then
-    printf '%s\n' "$json" | socat -t"$timeout" - UNIX-CONNECT:"$SOCKET"
-  else
+  if command -v node &>/dev/null; then
     local tmpf
     tmpf=$(mktemp)
     node -e "
@@ -147,7 +146,34 @@ send_api() {
     fi
     rm -f "$tmpf"
     return $rc
+  elif command -v socat &>/dev/null; then
+    printf '%s\n' "$json" | socat -t"$timeout" - UNIX-CONNECT:"$SOCKET"
+  else
+    echo "Error: neither node nor socat found. Install one to use cockpit-cli." >&2
+    exit 1
   fi
+}
+
+# Print parsed # Arg: metadata from an agent script.
+# Args: <script_path> [--verbose]
+# --verbose includes (required)/(optional) suffix
+print_agent_args() {
+  local script="$1" verbose=false
+  [[ "${2:-}" == "--verbose" ]] && verbose=true
+  { grep '^# Arg:' "$script" 2>/dev/null || true; } | while IFS= read -r argline; do
+    [[ -z "$argline" ]] && continue
+    argline="${argline#\# Arg: }"
+    local arg_name arg_desc is_optional arg_default label detail
+    arg_name=$(printf '%s' "$argline" | cut -d'|' -f1 | sed 's/ *$//')
+    arg_desc=$(printf '%s' "$argline" | cut -d'|' -f2 | sed 's/^ *//' 2>/dev/null || true)
+    is_optional=$(printf '%s' "$argline" | grep -q '|.*optional' && echo "optional" || echo "required")
+    arg_default=$(printf '%s' "$argline" | grep -o 'default:[^|]*' | sed 's/default: *//' || true)
+    [[ "$is_optional" == "optional" ]] && label="[$arg_name]" || label="<$arg_name>"
+    detail="$arg_desc"
+    [[ -n "$arg_default" ]] && detail="$detail (default: $arg_default)"
+    $verbose && detail="$detail ($is_optional)"
+    printf "  %-20s %s\n" "$label" "$detail"
+  done
 }
 
 # Extract a field from JSON response (requires jq)
@@ -606,6 +632,7 @@ case "$CMD" in
       BUFFER=$(json_field "$WAIT_RESULT" "buffer")
       apply_verbosity "$SESSION_ID" "$BUFFER"
     else
+      echo "$SESSION_ID" >&2
       echo "$SESSION_ID"
     fi
     ;;
@@ -1219,6 +1246,112 @@ case "$CMD" in
   # HELP
   # ==========================================================================
 
+  agents)
+    # Discover agent scripts from project-local and global dirs
+    # Collect entries as "name\tpath\tscope" lines; project-local overrides global
+    AGENTS_VERBOSE=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -v|--verbose) AGENTS_VERBOSE=true; shift ;;
+        --help|-h) echo "Usage: cockpit-cli agents [-v|--verbose]" >&2; exit 0 ;;
+        *) shift ;;
+      esac
+    done
+
+    agent_lines=""
+    local_agents_dir="$(pwd)/.open-cockpit/agents"
+
+    # Global agents first (lower priority)
+    if [[ -d "$GLOBAL_AGENTS_DIR" ]]; then
+      for f in "$GLOBAL_AGENTS_DIR"/*.sh; do
+        [[ -f "$f" ]] || continue
+        name=$(basename "$f" .sh)
+        agent_lines="${agent_lines}${name}	${f}	global
+"
+      done
+    fi
+
+    # Project-local agents (higher priority, override global)
+    if [[ -d "$local_agents_dir" ]]; then
+      for f in "$local_agents_dir"/*.sh; do
+        [[ -f "$f" ]] || continue
+        name=$(basename "$f" .sh)
+        agent_lines="${agent_lines}${name}	${f}	local
+"
+      done
+    fi
+
+    if [[ -z "$agent_lines" ]]; then
+      echo "No agents found." >&2
+      echo "Create agent scripts in ~/.open-cockpit/agents/ or .open-cockpit/agents/" >&2
+      exit 0
+    fi
+
+    # Deduplicate by name (last occurrence wins = local overrides global), then sort
+    printf "%-20s %-8s %s\n" "NAME" "SCOPE" "DESCRIPTION"
+    printf '%s' "$agent_lines" | awk -F'\t' '{ agents[$1] = $0 } END { for (n in agents) print agents[n] }' | sort -t'	' -k1,1 | while IFS='	' read -r name apath scope; do
+      desc=$(grep -m1 '^# Description:' "$apath" 2>/dev/null | sed 's/^# Description: *//' || true)
+      printf "%-20s %-8s %s\n" "$name" "$scope" "$desc"
+      if $AGENTS_VERBOSE; then
+        print_agent_args "$apath"
+      fi
+    done
+    ;;
+
+  agent)
+    AGENT_NAME="${1:?agent name required. Run 'cockpit-cli agents' to list available agents.}"
+    shift
+
+    # Validate name (alphanumeric, hyphens, underscores)
+    if ! [[ "$AGENT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+      echo "Error: Invalid agent name '$AGENT_NAME'. Use alphanumeric characters, hyphens, and underscores." >&2
+      exit 1
+    fi
+
+    # Find agent script (project-local first, then global)
+    AGENT_SCRIPT=""
+    local_agents_dir="$(pwd)/.open-cockpit/agents"
+    if [[ -f "$local_agents_dir/$AGENT_NAME.sh" ]]; then
+      AGENT_SCRIPT="$local_agents_dir/$AGENT_NAME.sh"
+    elif [[ -f "$GLOBAL_AGENTS_DIR/$AGENT_NAME.sh" ]]; then
+      AGENT_SCRIPT="$GLOBAL_AGENTS_DIR/$AGENT_NAME.sh"
+    else
+      echo "Error: Agent '$AGENT_NAME' not found." >&2
+      echo "Searched: $local_agents_dir/$AGENT_NAME.sh" >&2
+      echo "          $GLOBAL_AGENTS_DIR/$AGENT_NAME.sh" >&2
+      echo "Run 'cockpit-cli agents' to list available agents." >&2
+      exit 1
+    fi
+
+    if [[ ! -x "$AGENT_SCRIPT" ]]; then
+      echo "Error: Agent script is not executable: $AGENT_SCRIPT" >&2
+      echo "Fix with: chmod +x $AGENT_SCRIPT" >&2
+      exit 1
+    fi
+
+    # Intercept --help: parse script header instead of executing
+    for arg in "$@"; do
+      if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+        desc=$(grep -m1 '^# Description:' "$AGENT_SCRIPT" 2>/dev/null | sed 's/^# Description: *//' || true)
+        echo "$AGENT_NAME — ${desc:-No description}"
+        echo ""
+        if grep -q '^# Arg:' "$AGENT_SCRIPT" 2>/dev/null; then
+          echo "Arguments:"
+          print_agent_args "$AGENT_SCRIPT" --verbose
+        else
+          echo "Usage: cockpit-cli agent $AGENT_NAME [args...]"
+          echo ""
+          echo "Arguments are passed directly to the script as \$1, \$2, etc."
+        fi
+        echo ""
+        echo "Source: $AGENT_SCRIPT"
+        exit 0
+      fi
+    done
+
+    exec "$AGENT_SCRIPT" "$@"
+    ;;
+
   help|*)
     [[ "$CMD" != "help" ]] && echo "Unknown command: $CMD" >&2
     cat >&2 <<'USAGE'
@@ -1278,6 +1411,13 @@ Targets: Most commands accept a <target> which can be:
   stop <id>                      Interrupt running session (sends Escape)
   archive <id>                   Archive a session
   unarchive <id>                 Move archived session back to recent
+
+─── AGENTS ──────────────────────────────────────────────────────────────
+
+  agents                         List available agent scripts
+  agent <name> [args...]         Run a named agent script
+                                 Scripts in .open-cockpit/agents/ (local)
+                                 or ~/.open-cockpit/agents/ (global)
 
 ─── POOL MANAGEMENT ─────────────────────────────────────────────────────────
 
@@ -1347,6 +1487,9 @@ Targets: Most commands accept a <target> which can be:
   cockpit-cli -v response start "analyze code" --block   # Get just the response
   cockpit-cli pin 2947b 300                   # Pin for 5 minutes
   cockpit-cli stop 2947b                      # Interrupt running session
+
+  cockpit-cli agents                                     # List available agents
+  cockpit-cli agent code-review --staged                 # Run a named agent
 USAGE
     [[ "$CMD" != "help" ]] && exit 1
     exit 0

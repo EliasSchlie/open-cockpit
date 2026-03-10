@@ -98,6 +98,15 @@ cockpit-cli term exec @2 'npm test'                  # Ephemeral shell in slot 2
 cockpit-cli term exec 'make build' --timeout 120     # With 120s timeout
 ```
 
+### Custom agents
+
+```bash
+cockpit-cli agents                                     # List available agents
+cockpit-cli agent code-review --staged                 # Run a named agent
+```
+
+Agent scripts live in `~/.open-cockpit/agents/` (global) or `.open-cockpit/agents/` (project-local). See [agents docs](agents.md) for details.
+
 ### Pool management
 
 ```bash

@@ -64,6 +64,7 @@ import {
   splitFocusedTab,
 } from "./command-palette.js";
 import { initSessionSearch, toggleSessionSearch } from "./session-search.js";
+import { initAgentPicker, showAgentPicker } from "./agent-picker.js";
 
 // --- Populate DOM refs ---
 dom.sessionList = document.getElementById("session-list");
@@ -79,6 +80,9 @@ dom.commandPaletteList = document.getElementById("command-palette-list");
 dom.sessionSearch = document.getElementById("session-search");
 dom.sessionSearchInput = document.getElementById("session-search-input");
 dom.sessionSearchList = document.getElementById("session-search-list");
+dom.agentPicker = document.getElementById("agent-picker");
+dom.agentPickerInput = document.getElementById("agent-picker-input");
+dom.agentPickerList = document.getElementById("agent-picker-list");
 
 // --- Focus management ---
 
@@ -788,6 +792,7 @@ initCommandPalette({
   switchChildSession,
   openSessionInfo,
   openSessionSearch: toggleSessionSearch,
+  showAgentPicker,
 });
 
 // Session search
@@ -795,6 +800,18 @@ initSessionSearch({
   selectSession,
   focusTerminal,
   displayPath,
+});
+
+// Agent picker
+initAgentPicker({
+  focusTerminal,
+  showNotification,
+  navigateToSession: async (sessionId) => {
+    // Reload sessions so the new one appears, then select it
+    await loadSessions();
+    const session = state.cachedSessions.find((s) => s.sessionId === sessionId);
+    if (session) selectSession(session);
+  },
 });
 
 // Editor doc change callback
@@ -1039,6 +1056,7 @@ window.api.onOpenPoolSettings(() => showSettings());
 window.api.onOpenSessionInfo(() => openSessionInfo());
 window.api.onToggleBell(toggleBellMuted);
 window.api.onSessionSearch(toggleSessionSearch);
+window.api.onRunAgent(showAgentPicker);
 
 // Bell toggle button
 document
