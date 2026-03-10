@@ -67,8 +67,20 @@ export const state = {
 export const sessionTerminals = new Map();
 export const CLEANUP_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
-// --- Bell mute toggle (persisted via localStorage) ---
-let _bellMuted = localStorage.getItem("bellMuted") === "true";
+// --- Bell mute toggle (persisted via preferences file) ---
+let _bellMuted = false;
+
+export async function initBellState() {
+  _bellMuted = await window.api.getPreference("bellMuted", false);
+  // Migrate from localStorage (pre-preferences.json versions)
+  const legacy = localStorage.getItem("bellMuted");
+  if (legacy !== null) {
+    _bellMuted = legacy === "true";
+    window.api.setPreference("bellMuted", _bellMuted);
+    localStorage.removeItem("bellMuted");
+  }
+  syncBellButton();
+}
 
 export function isBellMuted() {
   return _bellMuted;
@@ -76,11 +88,11 @@ export function isBellMuted() {
 
 export function toggleBellMuted() {
   _bellMuted = !_bellMuted;
-  localStorage.setItem("bellMuted", _bellMuted);
+  window.api.setPreference("bellMuted", _bellMuted);
   syncBellButton();
 }
 
-export function syncBellButton() {
+function syncBellButton() {
   const btn = document.getElementById("bell-toggle-btn");
   if (!btn) return;
   btn.textContent = _bellMuted ? "\uD83D\uDD15" : "\uD83D\uDD14";

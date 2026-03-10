@@ -79,6 +79,7 @@ const poolManager = require("./pool-manager");
 const apiHandlersModule = require("./api-handlers");
 const sessionStats = require("./session-stats");
 const autoUpdater = require("./auto-updater");
+const preferences = require("./preferences");
 const {
   checkFirstRun,
   getInstalledPluginVersion,
@@ -652,6 +653,12 @@ app.whenReady().then(async () => {
   }
 
   // --- IPC-only handlers (no API equivalent) ---
+  ipcMain.handle("get-preference", (_e, key, fallback) =>
+    preferences.getPreference(key, fallback),
+  );
+  ipcMain.handle("set-preference", (_e, key, value) =>
+    preferences.setPreference(key, value),
+  );
   ipcMain.handle("get-dir-colors", () => readJsonSync(COLORS_FILE, {}));
   ipcMain.handle("watch-intention", (_e, sessionId) => {
     poolManager.validateSessionId(sessionId);

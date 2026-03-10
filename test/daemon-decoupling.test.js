@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import path from "path";
 import os from "os";
+import { createRequire } from "module";
 import { createTestEnv } from "./helpers/test-env.js";
 
 describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
@@ -64,32 +65,45 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
     }
   });
 
-  it("defaults to ~/.open-cockpit when no env var set", () => {
-    const origDir = process.env.OPEN_COCKPIT_DIR;
-    const origTestDir = process.env.OPEN_COCKPIT_TEST_DIR;
-    delete process.env.OPEN_COCKPIT_DIR;
-    delete process.env.OPEN_COCKPIT_TEST_DIR;
-    try {
-      const paths = env.requireFresh("paths.js");
-      expect(paths.OPEN_COCKPIT_DIR).toBe(
-        path.join(os.homedir(), ".open-cockpit"),
-      );
-    } finally {
-      if (origDir !== undefined) process.env.OPEN_COCKPIT_DIR = origDir;
-      if (origTestDir !== undefined)
-        process.env.OPEN_COCKPIT_TEST_DIR = origTestDir;
+  // Load paths.js with custom env vars, bypassing requireFresh() which
+  // always sets OPEN_COCKPIT_DIR to env.dir. Used to test path resolution.
+  function loadPathsWithEnv(envOverrides) {
+    const req = createRequire(import.meta.url);
+    const pathsPath = path.resolve(import.meta.dirname, "../src/paths.js");
+    const saved = {};
+    for (const [k, v] of Object.entries(envOverrides)) {
+      saved[k] = process.env[k];
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
     }
+    for (const key of Object.keys(req.cache)) {
+      if (key.includes("/src/")) delete req.cache[key];
+    }
+    try {
+      return req(pathsPath);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  }
+
+  it("defaults to ~/.open-cockpit when no env var set", () => {
+    const paths = loadPathsWithEnv({
+      OPEN_COCKPIT_DIR: undefined,
+      OPEN_COCKPIT_TEST_DIR: undefined,
+    });
+    expect(paths.OPEN_COCKPIT_DIR).toBe(
+      path.join(os.homedir(), ".open-cockpit"),
+    );
   });
 
   it("OPEN_COCKPIT_DIR takes precedence over OPEN_COCKPIT_TEST_DIR", () => {
-    process.env.OPEN_COCKPIT_DIR = "/tmp/oc-dir";
-    process.env.OPEN_COCKPIT_TEST_DIR = "/tmp/oc-test-dir";
-    try {
-      const paths = env.requireFresh("paths.js");
-      expect(paths.OPEN_COCKPIT_DIR).toBe("/tmp/oc-dir");
-    } finally {
-      process.env.OPEN_COCKPIT_DIR = env.dir;
-      process.env.OPEN_COCKPIT_TEST_DIR = env.dir;
-    }
+    const paths = loadPathsWithEnv({
+      OPEN_COCKPIT_DIR: "/tmp/oc-dir",
+      OPEN_COCKPIT_TEST_DIR: "/tmp/oc-test-dir",
+    });
+    expect(paths.OPEN_COCKPIT_DIR).toBe("/tmp/oc-dir");
   });
 });

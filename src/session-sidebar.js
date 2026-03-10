@@ -9,7 +9,6 @@ import {
   isUserActive,
   isBellMuted,
   toggleBellMuted,
-  syncBellButton,
 } from "./renderer-state.js";
 import { STATUS, INITIATOR } from "./session-statuses.js";
 import {

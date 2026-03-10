@@ -12,9 +12,8 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 [ -f "$HOME/.config/git-hooks/pre-commit-base.sh" ] && source "$HOME/.config/git-hooks/pre-commit-base.sh" || true
 
 # Lint staged .js files for undefined variable errors
-STAGED_JS=$(git diff --cached --name-only -z --diff-filter=ACM -- 'src/*.js' 'src/**/*.js' 'bin/*')
-if [ -n "$STAGED_JS" ]; then
-  echo -n "$STAGED_JS" | xargs -0 npx eslint --no-warn-ignored || {
+if git diff --cached --name-only --diff-filter=ACM -- 'src/*.js' 'src/**/*.js' 'bin/*' | grep -q .; then
+  git diff --cached --name-only -z --diff-filter=ACM -- 'src/*.js' 'src/**/*.js' 'bin/*' | xargs -0 npx eslint --no-warn-ignored || {
     echo "ESLint failed — fix errors before committing."
     exit 1
   }
