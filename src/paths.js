@@ -32,6 +32,8 @@ const AGENTS_DIR = path.join(OPEN_COCKPIT_DIR, "agents");
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const LAYOUTS_DIR = path.join(OPEN_COCKPIT_DIR, "layouts");
 const SESSION_GRAPH_FILE = path.join(OPEN_COCKPIT_DIR, "session-graph.json");
+// API socket uses IS_DEV (not OWN_POOL) because each Electron instance runs
+// its own API server — two processes can't bind the same socket.
 const API_SOCKET = path.join(
   OPEN_COCKPIT_DIR,
   IS_DEV ? "api-dev.sock" : "api.sock",

@@ -36,7 +36,7 @@ function isDaemonRunning() {
 
 function getDaemonExecPath() {
   if (process.platform !== "darwin") return process.execPath;
-  const link = path.join(os.homedir(), ".open-cockpit", "electron-node");
+  const link = path.join(OPEN_COCKPIT_DIR, "electron-node");
   try {
     const target = fs.readlinkSync(link);
     if (target === process.execPath) return link;
