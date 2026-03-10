@@ -51,6 +51,10 @@ for (const ch of channels) ipcRenderer.removeAllListeners(ch);
 
 contextBridge.exposeInMainWorld("api", {
   debugLog: (tag, ...args) => ipcRenderer.send("debug-log", tag, args),
+  getPreference: (key, fallback) =>
+    ipcRenderer.invoke("get-preference", key, fallback),
+  setPreference: (key, value) =>
+    ipcRenderer.invoke("set-preference", key, value),
   getDirColors: () => ipcRenderer.invoke("get-dir-colors"),
   getSessions: () => ipcRenderer.invoke("get-sessions"),
   readIntention: (sessionId) => ipcRenderer.invoke("read-intention", sessionId),

@@ -41,6 +41,7 @@ const ACTIVE_SESSIONS_FILE = path.join(
   OPEN_COCKPIT_DIR,
   "active-sessions.json",
 );
+const PREFERENCES_FILE = path.join(OPEN_COCKPIT_DIR, "preferences.json");
 
 function isPidAlive(pid) {
   try {
@@ -77,4 +78,5 @@ module.exports = {
   ORPHAN_TERMINAL_TTL_MS,
   PENDING_RESTORE_FILE,
   ACTIVE_SESSIONS_FILE,
+  PREFERENCES_FILE,
 };

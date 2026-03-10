@@ -8,7 +8,7 @@ import {
   showNotification,
   showToast,
   toggleBellMuted,
-  syncBellButton,
+  initBellState,
 } from "./renderer-state.js";
 import { STATUS } from "./session-statuses.js";
 import { disposeTerminalEntry } from "./dock-helpers.js";
@@ -1093,7 +1093,7 @@ window.api.onRunAgent(showAgentPicker);
 document
   .getElementById("bell-toggle-btn")
   .addEventListener("click", toggleBellMuted);
-syncBellButton();
+initBellState();
 
 // Pool slot recovery toast
 window.api.onPoolSlotsRecovered((slots) => {
