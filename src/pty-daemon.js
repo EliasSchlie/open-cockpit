@@ -6,7 +6,7 @@
  * Multiple clients (Electron instances) can attach to the same terminals.
  * Terminals survive client disconnects and app restarts.
  *
- * Socket: ~/.open-cockpit/pty-daemon.sock (or pty-daemon-dev.sock for --own-pool)
+ * Socket: $OPEN_COCKPIT_DIR/pty-daemon.sock
  */
 
 const net = require("net");
@@ -24,7 +24,9 @@ const {
 } = require("./platform");
 
 const OPEN_COCKPIT_DIR =
-  process.env.OPEN_COCKPIT_TEST_DIR || path.join(os.homedir(), ".open-cockpit");
+  process.env.OPEN_COCKPIT_DIR ||
+  process.env.OPEN_COCKPIT_TEST_DIR ||
+  path.join(os.homedir(), ".open-cockpit");
 const SOCKET_PATH =
   process.env.OPEN_COCKPIT_DAEMON_SOCKET ||
   path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");

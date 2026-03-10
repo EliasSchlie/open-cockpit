@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseOrigins } from "../src/parse-origins.js";
+import {
+  parseOrigins,
+  extractInstanceDir,
+  parseInstanceDirs,
+} from "../src/parse-origins.js";
 
 // Realistic ps eww output (macOS right-aligns PIDs with variable whitespace)
 const PS_OUTPUT = `  PID   TT  STAT      TIME COMMAND
@@ -60,5 +64,35 @@ describe("parseOrigins", () => {
     const result = parseOrigins(PS_SHORT_PIDS, ["1", "456"]);
     expect(result.get("1")).toBe("pool");
     expect(result.get("456")).toBe("sub-claude");
+  });
+});
+
+describe("extractInstanceDir", () => {
+  it("extracts OPEN_COCKPIT_DIR from env string", () => {
+    const dir = extractInstanceDir(
+      "OPEN_COCKPIT_POOL=1 OPEN_COCKPIT_DIR=/home/user/.open-cockpit-dev/feature-x OTHER=1",
+    );
+    expect(dir).toBe("/home/user/.open-cockpit-dev/feature-x");
+  });
+
+  it("returns null when not present", () => {
+    const dir = extractInstanceDir("OPEN_COCKPIT_POOL=1 PATH=/usr/bin");
+    expect(dir).toBeNull();
+  });
+});
+
+describe("parseInstanceDirs", () => {
+  const PS_WITH_DIRS = `  PID   TT  STAT      TIME COMMAND
+12345   ??  S      0:01.23 /usr/bin/claude OPEN_COCKPIT_DIR=/tmp/dev-1 OPEN_COCKPIT_POOL=1
+23456   ??  S      0:00.50 /usr/bin/claude PATH=/usr/bin`;
+
+  it("extracts instance dir for tagged processes", () => {
+    const result = parseInstanceDirs(PS_WITH_DIRS, ["12345"]);
+    expect(result.get("12345")).toBe("/tmp/dev-1");
+  });
+
+  it("returns null for untagged processes", () => {
+    const result = parseInstanceDirs(PS_WITH_DIRS, ["23456"]);
+    expect(result.get("23456")).toBeNull();
   });
 });

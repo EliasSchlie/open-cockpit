@@ -2,32 +2,46 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OC_DIR="$HOME/.open-cockpit"
-PROD_SOCKET="$OC_DIR/api.sock"
-DEV_SOCKET="$OC_DIR/api-dev.sock"
-if [ -n "${COCKPIT_SOCKET:-}" ]; then
-  SOCKET="$COCKPIT_SOCKET"
-elif [ -S "$PROD_SOCKET" ]; then
-  SOCKET="$PROD_SOCKET"
-elif [ -S "$DEV_SOCKET" ]; then
-  SOCKET="$DEV_SOCKET"
-else
-  echo "Error: Open Cockpit API socket not found (neither api.sock nor api-dev.sock exist)." >&2
-  echo "The app may not be running, or lost its socket after a double-launch. Restart Open Cockpit to fix." >&2
-  exit 1
-fi
-CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
-SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$HOME/.open-cockpit/session-pids}"
-GLOBAL_AGENTS_DIR="$OC_DIR/agents"
 
-# --- Global flags ---
+# --- Global flags (parsed before socket resolution) ---
 VERBOSITY="raw"
+INSTANCE_FLAG=""
 while [[ ${1:-} =~ ^- ]]; do
   case "$1" in
     -v|--verbosity) VERBOSITY="${2:?verbosity level required (raw|response|conversation|full)}"; shift 2 ;;
+    --instance) INSTANCE_FLAG="${2:?instance name required}"; shift 2 ;;
     *) break ;;
   esac
 done
+
+# --- Resolve state directory ---
+# Priority: --instance flag > OPEN_COCKPIT_DIR env var > default (~/.open-cockpit)
+if [ -n "$INSTANCE_FLAG" ]; then
+  OC_DIR="$HOME/.open-cockpit-dev/$INSTANCE_FLAG"
+elif [ -n "${OPEN_COCKPIT_DIR:-}" ]; then
+  OC_DIR="$OPEN_COCKPIT_DIR"
+else
+  OC_DIR="$HOME/.open-cockpit"
+fi
+
+# --- Resolve API socket ---
+SOCKET_PATH="$OC_DIR/api.sock"
+if [ -n "${COCKPIT_SOCKET:-}" ]; then
+  SOCKET="$COCKPIT_SOCKET"
+elif [ -S "$SOCKET_PATH" ]; then
+  SOCKET="$SOCKET_PATH"
+else
+  echo "Error: Open Cockpit API socket not found at $SOCKET_PATH" >&2
+  if [ -n "$INSTANCE_FLAG" ]; then
+    echo "Instance '$INSTANCE_FLAG' may not be running." >&2
+  else
+    echo "The app may not be running, or lost its socket after a double-launch. Restart Open Cockpit to fix." >&2
+  fi
+  exit 1
+fi
+CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+SESSION_PIDS_DIR="${SESSION_PIDS_DIR:-$OC_DIR/session-pids}"
+GLOBAL_AGENTS_DIR="$OC_DIR/agents"
 
 # Auto-detect session ID by walking PID ancestry.
 # Checks each ancestor PID against session-pids/ directory.

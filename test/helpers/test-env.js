@@ -32,7 +32,9 @@ export function createTestEnv(prefix = "open-cockpit-test") {
   }
 
   const origEnv = process.env.OPEN_COCKPIT_TEST_DIR;
+  const origDirEnv = process.env.OPEN_COCKPIT_DIR;
   process.env.OPEN_COCKPIT_TEST_DIR = dir;
+  process.env.OPEN_COCKPIT_DIR = dir;
 
   // Track modules loaded via requireFresh so we can clean them up
   const loadedModules = new Set();
@@ -97,6 +99,11 @@ export function createTestEnv(prefix = "open-cockpit-test") {
         delete process.env.OPEN_COCKPIT_TEST_DIR;
       } else {
         process.env.OPEN_COCKPIT_TEST_DIR = origEnv;
+      }
+      if (origDirEnv === undefined) {
+        delete process.env.OPEN_COCKPIT_DIR;
+      } else {
+        process.env.OPEN_COCKPIT_DIR = origDirEnv;
       }
 
       // Clear cached modules so next test gets fresh imports

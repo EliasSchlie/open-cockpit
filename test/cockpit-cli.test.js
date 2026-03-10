@@ -729,47 +729,6 @@ describe("cockpit-cli", () => {
   });
 
   describe("socket auto-detection", () => {
-    it("falls back to api-dev.sock when api.sock missing", async () => {
-      // Move api.sock to api-dev.sock
-      const ocDir = path.join(TMP_DIR, ".open-cockpit");
-      const prodSock = path.join(ocDir, "api.sock");
-      const devSock = path.join(ocDir, "api-dev.sock");
-      fs.renameSync(prodSock, devSock);
-
-      try {
-        const r = await runCli(["ping"]);
-        expect(r.code).toBe(0);
-        expect(r.stdout).toContain("pong");
-      } finally {
-        // Restore
-        fs.renameSync(devSock, prodSock);
-      }
-    });
-
-    it("prefers api.sock when both exist", async () => {
-      // Create a dev socket that returns a different response
-      const ocDir = path.join(TMP_DIR, ".open-cockpit");
-      const devSock = path.join(ocDir, "api-dev.sock");
-      const devServer = net.createServer((socket) => {
-        socket.on("data", () => {
-          socket.write(
-            JSON.stringify({ type: "error", error: "wrong socket" }) + "\n",
-          );
-        });
-      });
-
-      await new Promise((resolve) => devServer.listen(devSock, resolve));
-
-      try {
-        // api.sock exists and works, so it should be preferred
-        const r = await runCli(["ping"]);
-        expect(r.code).toBe(0);
-        expect(r.stdout).toContain("pong");
-      } finally {
-        devServer.close();
-      }
-    });
-
     it("respects COCKPIT_SOCKET env override", async () => {
       const ocDir = path.join(TMP_DIR, ".open-cockpit");
       const customSock = path.join(ocDir, "custom.sock");

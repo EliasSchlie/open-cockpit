@@ -711,7 +711,10 @@ async function spawnPoolSlot(index, args) {
     cwd: os.homedir(),
     cmd: claudePath,
     args,
-    env: { OPEN_COCKPIT_POOL: "1" },
+    env: {
+      OPEN_COCKPIT_POOL: "1",
+      OPEN_COCKPIT_DIR: OPEN_COCKPIT_DIR,
+    },
     // Use last-known terminal dimensions so Claude's TUI starts at the
     // correct size. Falls back to daemon default (80×24) on first launch.
     ...dims,
@@ -1844,6 +1847,7 @@ function watchIntention(sessionId) {
 // Checks for .code-workspace files (matching project name or inside folder).
 async function openInCursor(cwd) {
   if (!cwd) return;
+  debugLog("main", "openInCursor", cwd);
 
   const projectName = path.basename(cwd);
   const workspaceDir = path.join(
@@ -1859,7 +1863,7 @@ async function openInCursor(cwd) {
     `${projectName}.code-workspace`,
   );
   if (fs.existsSync(namedWorkspace)) {
-    await platform.openInApp("Cursor", namedWorkspace);
+    await platform.openInCursor(namedWorkspace);
     return;
   }
 
@@ -1868,7 +1872,7 @@ async function openInCursor(cwd) {
     const entries = fs.readdirSync(cwd);
     const localWs = entries.find((e) => e.endsWith(".code-workspace"));
     if (localWs) {
-      await platform.openInApp("Cursor", path.join(cwd, localWs));
+      await platform.openInCursor(path.join(cwd, localWs));
       return;
     }
   } catch {
@@ -1876,7 +1880,7 @@ async function openInCursor(cwd) {
   }
 
   // Fall back to opening the folder
-  await platform.openInApp("Cursor", cwd);
+  await platform.openInCursor(cwd);
 }
 
 // Run an AppleScript action on the iTerm session matching a PID's TTY.

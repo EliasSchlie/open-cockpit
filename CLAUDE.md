@@ -59,8 +59,8 @@ Electron app + Claude Code plugin for session intention tracking.
 - `~/.open-cockpit/pending-restore.json` — Sessions to auto-resume on next pool init (legacy, transient)
 - `~/.open-cockpit/colors.json` — Directory color overrides
 - `~/.open-cockpit/debug.log` — Debug log (rotates at 2 MB)
-- `~/.open-cockpit/api.sock` / `api-dev.sock` — API sockets
-- `~/.open-cockpit/pty-daemon.sock` / `pty-daemon.pid` — PTY daemon (or `pty-daemon-dev.*` with `--own-pool`)
+- `~/.open-cockpit/api.sock` — API socket (scoped to `OPEN_COCKPIT_DIR`)
+- `~/.open-cockpit/pty-daemon.sock` / `pty-daemon.pid` — PTY daemon (scoped to `OPEN_COCKPIT_DIR`)
 
 ## Launching the app
 
@@ -109,14 +109,14 @@ Tag push → CI builds all platforms → publish the draft. See [docs/releasing.
 ## Dev vs production
 
 - `npm start` — production (don't touch during dev)
-- `npm run dev` — dev instance, separate user data, safe to restart
-- `npm run dev:own-pool` — dev with isolated pool (use when modifying pool)
+- `npm run dev` — dev instance (`--instance dev`), fully isolated via `OPEN_COCKPIT_DIR`
+- Custom: `npm run build && electron . --instance my-feature` — any name works
 
 ## Reloading after changes
 
 - **Renderer** (`renderer.js`, `styles.css`, `index.html`): `npm run build`, then Cmd+R
 - **Main process** (`main.js`, `preload.js`): kill and restart dev instance
-- **Daemon** (`pty-daemon.js`): `kill $(cat ~/.open-cockpit/pty-daemon.pid)`, restart app (kills all terminals). With `--own-pool`: `kill $(cat ~/.open-cockpit/pty-daemon-dev.pid)`
+- **Daemon** (`pty-daemon.js`): `kill $(cat ~/.open-cockpit/pty-daemon.pid)`, restart app (kills all terminals)
 
 ## Native modules
 

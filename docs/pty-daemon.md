@@ -21,7 +21,7 @@ Electron (any instance)          PTY Daemon
 
 ## Socket protocol
 
-Unix domain socket at `~/.open-cockpit/pty-daemon.sock` (or `pty-daemon-dev.sock` with `--own-pool`). Newline-delimited JSON.
+Unix domain socket at `$OPEN_COCKPIT_DIR/pty-daemon.sock`. Newline-delimited JSON.
 
 ### Client → Daemon
 
@@ -58,7 +58,7 @@ The daemon also augments `PATH` with `~/.claude/local/bin`, `~/.local/bin`, and 
 ## Lifecycle
 
 - **Auto-start**: Electron's main process spawns the daemon if not running
-- **PID file**: `~/.open-cockpit/pty-daemon.pid` (or `pty-daemon-dev.pid` with `--own-pool`)
+- **PID file**: `$OPEN_COCKPIT_DIR/pty-daemon.pid`
 - **Auto-exit**: 30 minutes after last terminal closes and last client disconnects
 - **Signals**: SIGTERM/SIGINT → clean shutdown (kills all PTYs, removes socket)
 

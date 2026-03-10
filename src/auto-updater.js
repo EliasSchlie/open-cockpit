@@ -1,5 +1,5 @@
 const { autoUpdater } = require("electron-updater");
-const { IS_DEV } = require("./paths");
+const { INSTANCE_NAME } = require("./paths");
 const { UPDATE_STATUS } = require("./session-statuses");
 
 const UPDATE_CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
@@ -60,7 +60,7 @@ function init({ debugLog, send }) {
   _debugLog = debugLog;
   _send = send || (() => {});
 
-  if (IS_DEV) {
+  if (INSTANCE_NAME) {
     _debugLog("auto-updater", "skipping in dev mode");
     return;
   }
@@ -135,7 +135,7 @@ function init({ debugLog, send }) {
 }
 
 function checkForUpdates() {
-  if (IS_DEV) {
+  if (INSTANCE_NAME) {
     _setState({ status: UPDATE_STATUS.UP_TO_DATE });
     _emit();
     return Promise.resolve();
@@ -147,7 +147,7 @@ function checkForUpdates() {
 }
 
 function downloadUpdate() {
-  if (IS_DEV) return Promise.resolve();
+  if (INSTANCE_NAME) return Promise.resolve();
   return autoUpdater.downloadUpdate().catch((err) => {
     _debugLog("auto-updater", `download failed: ${err.message}`);
     throw err;
@@ -155,7 +155,7 @@ function downloadUpdate() {
 }
 
 function installUpdate() {
-  if (IS_DEV) return;
+  if (INSTANCE_NAME) return;
   autoUpdater.quitAndInstall();
 }
 
