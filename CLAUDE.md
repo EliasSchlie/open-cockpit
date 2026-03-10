@@ -55,6 +55,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `~/.open-cockpit/shortcuts.json` — Keyboard shortcut overrides
 - `~/.open-cockpit/setup-scripts/` — Setup scripts for Cmd+N
 - `~/.open-cockpit/agents/` — Global agent scripts ([docs/agents.md](docs/agents.md))
+- `~/.open-cockpit/pending-restore.json` — Sessions to auto-resume on next pool init (transient)
 - `~/.open-cockpit/colors.json` — Directory color overrides
 - `~/.open-cockpit/debug.log` — Debug log (rotates at 2 MB)
 - `~/.open-cockpit/api.sock` / `api-dev.sock` — API sockets
