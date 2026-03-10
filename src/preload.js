@@ -39,7 +39,6 @@ const channels = [
   "open-pool-settings",
   "session-info",
   "toggle-bell",
-  "jitter-terminal",
   "session-search",
   "run-agent",
   "pool-slots-recovered",
@@ -174,8 +173,6 @@ contextBridge.exposeInMainWorld("api", {
   getAllSessionStats: () => ipcRenderer.invoke("get-all-session-stats"),
   onOpenSessionInfo: (callback) =>
     ipcRenderer.on("session-info", () => callback()),
-  onJitterTerminal: (callback) =>
-    ipcRenderer.on("jitter-terminal", () => callback()),
 
   // Dialog state — suppresses global shortcuts while a modal is open
   setDialogOpen: (open) => ipcRenderer.send("dialog-open", open),
