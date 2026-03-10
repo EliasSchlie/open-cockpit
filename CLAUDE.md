@@ -16,15 +16,13 @@ Key modules — full file index in [docs/architecture.md](docs/architecture.md).
 
 Runtime paths: `~/.open-cockpit/` (see [docs/architecture.md](docs/architecture.md#key-runtime-paths)).
 
-## Launching the app
+## Dev instances
 
-See [docs/dev-instances.md](docs/dev-instances.md#launching) for launch/restart commands.
+See [docs/dev-instances.md](docs/dev-instances.md) for full details.
 
-- `npm start` — base instance (no isolation, don't touch during dev)
 - `npm run dev` — dev instance, auto-named from worktree (e.g. `.wt/my-feature/` → `--instance my-feature`)
 - `npm run dev:watch` — same + auto-rebuild on `src/` changes, app auto-relaunches
 - Dev instances require a name — `npm run dev` from root repo (not a worktree) errors
-- Confirm with the user before restarting production — it disrupts all active sessions.
 
 ## Reloading after changes
 
