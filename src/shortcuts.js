@@ -28,7 +28,7 @@ const DEFAULT_SHORTCUTS = {
   "jump-recent-idle": "CmdOrCtrl+J",
   "archive-current-session": "CmdOrCtrl+D",
   "open-in-cursor": "Ctrl+Alt+Cmd+C",
-  "toggle-command-palette": "CmdOrCtrl+/",
+  "toggle-command-palette": "CmdOrCtrl+Shift+P",
   "open-pool-settings": "CmdOrCtrl+,",
   // Dock panel management
   "focus-next-pane": "CmdOrCtrl+Alt+]",
