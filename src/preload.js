@@ -40,6 +40,7 @@ const channels = [
   "session-info",
   "toggle-bell",
   "session-search",
+  "run-agent",
   "pool-slots-recovered",
   "update-status-changed",
 ];
@@ -246,6 +247,12 @@ contextBridge.exposeInMainWorld("api", {
   onToggleBell: (callback) => ipcRenderer.on("toggle-bell", () => callback()),
   onSessionSearch: (callback) =>
     ipcRenderer.on("session-search", () => callback()),
+  onRunAgent: (callback) => ipcRenderer.on("run-agent", () => callback()),
+
+  // Agents
+  listAgents: (cwd) => ipcRenderer.invoke("list-agents", cwd),
+  runAgent: (scriptPath, args) =>
+    ipcRenderer.invoke("run-agent", scriptPath, args),
 
   // Open in Cursor
   openInCursor: (cwd) => ipcRenderer.invoke("open-in-cursor", cwd),
