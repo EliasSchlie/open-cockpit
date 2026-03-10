@@ -162,3 +162,4 @@ git pull
 - [docs/shortcuts.md](docs/shortcuts.md) — Keyboard shortcuts reference
 - [docs/theme.md](docs/theme.md) — Color scheme, directory colors
 - [docs/debug-logging.md](docs/debug-logging.md) — Debug logging
+- [docs/testing/](docs/testing/) — Testing philosophy, isolation strategy
