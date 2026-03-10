@@ -4,17 +4,9 @@
 // NOT reentrant — calling withPoolLock from inside withPoolLock will deadlock.
 
 const fs = require("fs");
+const { isPidAlive } = require("./paths");
 
 module.exports = { createPoolLock };
-
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function createPoolLock(poolFilePath) {
   const lockFile = poolFilePath + ".lock";
@@ -30,29 +22,35 @@ function createPoolLock(poolFilePath) {
       fs.closeSync(fd);
       return true;
     } catch (err) {
-      if (err.code === "EEXIST") {
-        // Check for stale lock (owner PID dead)
-        try {
-          const content = fs.readFileSync(lockFile, "utf-8").trim();
-          const ownerPid = parseInt(content.split("\n")[0], 10);
-          if (ownerPid && !isPidAlive(ownerPid)) {
-            try {
-              fs.unlinkSync(lockFile);
-            } catch {
-              /* race — another process cleaned it */
-            }
-          }
-        } catch {
-          /* race — file disappeared */
-        }
-        return false;
-      }
+      if (err.code === "EEXIST") return false;
       throw err;
+    }
+  }
+
+  // Check if the current lockfile is stale (owner PID dead) and clean it up.
+  function tryCleanStaleLock() {
+    try {
+      const content = fs.readFileSync(lockFile, "utf-8").trim();
+      const ownerPid = parseInt(content.split("\n")[0], 10);
+      if (ownerPid && !isPidAlive(ownerPid)) {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {
+          /* race — another process cleaned it */
+        }
+      }
+    } catch {
+      /* race — file disappeared */
     }
   }
 
   // Acquire the cross-process file lock, retrying until timeout.
   async function acquireFileLock(maxWait = 10000) {
+    if (tryAcquireFileLock()) return;
+
+    // Lock is held — check once for stale lock before entering retry loop
+    tryCleanStaleLock();
+
     const start = Date.now();
     while (Date.now() - start < maxWait) {
       if (tryAcquireFileLock()) return;
