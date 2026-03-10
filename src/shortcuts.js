@@ -53,6 +53,8 @@ const DEFAULT_SHORTCUTS = {
   "jitter-terminal": "CmdOrCtrl+Shift+J",
   // Relaunch app (rebuild + restart main process)
   "relaunch-app": "CmdOrCtrl+Shift+R",
+  // Restart daemon (kills all terminals)
+  "restart-daemon": "",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",

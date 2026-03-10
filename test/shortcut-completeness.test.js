@@ -37,7 +37,7 @@ const menuActions = shortcutActionIds.filter(
 const MENU_EXEMPT = new Set([]);
 
 // Actions handled entirely in the main process (no renderer IPC channel needed)
-const MAIN_PROCESS_ONLY = new Set(["relaunch-app"]);
+const MAIN_PROCESS_ONLY = new Set(["relaunch-app", "restart-daemon"]);
 
 // Shortcut action IDs that map to a different IPC channel name
 // (e.g. "next-tab" shortcut sends "next-terminal-tab" IPC message)

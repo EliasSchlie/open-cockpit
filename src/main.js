@@ -418,6 +418,15 @@ function buildMenu() {
             app.exit(0);
           },
         },
+        {
+          label: "Restart Daemon",
+          accelerator: accel("restart-daemon"),
+          click: async () => {
+            await daemonClient.stopDaemon();
+            await daemonClient.ensureDaemon();
+            debugLog("main", "daemon restarted via menu");
+          },
+        },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
