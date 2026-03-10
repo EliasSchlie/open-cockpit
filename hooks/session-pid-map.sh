@@ -41,7 +41,10 @@ echo "$session_id" > "$SESSION_PIDS_DIR/$PPID"
 for f in "$SESSION_PIDS_DIR"/*; do
     [ -f "$f" ] || continue
     pid=$(basename "$f")
-    kill -0 "$pid" 2>/dev/null || rm -f "$f"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo "[session-pid-map] Cleanup: removing session-pids/$pid (process dead)" >> "$OC_DIR/debug.log" 2>/dev/null || true
+        rm -f "$f"
+    fi
 done
 
 # Deduplicate: if another alive PID maps to same session_id, remove the older file
@@ -53,6 +56,7 @@ for f in "$SESSION_PIDS_DIR"/*; do
     other_sid=$(cat "$f" 2>/dev/null) || continue
     if [ "$other_sid" = "$session_id" ]; then
         if [ "$f" -ot "$SESSION_PIDS_DIR/$PPID" ]; then
+            echo "[session-pid-map] Dedup: removing session-pids/$pid (same session_id=$session_id as PID $PPID, older file)" >> "$OC_DIR/debug.log" 2>/dev/null || true
             rm -f "$f"
         fi
     fi
