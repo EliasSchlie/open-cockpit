@@ -60,7 +60,7 @@ Electron app + Claude Code plugin for session intention tracking.
 - `~/.open-cockpit/colors.json` — Directory color overrides
 - `~/.open-cockpit/debug.log` — Debug log (rotates at 2 MB)
 - `~/.open-cockpit/api.sock` / `api-dev.sock` — API sockets
-- `~/.open-cockpit/pty-daemon.sock` / `pty-daemon.pid` — PTY daemon
+- `~/.open-cockpit/pty-daemon.sock` / `pty-daemon.pid` — PTY daemon (or `pty-daemon-dev.*` with `--own-pool`)
 
 ## Launching the app
 
@@ -116,7 +116,7 @@ Tag push → CI builds all platforms → publish the draft. See [docs/releasing.
 
 - **Renderer** (`renderer.js`, `styles.css`, `index.html`): `npm run build`, then Cmd+R
 - **Main process** (`main.js`, `preload.js`): kill and restart dev instance
-- **Daemon** (`pty-daemon.js`): `kill $(cat ~/.open-cockpit/pty-daemon.pid)`, restart app (kills all terminals)
+- **Daemon** (`pty-daemon.js`): `kill $(cat ~/.open-cockpit/pty-daemon.pid)`, restart app (kills all terminals). With `--own-pool`: `kill $(cat ~/.open-cockpit/pty-daemon-dev.pid)`
 
 ## Native modules
 
