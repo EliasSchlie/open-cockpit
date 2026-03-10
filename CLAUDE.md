@@ -138,8 +138,10 @@ Merging: always merge from root worktree without `--delete-branch`:
 cd ~/projects/open-cockpit
 gh pr merge <number> --squash
 git worktree remove .wt/<name>
-git branch -d <branch>
 git pull
+# Safe force-delete: -d won't work after squash merge (history is rewritten),
+# so verify PR is merged via GitHub first, then -D
+gh pr view <number> --json state -q '.state' | grep -q MERGED && git branch -D <branch>
 ```
 
 ## Plans
