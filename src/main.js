@@ -51,8 +51,9 @@ const { PLUGIN_VERSION } = require("./session-statuses");
 // Used by both main and renderer (via IPC). Rotates at 2 MB.
 let debugLogFd = null;
 let debugLogSize = 0;
+const INSTANCE_TAG = IS_DEV ? "dev" : "prod";
 function debugLog(tag, ...args) {
-  const line = `${new Date().toISOString()} [${tag}] ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}\n`;
+  const line = `${new Date().toISOString()} [${tag}:${INSTANCE_TAG}] ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}\n`;
   try {
     if (!debugLogFd) {
       debugLogFd = fs.openSync(DEBUG_LOG_FILE, "a", 0o600);
@@ -507,6 +508,11 @@ app.whenReady().then(async () => {
       await poolManager.reapOrphanedTerminals();
     } catch {
       /* logged inside reapOrphanedTerminals */
+    }
+    try {
+      await poolManager.reapOrphanedProcesses();
+    } catch {
+      /* logged inside reapOrphanedProcesses */
     }
   }, 30000);
 

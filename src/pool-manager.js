@@ -1459,6 +1459,89 @@ async function reapOrphanedTerminals() {
   }
 }
 
+// Kill orphaned Claude processes whose PIDs are in session-pids/ but not tracked
+// by any pool slot. These arise when cross-process races spawn duplicate processes
+// during offload/recovery (e.g. prod+dev instances racing on the same pool).
+async function reapOrphanedProcesses() {
+  const pool = readPool();
+  if (!pool) return;
+
+  // Collect all PIDs tracked by pool slots
+  const poolPids = new Set(pool.slots.map((s) => String(s.pid)));
+
+  // Scan session-pids directory for live PIDs not in the pool
+  let pidFiles;
+  try {
+    pidFiles = fs.readdirSync(SESSION_PIDS_DIR);
+  } catch {
+    return;
+  }
+
+  // Filter to alive, non-pool PIDs
+  const candidates = [];
+  for (const pidStr of pidFiles) {
+    if (poolPids.has(pidStr)) continue;
+    if (!isPidAlive(Number(pidStr))) {
+      // Dead PID — clean up the stale file
+      try {
+        fs.unlinkSync(path.join(SESSION_PIDS_DIR, pidStr));
+      } catch {
+        /* ENOENT race */
+      }
+      continue;
+    }
+    candidates.push(pidStr);
+  }
+  if (candidates.length === 0) return;
+
+  // Detect origins in batch (external/custom sessions are legitimate)
+  const { batchDetectOrigins } = getSessionDiscovery();
+  let origins;
+  try {
+    origins = await batchDetectOrigins(candidates);
+  } catch {
+    return; // Can't determine origins — skip
+  }
+
+  for (const pidStr of candidates) {
+    const origin = origins.get(pidStr);
+    if (origin !== "pool") continue;
+
+    // This is an orphaned pool process — check it has no intention
+    // (safety: don't kill sessions the user is actively using)
+    let sessionId;
+    try {
+      sessionId = fs
+        .readFileSync(path.join(SESSION_PIDS_DIR, pidStr), "utf-8")
+        .trim();
+    } catch {
+      continue;
+    }
+    const intention = readIntention(sessionId);
+    if (intention) continue; // Has an intention — user may be using it
+
+    _debugLog(
+      "main",
+      `Reaping orphaned pool process PID=${pidStr} session=${sessionId}`,
+    );
+    try {
+      process.kill(Number(pidStr), "SIGTERM");
+    } catch {
+      /* ESRCH — already dead */
+    }
+    try {
+      fs.unlinkSync(path.join(SESSION_PIDS_DIR, pidStr));
+    } catch {
+      /* ENOENT race */
+    }
+    try {
+      fs.unlinkSync(path.join(IDLE_SIGNALS_DIR, pidStr));
+    } catch {
+      /* ENOENT */
+    }
+  }
+}
+
 function pruneSessionGraph(pool) {
   const graph = readSessionGraph();
   const graphKeys = Object.keys(graph);
@@ -1941,6 +2024,7 @@ module.exports = {
   getPoolTermIds,
   killOrphanedTerminals,
   reapOrphanedTerminals,
+  reapOrphanedProcesses,
   pruneSessionGraph,
   syncPoolStatuses,
   killSlotProcess,
