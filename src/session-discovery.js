@@ -1123,7 +1123,17 @@ async function getSessions() {
       sessionsCache = result;
       sessionsCacheTs = Date.now();
       lastFullRefreshTs = Date.now();
-      lastDirFingerprint = computeDirFingerprint();
+      // Don't store fingerprint if any live session has no idle signal and
+      // was classified as fresh/typing. That's an ambiguous state (may be
+      // processing but transcriptContains hasn't found the user entry yet).
+      // Clearing the fingerprint forces re-evaluation on the next poll.
+      const hasAmbiguous = result.some(
+        (s) =>
+          s.alive &&
+          !s.idleTs &&
+          (s.status === STATUS.FRESH || s.status === STATUS.TYPING),
+      );
+      lastDirFingerprint = hasAmbiguous ? null : computeDirFingerprint();
       return result;
     })
     .finally(() => {
