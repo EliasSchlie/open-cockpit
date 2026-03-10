@@ -397,6 +397,16 @@ async function openInApp(appName, target) {
   }).unref();
 }
 
+// Open a file or directory in Cursor using the CLI (reliable, unlike `open -a`
+// which just activates the app without switching to the requested directory).
+async function openInCursor(target) {
+  try {
+    await execFileAsync("cursor", [target], { timeout: 10000 });
+  } catch {
+    await openInApp("Cursor", target);
+  }
+}
+
 // --- iTerm2 AppleScript interaction (macOS-only) ---
 
 async function withITermSessionByTty(tty, action, resultValue) {
@@ -526,6 +536,7 @@ module.exports = {
   getProcessTty,
   activateApp,
   openInApp,
+  openInCursor,
   withITermSessionByTty,
   readFileTail,
   findFileRecursive,
