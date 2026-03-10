@@ -18,18 +18,30 @@ function readPool(poolFile) {
  * Write pool.json atomically (write to tmp, then rename).
  */
 function writePool(poolFile, pool) {
+  const crypto = require("crypto");
   const { IS_WINDOWS } = require("./platform");
   fs.mkdirSync(path.dirname(poolFile), {
     recursive: true,
     ...(IS_WINDOWS ? {} : { mode: 0o700 }),
   });
-  const tmp = poolFile + ".tmp";
-  fs.writeFileSync(
-    tmp,
-    JSON.stringify(pool, null, 2),
-    IS_WINDOWS ? {} : { mode: 0o600 },
-  );
-  fs.renameSync(tmp, poolFile);
+  // Use a unique temp file per write to avoid cross-process races
+  // (two Electron instances during restart sharing a fixed .tmp path)
+  const suffix = crypto.randomBytes(6).toString("hex");
+  const tmp = `${poolFile}.${suffix}.tmp`;
+  try {
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify(pool, null, 2),
+      IS_WINDOWS ? {} : { mode: 0o600 },
+    );
+    fs.renameSync(tmp, poolFile);
+  } catch (err) {
+    // Clean up temp file on failure
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    throw err;
+  }
 }
 
 /**

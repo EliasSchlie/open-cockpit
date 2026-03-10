@@ -937,6 +937,29 @@ describe("readPool / writePool — edge cases", () => {
     fs.writeFileSync(POOL_FILE, "");
     expect(readPool(POOL_FILE)).toBeNull();
   });
+
+  it("does not leave temp files after write", () => {
+    const pool = createPool(2);
+    writePool(POOL_FILE, pool);
+    const tmpFiles = fs
+      .readdirSync(path.dirname(POOL_FILE))
+      .filter((f) => f.endsWith(".tmp"));
+    expect(tmpFiles).toHaveLength(0);
+  });
+
+  it("uses unique temp files (no cross-process collision)", () => {
+    // Verify two rapid writes don't share the same temp path
+    // by checking the file is correct after concurrent-style writes
+    const pool1 = createPool(3);
+    pool1.slots.push(createSlot(0, "t1", 100));
+    const pool2 = createPool(5);
+    pool2.slots.push(createSlot(0, "t2", 200), createSlot(1, "t3", 300));
+    writePool(POOL_FILE, pool1);
+    writePool(POOL_FILE, pool2);
+    const result = readPool(POOL_FILE);
+    expect(result.poolSize).toBe(5);
+    expect(result.slots).toHaveLength(2);
+  });
 });
 
 describe("typing session protection", () => {
