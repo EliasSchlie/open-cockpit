@@ -81,13 +81,14 @@ cockpit-cli -v response start "quick question" --block
 
 `followup` sends a new prompt to a finished session -- conversation history is preserved.
 
-- Only works on **idle** sessions. If still processing, use `wait` first.
+- By default, only works on **idle** sessions. If still processing, use `wait` first.
+- Use `--force` to send a followup regardless of session status (e.g., to respond when a session is waiting for user input).
 - If offloaded, use `resume` to bring it back.
 
 ## Best practices
 
 - **Prefer fire-and-forget + explicit `wait`** over `--block` for parallel work.
-- **Use `followup` for multi-turn, not `input`.** `input` is for raw terminal interaction.
+- **Use `followup` for multi-turn, not `input`.** `input` types text but does not press Enter — it's for raw terminal interaction only.
 - **Clean completed sessions** to free pool capacity: `cockpit-cli clean`
 
 ## CLI reference

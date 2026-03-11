@@ -502,8 +502,10 @@ function buildApiHandlers() {
     return withPoolLock(async () => {
       const { pool: p, slot } = findSlotBySessionId(msg.sessionId);
       const status = await getEffectiveSlotStatus(slot);
-      if (status !== POOL_STATUS.IDLE)
-        throw new Error(`Session is ${status}, expected idle`);
+      if (status !== POOL_STATUS.IDLE && !msg.force)
+        throw new Error(
+          `Session is ${status}, expected idle (use force to override)`,
+        );
       await sendPromptToTerminal(slot.termId, msg.prompt);
       slot.status = POOL_STATUS.BUSY;
       writePool(p);

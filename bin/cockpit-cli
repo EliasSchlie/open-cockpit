@@ -865,22 +865,25 @@ case "$CMD" in
     SESSION_ID="$RESOLVED_SESSION_ID"
     shift
     BLOCK=false
+    FORCE=false
     PROMPT=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --block) BLOCK=true; shift ;;
+        --force) FORCE=true; shift ;;
         -v|--verbosity) VERBOSITY="${2:?verbosity level required}"; shift 2 ;;
         -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) PROMPT="$1"; shift ;;
       esac
     done
     if [[ -z "$PROMPT" ]]; then
-      echo "Usage: cockpit-cli followup <id> <prompt> [--block]" >&2
+      echo "Usage: cockpit-cli followup <id> <prompt> [--block] [--force]" >&2
       exit 1
     fi
 
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON}"
+    FORCE_JSON=$($FORCE && echo "true" || echo "false")
+    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON,\"force\":$FORCE_JSON}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     SID=$(json_field "$RESULT" "sessionId")
@@ -1615,7 +1618,7 @@ Targets: Most commands accept a <target> which can be:
 
   start <prompt> [--block]       Send prompt to fresh slot, return session ID
   resume <id> [--block]          Resume offloaded/archived session
-  followup <id> <prompt> [--block]  Follow up on idle session
+  followup <id> <prompt> [--block] [--force]  Follow up on session (--force skips idle check)
   wait [id]                      Wait for session to finish, print output
   capture <target>               Show live terminal content
   result <target>                Print output (error if still running)
