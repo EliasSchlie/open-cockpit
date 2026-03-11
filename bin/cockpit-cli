@@ -131,17 +131,18 @@ if [[ "${1:-}" == "dev" ]]; then
       LAUNCH_ARGS=(--dev --instance "$DEV_SESSION_ID" --parent-pid "$DEV_CLAUDE_PID")
       [ -n "$DEV_HIDDEN" ] && LAUNCH_ARGS+=(--hidden)
 
-      # Unset OPEN_COCKPIT_DIR so the dev instance's bootstrap derives its own
-      # isolated directory from --instance. Without this, the env var inherited
-      # from a base-instance pool session would make the dev instance share
-      # production state (daemon, pool, sockets).
+      # Clear env vars that break Electron when inherited from parent processes:
+      # - OPEN_COCKPIT_DIR: base-instance pool sessions export this; without
+      #   clearing, the dev instance shares production state (daemon, pool, sockets).
+      # - ELECTRON_RUN_AS_NODE: Cursor/Claude Code sets this, making Electron
+      #   run as plain Node.js (require("electron").app is undefined).
       if [ -n "$DEV_WATCH" ]; then
         # dev:watch uses scripts/dev-watch.js — pass electron args after "--"
         (cd "$PROJECT_DIR" && \
-          OPEN_COCKPIT_DIR= nohup node scripts/dev-watch.js -- "${LAUNCH_ARGS[@]}" > /dev/null 2>&1 &)
+          OPEN_COCKPIT_DIR= ELECTRON_RUN_AS_NODE= nohup node scripts/dev-watch.js -- "${LAUNCH_ARGS[@]}" > /dev/null 2>&1 &)
       else
         (cd "$PROJECT_DIR" && npm run build && \
-          OPEN_COCKPIT_DIR= nohup npx electron . "${LAUNCH_ARGS[@]}" > /dev/null 2>&1 &)
+          OPEN_COCKPIT_DIR= ELECTRON_RUN_AS_NODE= nohup npx electron . "${LAUNCH_ARGS[@]}" > /dev/null 2>&1 &)
       fi
       echo "Dev instance launched: $DEV_SESSION_ID" >&2
       echo "  Dir: $dev_instance_dir" >&2
