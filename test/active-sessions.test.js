@@ -26,14 +26,14 @@ describe("active-sessions registry", () => {
     it("adds a session to the registry", () => {
       activeSessionsModule.registerActiveSession("sess-001");
       const registry = activeSessionsModule.readActiveRegistry();
-      expect(registry["sess-001"]).toEqual({ claudeSessionId: "sess-001" });
+      expect(registry["sess-001"]).toBe(true);
     });
 
     it("overwrites existing entry", () => {
       activeSessionsModule.registerActiveSession("sess-001");
       activeSessionsModule.registerActiveSession("sess-001");
       const registry = activeSessionsModule.readActiveRegistry();
-      expect(registry["sess-001"]).toEqual({ claudeSessionId: "sess-001" });
+      expect(registry["sess-001"]).toBe(true);
     });
 
     it("handles multiple sessions", () => {
@@ -91,10 +91,7 @@ describe("active-sessions registry", () => {
       const toRestore =
         activeSessionsModule.getSessionsToRestore(liveSessionIds);
       expect(toRestore).toHaveLength(2);
-      expect(toRestore.map((r) => r.sessionId).sort()).toEqual([
-        "sess-001",
-        "sess-003",
-      ]);
+      expect(toRestore.sort()).toEqual(["sess-001", "sess-003"]);
     });
 
     it("returns empty when all sessions are live", () => {

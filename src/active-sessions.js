@@ -14,6 +14,8 @@ function setRestoreInProgress(value) {
   _restoreInProgress = value;
 }
 
+// Registry format: { [sessionId]: true }
+// Only the key set matters — values are ignored.
 function readActiveRegistry() {
   return readJsonSync(ACTIVE_SESSIONS_FILE, {});
 }
@@ -24,7 +26,7 @@ function writeActiveRegistry(registry) {
 
 function registerActiveSession(sessionId) {
   const registry = readActiveRegistry();
-  registry[sessionId] = { claudeSessionId: sessionId };
+  registry[sessionId] = true;
   writeActiveRegistry(registry);
 }
 
@@ -35,12 +37,13 @@ function unregisterActiveSession(sessionId) {
   writeActiveRegistry(registry);
 }
 
+// Returns session IDs that are in the registry but not in the live pool.
 function getSessionsToRestore(liveSessionIds) {
   const registry = readActiveRegistry();
   const toRestore = [];
   for (const sessionId of Object.keys(registry)) {
     if (!liveSessionIds.has(sessionId)) {
-      toRestore.push({ sessionId });
+      toRestore.push(sessionId);
     }
   }
   return toRestore;
@@ -57,7 +60,7 @@ function syncRegistryWithPool(slots) {
     if (!slot.sessionId) continue;
     if (!ACTIVE_STATUSES.has(slot.status)) continue;
     newKeys.add(slot.sessionId);
-    newRegistry[slot.sessionId] = { claudeSessionId: slot.sessionId };
+    newRegistry[slot.sessionId] = true;
   }
 
   // Skip write if registry hasn't changed

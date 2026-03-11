@@ -749,16 +749,16 @@ async function restoreFromActiveRegistry() {
 
     // Filter: skip agent-spawned sessions
     const graph = readSessionGraph();
-    const userSessions = toRestore.filter((entry) => {
-      const graphEntry = graph[entry.sessionId];
+    const userSessionIds = toRestore.filter((sessionId) => {
+      const graphEntry = graph[sessionId];
       return !graphEntry || graphEntry.initiator !== INITIATOR.MODEL;
     });
 
-    if (userSessions.length === 0) {
+    if (userSessionIds.length === 0) {
       // Clean stale agent entries from registry
-      for (const entry of toRestore) {
+      for (const sessionId of toRestore) {
         try {
-          unregisterActiveSession(entry.sessionId);
+          unregisterActiveSession(sessionId);
         } catch (err) {
           _debugLog(
             "main",
@@ -771,7 +771,7 @@ async function restoreFromActiveRegistry() {
 
     _debugLog(
       "main",
-      `Active registry: restoring ${userSessions.length} sessions`,
+      `Active registry: restoring ${userSessionIds.length} sessions`,
     );
 
     // Wait for fresh slots to become available
@@ -783,7 +783,7 @@ async function restoreFromActiveRegistry() {
           const freshCount = p.slots.filter(
             (s) => s.status === POOL_STATUS.FRESH,
           ).length;
-          return freshCount >= userSessions.length;
+          return freshCount >= userSessionIds.length;
         },
         {
           interval: 500,
@@ -800,20 +800,20 @@ async function restoreFromActiveRegistry() {
     }
 
     let restored = 0;
-    for (const entry of userSessions) {
+    for (const sessionId of userSessionIds) {
       try {
-        await poolResume(entry.sessionId);
+        await poolResume(sessionId);
         restored++;
-        _debugLog("main", `Registry-restored session ${entry.sessionId}`);
+        _debugLog("main", `Registry-restored session ${sessionId}`);
       } catch (err) {
         _debugLog(
           "main",
-          `Failed to registry-restore ${entry.sessionId}: ${err.message}`,
+          `Failed to registry-restore ${sessionId}: ${err.message}`,
         );
       }
       // Remove from registry regardless (now either restored or unrestorable)
       try {
-        unregisterActiveSession(entry.sessionId);
+        unregisterActiveSession(sessionId);
       } catch (err) {
         _debugLog("main", `Failed to unregister session: ${err.message}`);
       }
@@ -822,7 +822,7 @@ async function restoreFromActiveRegistry() {
     if (restored > 0) {
       _debugLog(
         "main",
-        `Registry restore complete: ${restored}/${userSessions.length}`,
+        `Registry restore complete: ${restored}/${userSessionIds.length}`,
       );
     }
   } finally {

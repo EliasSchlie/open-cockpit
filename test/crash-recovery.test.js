@@ -112,8 +112,7 @@ describe("crash recovery via active-sessions registry", () => {
     const toRestore = activeSessions.getSessionsToRestore(liveSessionIds);
 
     expect(toRestore).toHaveLength(2);
-    const ids = toRestore.map((r) => r.sessionId).sort();
-    expect(ids).toEqual(["sess-A", "sess-C"]);
+    expect(toRestore.sort()).toEqual(["sess-A", "sess-C"]);
   });
 
   it("full cycle: sync → crash → detect → restore list", () => {
@@ -146,8 +145,7 @@ describe("crash recovery via active-sessions registry", () => {
 
     // All 3 active sessions (not the fresh one) should be in the restore list
     expect(toRestore).toHaveLength(3);
-    const ids = toRestore.map((r) => r.sessionId).sort();
-    expect(ids).toEqual(["sess-1", "sess-2", "sess-3"]);
+    expect(toRestore.sort()).toEqual(["sess-1", "sess-2", "sess-3"]);
   });
 
   it("sync during restore is suppressed", () => {
