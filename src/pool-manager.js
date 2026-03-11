@@ -462,9 +462,27 @@ async function saveExternalClearOffload(oldSessionId, pid) {
 // Archive a session: mark its offload meta as archived.
 // For live pool sessions, offload first (snapshot + /clear), then mark archived.
 // For already-offloaded sessions, just flip the archived flag.
-async function archiveSession(sessionId) {
+// Get all descendant session IDs from the graph, depth-first (deepest first).
+function getDescendantsFromGraph(sessionId, graph) {
+  const result = [];
+  const visited = new Set();
+  function walk(id) {
+    for (const [childId, entry] of Object.entries(graph)) {
+      if (entry.parentSessionId === id && !visited.has(childId)) {
+        visited.add(childId);
+        walk(childId);
+        result.push(childId);
+      }
+    }
+  }
+  walk(sessionId);
+  return result;
+}
+
+// Archive a single session (no cascade). Handles live pool sessions, offloaded,
+// and dead sessions. Callers handle invalidateSessionsCache().
+async function archiveSingleSession(sessionId) {
   validateSessionId(sessionId);
-  const { invalidateSessionsCache } = getSessionDiscovery();
   const meta = readOffloadMeta(sessionId);
   if (meta) {
     // Already offloaded — just mark as archived
@@ -474,7 +492,6 @@ async function archiveSession(sessionId) {
       path.join(OFFLOADED_DIR, sessionId, "meta.json"),
       JSON.stringify(meta, null, 2),
     );
-    invalidateSessionsCache();
     return;
   }
 
@@ -508,17 +525,35 @@ async function archiveSession(sessionId) {
       JSON.stringify(updatedMeta, null, 2),
     );
   } else {
-    // No offload data yet — create archive-only meta via writeOffloadMeta
+    // No offload data yet — create archive-only meta
     await writeOffloadMeta(sessionId, {
       claudeSessionId: sessionId,
       archived: true,
     });
   }
-  // Kill any orphaned extra terminals for this session immediately
   killOrphanedTerminals(sessionId);
+}
 
-  // Offloaded children are cascade-archived in getOffloadedSessions() on next
-  // session discovery pass — no need to duplicate that logic here.
+// Archive a session and all its descendants (cascade, depth-first).
+async function archiveSession(sessionId) {
+  validateSessionId(sessionId);
+  const { invalidateSessionsCache } = getSessionDiscovery();
+
+  // Cascade: archive all descendants depth-first (deepest first)
+  const graph = readSessionGraph();
+  const descendants = getDescendantsFromGraph(sessionId, graph);
+  for (const childId of descendants) {
+    try {
+      await archiveSingleSession(childId);
+    } catch (err) {
+      _debugLog(
+        "main",
+        `Failed to cascade-archive child ${childId}: ${err.message}`,
+      );
+    }
+  }
+
+  await archiveSingleSession(sessionId);
   invalidateSessionsCache();
 }
 

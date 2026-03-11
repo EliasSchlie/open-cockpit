@@ -443,7 +443,8 @@ function getAliveDescendants(sessionId) {
   return descendants.filter((s) => s.alive);
 }
 
-// Archive with child check: warns if session has alive descendants, archives depth-first
+// Archive with child check: warns if session has alive descendants, then
+// delegates to server which cascade-archives all descendants depth-first.
 async function archiveWithChildCheck(session) {
   const aliveDescendants = getAliveDescendants(session.sessionId);
 
@@ -453,16 +454,6 @@ async function archiveWithChildCheck(session) {
       aliveDescendants,
     );
     if (!confirmed) return;
-
-    // Archive depth-first: deepest descendants first, then parent
-    const descendants = getDescendantsDepthFirst(session.sessionId);
-    for (const desc of descendants) {
-      try {
-        await window.api.archiveSession(desc.sessionId);
-      } catch (err) {
-        console.error("Failed to archive child session:", desc.sessionId, err);
-      }
-    }
   }
 
   try {

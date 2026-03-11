@@ -522,6 +522,7 @@ async function getOffloadedSessions() {
   } catch {
     return [];
   }
+  const graph = readJsonSync(SESSION_GRAPH_FILE, {});
   const sessions = [];
   for (const dir of dirs) {
     try {
@@ -529,9 +530,14 @@ async function getOffloadedSessions() {
       if (!meta) continue;
       const snapshotFile = path.join(OFFLOADED_DIR, dir, "snapshot.log");
       const hasSnapshot = fs.existsSync(snapshotFile);
+      // Preserve child sessions whose parent still exists (even without
+      // snapshot/intention) so they stay grouped under their parent.
+      const parentId = graph[dir]?.parentSessionId;
+      const isChildWithParent =
+        parentId && fs.existsSync(path.join(OFFLOADED_DIR, parentId));
 
-      // Delete empty sessions (no snapshot + no intention) — they were never used
-      if (!hasSnapshot && !meta.intentionHeading) {
+      // Delete empty sessions (no snapshot + no intention) — they were never used.
+      if (!hasSnapshot && !meta.intentionHeading && !isChildWithParent) {
         try {
           fs.rmSync(path.join(OFFLOADED_DIR, dir), { recursive: true });
           // Clean up empty intention file if it exists
@@ -597,10 +603,6 @@ async function getOffloadedSessions() {
       );
     }
   }
-
-  // Children follow their parent's section in the UI (via session graph),
-  // but are never cascade-archived — they stay offloaded so the parent can
-  // resume conversations with them when reloaded.
 
   return sessions;
 }
@@ -866,9 +868,9 @@ async function getSessionsUncached() {
   sessions.length = 0;
   sessions.push(...dedupedSessions);
 
-  // Archive dead sessions (save as archived without snapshot)
-  // Child sessions (sub-agents) are NOT independently archived — they stay
-  // grouped under their parent and only get archived when the parent is archived.
+  // Archive dead sessions (save as archived without snapshot).
+  // Child sessions are never independently auto-archived — archiveSession()
+  // cascade-archives all descendants when the parent is archived.
   const poolForArchive = readPool();
   const poolSessionIdsForArchive = new Set();
   if (poolForArchive) {
@@ -877,19 +879,23 @@ async function getSessionsUncached() {
     }
   }
   const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
-  const sessionIdSet = new Set(sessions.map((s) => s.sessionId));
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (s.status !== STATUS.DEAD) continue;
 
-    // Skip auto-archive for child sessions whose parent exists — they'll be
-    // archived when the parent is archived (depth-first cascade in renderer)
+    // Skip auto-archive for child sessions whose parent still exists — they'll
+    // be cascade-archived when parent is archived via archiveSession().
+    // If the parent is completely gone (no live session, no offload data), let
+    // the child be auto-archived normally to prevent orphan accumulation.
     const graphEntry = sessionGraph[s.sessionId];
-    if (
-      graphEntry?.parentSessionId &&
-      sessionIdSet.has(graphEntry.parentSessionId)
-    ) {
-      continue;
+    if (graphEntry?.parentSessionId) {
+      const parentLive = sessions.some(
+        (p) => p.sessionId === graphEntry.parentSessionId,
+      );
+      const parentOffloaded =
+        !parentLive &&
+        fs.existsSync(path.join(OFFLOADED_DIR, graphEntry.parentSessionId));
+      if (parentLive || parentOffloaded) continue;
     }
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
