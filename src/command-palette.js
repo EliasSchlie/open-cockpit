@@ -12,6 +12,18 @@ let _actions = {};
 let shortcutConfig = {};
 let COMMANDS = [];
 
+// --- Recent command tracking ---
+let recentCommands = {};
+
+async function loadRecentCommands() {
+  recentCommands = await window.api.getPreference("recentCommands", {});
+}
+
+function recordCommandUsage(commandId) {
+  recentCommands[commandId] = Date.now();
+  window.api.setPreference("recentCommands", recentCommands);
+}
+
 export function initCommandPalette(actions) {
   _actions = actions;
 
@@ -100,6 +112,12 @@ export function initCommandPalette(actions) {
       label: "Archive Current Session",
       shortcutAction: "archive-current-session",
       action: () => _actions.archiveCurrentSession(),
+    },
+    {
+      id: "restart-current-session",
+      label: "Restart Current Session",
+      shortcutAction: "restart-current-session",
+      action: () => _actions.restartCurrentSession(),
     },
     {
       id: "toggle-sidebar",
@@ -256,6 +274,8 @@ export function initCommandPalette(actions) {
     });
   }
 
+  loadRecentCommands();
+
   // Wire palette input events
   dom.commandPaletteInput.addEventListener("input", () => {
     paletteSelectedIndex = 0;
@@ -283,6 +303,7 @@ export function initCommandPalette(actions) {
     if (e.key === "Enter" && filteredCommands.length > 0) {
       e.preventDefault();
       const cmd = filteredCommands[paletteSelectedIndex];
+      recordCommandUsage(cmd.id);
       closeCommandPalette();
       cmd.action();
       return;
@@ -406,13 +427,19 @@ function getCommandShortcut(cmd) {
 
 function renderPaletteList(query) {
   const q = query.toLowerCase();
-  filteredCommands = q
-    ? COMMANDS.filter(
-        (c) =>
-          c.label.toLowerCase().includes(q) ||
-          getCommandShortcut(c).toLowerCase().includes(q),
-      )
-    : COMMANDS.filter((c) => !c.id.startsWith("tab-")); // Hide tab-N from unfiltered list
+  const byRecency = (a, b) =>
+    (recentCommands[b.id] || 0) - (recentCommands[a.id] || 0);
+  if (q) {
+    filteredCommands = COMMANDS.filter(
+      (c) =>
+        c.label.toLowerCase().includes(q) ||
+        getCommandShortcut(c).toLowerCase().includes(q),
+    ).sort(byRecency);
+  } else {
+    filteredCommands = COMMANDS.filter((c) => !c.id.startsWith("tab-")).sort(
+      byRecency,
+    );
+  }
 
   paletteSelectedIndex = Math.min(
     paletteSelectedIndex,
@@ -426,6 +453,7 @@ function renderPaletteList(query) {
     const shortcut = getCommandShortcut(cmd);
     item.innerHTML = `<span class="command-palette-label">${cmd.label}</span><span class="command-palette-shortcut">${shortcut}</span>`;
     item.addEventListener("click", () => {
+      recordCommandUsage(cmd.id);
       closeCommandPalette();
       cmd.action();
     });

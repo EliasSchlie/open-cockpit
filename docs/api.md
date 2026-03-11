@@ -238,7 +238,6 @@ Direct slot access by pool index. Works even on error-status slots that have no 
 | `ui-state` | -- | `{ type: "ui-state", activeSessionId, sessions }` |
 | `session-select` | `sessionId` | `{ type: "ok" }` |
 | `relaunch` | -- | `{ type: "ok", message }` — rebuilds from source then restarts |
-| `quit` | -- | `{ type: "ok", message }` — gracefully quits the app (triggers cleanup) |
 
 `screenshot` captures the BrowserWindow contents. If the window has never been shown (hidden mode), it briefly shows the window off-screen to force a paint, then re-hides it.
 
