@@ -1106,7 +1106,10 @@ async function reconcilePool() {
     } catch {}
 
     const pool = readPool();
-    if (!pool) return;
+    if (!pool) {
+      _debugLog("reconcile", "no pool file — skipping");
+      return;
+    }
 
     const { terminalHasInputCache } = getSessionDiscovery();
     let changed = false;
@@ -1116,7 +1119,12 @@ async function reconcilePool() {
     try {
       const resp = await daemonRequest({ type: "list" });
       daemonPtys = new Map(resp.ptys.map((p) => [p.termId, p]));
+      _debugLog(
+        "reconcile",
+        `pool has ${pool.slots.length} slots, daemon has ${daemonPtys.size} PTYs`,
+      );
     } catch {
+      _debugLog("reconcile", "daemon not running — skipping");
       return; // Daemon not running — can't reconcile
     }
 
@@ -1233,6 +1241,68 @@ async function reconcilePool() {
 
     // Prune session graph — remove entries for sessions that no longer exist
     pruneSessionGraph(pool);
+
+    // Clean up orphaned processes: alive PIDs in session-pids that aren't
+    // tracked by any pool slot and have no offload/archive metadata.
+    // These are remnants from previous pool incarnations (e.g., pool was
+    // destroyed and re-created, but old Claude processes survived).
+    const poolPids = new Set(pool.slots.map((s) => String(s.pid)));
+    try {
+      for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
+        if (poolPids.has(file)) continue; // Tracked by pool — skip
+        const pid = Number(file);
+        if (!Number.isFinite(pid)) continue;
+        if (!isPidAlive(pid)) {
+          // Dead process — just clean up the PID file
+          cleanupPidFiles(file);
+          continue;
+        }
+        // Alive process not tracked by pool — check if it's a known
+        // external/custom session (has offload metadata or is the current
+        // renderer session). Only kill processes that look like orphaned
+        // pool slots (spawned with --dangerously-skip-permissions).
+        const sessionId = fs
+          .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
+          .trim();
+        if (!sessionId) continue;
+        const meta = readOffloadMeta(sessionId);
+        if (meta) continue; // Has offload data — managed session
+        // Check if the process command includes pool flags (heuristic).
+        // Use /proc on Linux, ps on macOS. Skip on Windows (no reliable way).
+        let cmdLine = "";
+        try {
+          if (process.platform === "linux") {
+            cmdLine = fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8");
+          } else if (process.platform === "darwin") {
+            const { execFileSync } = require("child_process");
+            cmdLine = execFileSync(
+              "ps",
+              ["-p", String(pid), "-o", "command="],
+              {
+                encoding: "utf-8",
+                timeout: 2000,
+              },
+            ).trim();
+          }
+        } catch {
+          /* process inspection failed — skip */
+        }
+        if (cmdLine.includes("--dangerously-skip-permissions")) {
+          _debugLog(
+            "main",
+            `Killing orphaned pool process PID ${pid} session=${sessionId} (not tracked by any pool slot)`,
+          );
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch {
+            /* ESRCH */
+          }
+          cleanupPidFiles(file);
+        }
+      }
+    } catch {
+      /* ENOENT — no session-pids dir */
+    }
   });
 
   // Restore missing sessions OUTSIDE the pool lock to avoid deadlock

@@ -163,6 +163,17 @@ async function selectSession(session) {
       }
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
       daemonTermId = slot?.termId || null;
+      if (!slot) {
+        debugLog(
+          "session",
+          `pool slot NOT FOUND for session=${session.sessionId} (pool has ${pool?.slots.length} slots, sessionIds: ${pool?.slots.map((s) => s.sessionId?.slice(0, 8)).join(",")})`,
+        );
+      } else {
+        debugLog(
+          "session",
+          `pool slot found: index=${slot.index} termId=${slot.termId} status=${slot.status}`,
+        );
+      }
     } else if (session.origin === "custom") {
       const allPtys = await window.api.ptyList();
       if (gen !== state.sessionGeneration) {
@@ -173,21 +184,30 @@ async function selectSession(session) {
         (p) => p.sessionId === session.sessionId && !p.exited,
       );
       daemonTermId = pty?.termId || null;
+      debugLog(
+        "session",
+        `custom session daemon lookup: ${pty ? `termId=${pty.termId}` : "NOT FOUND"}`,
+      );
     }
 
     if (daemonTermId) {
       // Attach to existing daemon terminal (pool or custom)
       try {
+        debugLog("session", `attaching to daemon termId=${daemonTermId}`);
         await attachPoolTerminal(daemonTermId);
         if (gen !== state.sessionGeneration) {
           debugLog("session", `race abort gen=${gen} at daemonAttach`);
           destroySessionTerminals(session.sessionId);
           return;
         }
-      } catch {
+        debugLog("session", `attached successfully to termId=${daemonTermId}`);
+      } catch (err) {
         debugLog(
           "session",
-          `attach failed for ${daemonTermId}, falling back to shell`,
+          `attach FAILED for termId=${daemonTermId}: ${err.message} — falling back to shell`,
+        );
+        showNotification(
+          `Failed to attach to Claude terminal (termId=${daemonTermId}) — spawned shell instead. Error: ${err.message}`,
         );
         await spawnTerminal(session.cwd);
         if (gen !== state.sessionGeneration) {
@@ -198,6 +218,13 @@ async function selectSession(session) {
       }
     } else if (session.origin === "pool" || session.origin === "custom") {
       // Daemon session but no terminal found — fallback to shell
+      debugLog(
+        "session",
+        `NO daemon terminal for ${session.origin} session=${session.sessionId} — falling back to shell`,
+      );
+      showNotification(
+        `No daemon terminal found for ${session.origin} session — spawned shell instead`,
+      );
       await spawnTerminal(session.cwd);
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at noTermSpawn`);
@@ -206,6 +233,7 @@ async function selectSession(session) {
       }
     } else {
       // External session: spawn a fresh shell
+      debugLog("session", `external session — spawning shell`);
       await spawnTerminal(session.cwd);
       if (gen !== state.sessionGeneration) {
         debugLog("session", `race abort gen=${gen} at extSpawn`);
@@ -244,13 +272,32 @@ function isFreshPoolSlot(s) {
 // Returns the fresh session object or null if pool is fully busy.
 async function acquireFreshSlot() {
   const sessions = await window.api.getSessions();
+  const poolSessions = sessions.filter((s) => s.origin === "pool");
+  const statusCounts = {};
+  for (const s of poolSessions) {
+    const key = s.poolStatus || s.status;
+    statusCounts[key] = (statusCounts[key] || 0) + 1;
+  }
+  debugLog(
+    "acquire",
+    `${sessions.length} sessions, ${poolSessions.length} pool: ${JSON.stringify(statusCounts)}`,
+  );
 
   // 1. Prefer an existing fresh slot (poolStatus is set by main process)
   const freshSession = sessions.find(isFreshPoolSlot);
-  if (freshSession) return freshSession;
+  if (freshSession) {
+    debugLog(
+      "acquire",
+      `found fresh slot session=${freshSession.sessionId} poolStatus=${freshSession.poolStatus} status=${freshSession.status}`,
+    );
+    return freshSession;
+  }
 
   // No pool sessions at all — nothing to acquire from
-  if (!sessions.some((s) => s.origin === "pool")) return null;
+  if (poolSessions.length === 0) {
+    debugLog("acquire", "no pool sessions — nothing to acquire");
+    return null;
+  }
 
   // 2. Offload the longest-unused idle session (LRU)
   const idleSessions = sessions
@@ -262,14 +309,24 @@ async function acquireFreshSlot() {
     )
     .sort((a, b) => a.idleTs - b.idleTs);
 
-  if (idleSessions.length === 0) return null; // All slots busy — can't acquire
+  if (idleSessions.length === 0) {
+    debugLog("acquire", "no fresh or idle pool sessions — all busy");
+    return null;
+  }
 
   const victim = idleSessions[0];
+  debugLog("acquire", `offloading LRU idle session=${victim.sessionId}`);
 
   // Find the victim's terminal from pool data (need termId for offload)
   const pool = await window.api.poolRead();
   const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
-  if (!victimSlot) return null;
+  if (!victimSlot) {
+    debugLog(
+      "acquire",
+      `victim slot not found in pool for session=${victim.sessionId}`,
+    );
+    return null;
+  }
 
   try {
     await window.api.offloadSession(
@@ -882,15 +939,21 @@ dom.refreshBtn.addEventListener("click", async () => {
 
 let newSessionInProgress = false;
 dom.newSessionBtn.addEventListener("click", async () => {
-  if (newSessionInProgress) return;
+  if (newSessionInProgress) {
+    debugLog("new-session", "skipped — already in progress");
+    return;
+  }
   newSessionInProgress = true;
+  debugLog("new-session", "starting");
   try {
     // Check pool is initialized
     const pool = await window.api.poolRead();
     if (!pool) {
+      debugLog("new-session", "aborted — pool not initialized");
       showNotification("Pool not initialized — open pool settings");
       return;
     }
+    debugLog("new-session", `pool has ${pool.slots.length} slots`);
 
     // Check for setup scripts before acquiring a slot
     let selectedScript = null;
@@ -902,13 +965,22 @@ dom.newSessionBtn.addEventListener("click", async () => {
 
     const freshSlot = await acquireFreshSlot();
     if (!freshSlot) {
+      debugLog("new-session", "aborted — no fresh slot available");
       showNotification(
         "All pool slots are busy — wait for a session to finish or resize pool",
       );
       return;
     }
+    debugLog(
+      "new-session",
+      `acquired fresh slot session=${freshSlot.sessionId} origin=${freshSlot.origin} status=${freshSlot.status} poolStatus=${freshSlot.poolStatus}`,
+    );
 
     await selectSession(freshSlot);
+    debugLog(
+      "new-session",
+      `selectSession complete for ${freshSlot.sessionId}`,
+    );
 
     // Type setup script into the session's terminal
     if (selectedScript) {
@@ -925,6 +997,10 @@ dom.newSessionBtn.addEventListener("click", async () => {
     }
 
     await loadSessions();
+    debugLog("new-session", "done");
+  } catch (err) {
+    debugLog("new-session", `error: ${err.message}`);
+    showNotification(`New session failed: ${err.message}`);
   } finally {
     newSessionInProgress = false;
   }
