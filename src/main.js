@@ -16,6 +16,12 @@
   if (argv.includes("--hidden")) {
     process.env.OPEN_COCKPIT_HIDDEN = "1";
   }
+  // --parent-pid flag: dev instance lifecycle tied to parent Claude session
+  // Stored as module-level global (not env var) to avoid leaking to child processes.
+  const parentPidIdx = argv.indexOf("--parent-pid");
+  if (parentPidIdx !== -1 && argv[parentPidIdx + 1]) {
+    global.__OPEN_COCKPIT_PARENT_PID = parseInt(argv[parentPidIdx + 1], 10);
+  }
   // --dev flag requires an instance name (from --instance or worktree auto-detect)
   if (argv.includes("--dev") && !instanceName) {
     console.error(
@@ -36,7 +42,7 @@
     console.log(`[open-cockpit] Instance: ${instanceName}`);
     console.log(`[open-cockpit] Dir:      ${process.env.OPEN_COCKPIT_DIR}`);
     console.log(
-      `[open-cockpit] CLI:      cockpit-cli --instance ${instanceName} <command>`,
+      `[open-cockpit] CLI:      cockpit-cli --dev <command>  (or --instance ${instanceName})`,
     );
   }
 })();
@@ -964,6 +970,28 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // --- Parent-PID watchdog for session-owned dev instances ---
+  // If --parent-pid was given, monitor that process. When it dies, clean up and quit.
+  const parentPid = global.__OPEN_COCKPIT_PARENT_PID || null;
+  if (parentPid && INSTANCE_NAME) {
+    debugLog("main", `parent-pid watchdog: monitoring PID ${parentPid}`);
+    const watchdogInterval = setInterval(async () => {
+      if (!isPidAlive(parentPid)) {
+        clearInterval(watchdogInterval);
+        debugLog(
+          "main",
+          `parent PID ${parentPid} is dead — cleaning up dev instance`,
+        );
+        await Promise.all([
+          poolManager.poolDestroy().catch(() => {}),
+          daemonClient.stopDaemon().catch(() => {}),
+        ]);
+        instancePoolDestroyed = true;
+        app.quit();
+      }
+    }, 10000);
+  }
 });
 
 let instancePoolDestroyed = false;
@@ -996,10 +1024,13 @@ app.on("before-quit", (e) => {
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("timeout")), 5000),
     );
-    Promise.race([poolManager.poolDestroy(), timeout])
-      .then(() => debugLog("main", "instance pool destroyed on quit"))
+    Promise.race([
+      Promise.all([poolManager.poolDestroy(), daemonClient.stopDaemon()]),
+      timeout,
+    ])
+      .then(() => debugLog("main", "instance pool + daemon destroyed on quit"))
       .catch((err) =>
-        debugLog("main", "instance pool destroy failed on quit:", err.message),
+        debugLog("main", "instance cleanup failed on quit:", err.message),
       )
       .finally(() => {
         instancePoolDestroyed = true;

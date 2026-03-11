@@ -20,14 +20,14 @@ Runtime paths: `~/.open-cockpit/` (see [docs/architecture.md](docs/architecture.
 
 See [docs/dev-instances.md](docs/dev-instances.md) for full details.
 
-- `npm run dev` — dev instance, auto-named from worktree (e.g. `.wt/my-feature/` → `--instance my-feature`)
-- `npm run dev:watch` — same + auto-rebuild on `src/` changes, app auto-relaunches
-- Dev instances require a name — `npm run dev` from root repo (not a worktree) errors
+- **From Claude sessions**: `cockpit-cli --dev dev launch --hidden` — session-owned, auto-cleanup on exit
+- **Manual** (worktree): `npm run dev` / `npm run dev:watch` — auto-named from `.wt/<name>/`
+- All `cockpit-cli` commands work with `--dev` flag to target this session's dev instance
 
 ## Reloading after changes
 
-- **With `dev:watch`**: automatic — edit src/, app rebuilds and relaunches within ~2s
-- **Without `dev:watch`**: `npm run build`, then Cmd+R (renderer only) or Cmd+Shift+R (full rebuild + relaunch)
+- **With `--watch`** (`cockpit-cli --dev dev launch --watch`): automatic — edit src/, app rebuilds and relaunches within ~2s
+- **Without `--watch`**: `npm run build`, then Cmd+R (renderer only) or Cmd+Shift+R (full rebuild + relaunch)
 - **Daemon** (`pty-daemon.js`): in-app banner warns when daemon code is stale, click "Restart daemon" (kills all terminals)
 
 ## Native modules
