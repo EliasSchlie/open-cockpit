@@ -683,6 +683,7 @@ export async function reconnectAllPtys() {
       }
       continue;
     }
+
     const results = await Promise.allSettled(
       sessionPtys.map((p) => reconnectTerminal(p)),
     );

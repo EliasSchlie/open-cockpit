@@ -1173,7 +1173,13 @@ async function reconcilePool() {
             );
           }
         }
-        // Kill old process/PTY before restarting
+        // Kill old process/PTY before restarting.
+        // Also remove stale PID/idle-signal files immediately so the old
+        // session doesn't appear as alive in the sidebar during recovery.
+        // Without this, getSessions() sees the old PID file, reports the
+        // session as a live pool session, and the renderer spawns a
+        // fallback shell because the new slot doesn't have a sessionId yet.
+        if (slot.pid) cleanupPidFiles(String(slot.pid));
         await killSlotProcess(slot);
         // Auto-restart slot
         try {

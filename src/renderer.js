@@ -162,7 +162,7 @@ async function selectSession(session) {
         return;
       }
       const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
-      daemonTermId = slot?.termId || null;
+      daemonTermId = slot?.termId ?? null;
       if (!slot) {
         debugLog(
           "session",
@@ -1309,7 +1309,15 @@ loadDirColors()
       setShortcutConfig(shortcuts);
     } catch {}
 
-    await reconnectAllPtys();
+    // Reconnect daemon terminals — non-fatal so sessions still load if daemon is down
+    try {
+      await reconnectAllPtys();
+    } catch (err) {
+      debugLog(
+        "startup",
+        `reconnectAllPtys failed (daemon may be down): ${err.message}`,
+      );
+    }
 
     const POLL_INTERVAL = 30000; // Safety net — events handle normal refresh
     let sessionPollInterval = setInterval(loadSessions, POLL_INTERVAL);
