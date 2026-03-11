@@ -533,6 +533,8 @@ case "$CMD" in
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --block) BLOCK=true; shift ;;
+        -v|--verbosity) VERBOSITY="${2:?verbosity level required}"; shift 2 ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) PROMPT="$1"; shift ;;
       esac
     done
@@ -614,6 +616,8 @@ case "$CMD" in
       case "$1" in
         --block) BLOCK=true; shift ;;
         --help|-h) echo "Usage: cockpit-cli start <prompt> [--block]" >&2; exit 0 ;;
+        -v|--verbosity) VERBOSITY="${2:?verbosity level required}"; shift 2 ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) PROMPT="$1"; shift ;;
       esac
     done
@@ -687,6 +691,8 @@ case "$CMD" in
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --block) BLOCK=true; shift ;;
+        -v|--verbosity) VERBOSITY="${2:?verbosity level required}"; shift 2 ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) PROMPT="$1"; shift ;;
       esac
     done
