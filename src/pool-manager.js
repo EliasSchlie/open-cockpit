@@ -88,11 +88,16 @@ function setTerminalDims(cols, rows) {
   _terminalDims = { cols, rows };
 }
 
-const { withPoolLock } = createPoolLock(POOL_FILE);
+const { withPoolLock } = createPoolLock();
 
 // Sessions currently being restored (prevents double-restore races).
 // Added synchronously at poolResume entry, removed when tracking completes.
 const _pendingRestores = new Set();
+
+// Sessions currently being offloaded by withFreshSlot (prevents TOCTOU race
+// where two concurrent callers both offload an idle session but only one
+// gets a fresh slot). Added inside the lock, removed after slot claim.
+const _pendingOffloads = new Set();
 
 // Poll a condition until it returns a truthy value, with timeout.
 // Returns the truthy value, or throws on timeout.
@@ -1234,7 +1239,9 @@ function killOrphanedTerminals(sessionId) {
 // Check if an idle session should be offloaded to maintain fresh slot availability.
 // Returns offload target info, null (enough fresh slots), or false (pool not initialized).
 // Acquires pool lock for the check.
-async function checkOffloadNeeded(minFresh = 1) {
+// reserveSet: optional Set — if provided, excludes its members from candidates and
+// atomically adds the found target (inside the lock) to prevent TOCTOU races.
+async function checkOffloadNeeded(minFresh = 1, reserveSet) {
   const { getSessions } = getSessionDiscovery();
   return withPoolLock(async () => {
     const pool = readPool();
@@ -1242,7 +1249,12 @@ async function checkOffloadNeeded(minFresh = 1) {
     const sessions = await getSessions();
     enrichSessionsWithGraphData(sessions);
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    return findOffloadTarget(pool, sessionMap, minFresh);
+    if (reserveSet) {
+      for (const sid of reserveSet) sessionMap.delete(sid);
+    }
+    const target = findOffloadTarget(pool, sessionMap, minFresh);
+    if (target && reserveSet) reserveSet.add(target.sessionId);
+    return target;
   });
 }
 
@@ -1265,16 +1277,16 @@ async function preWarmPool() {
   for (let i = 0; i < minFresh; i++) {
     let target;
     try {
-      target = await checkOffloadNeeded(minFresh);
+      target = await checkOffloadNeeded(minFresh, _pendingOffloads);
     } catch (err) {
       // "No fresh or idle slots available" is expected — anything else is a bug
       if (!err.message?.includes("No fresh or idle")) {
         _debugLog("main", `Pre-warm check failed: ${err.message}`);
       }
-      return;
+      return; // checkOffloadNeeded only adds to _pendingOffloads on success
     }
     if (target === false) return; // Pool not initialized
-    if (!target) return; // Enough fresh slots
+    if (!target) return; // Enough fresh slots (nothing added to _pendingOffloads)
     _debugLog(
       "main",
       `Pre-warming pool: offloading session ${target.sessionId}`,
@@ -1284,6 +1296,8 @@ async function preWarmPool() {
     } catch (err) {
       _debugLog("main", `Pre-warm offload failed: ${err.message}`);
       return;
+    } finally {
+      _pendingOffloads.delete(target.sessionId);
     }
   }
 }
@@ -1558,8 +1572,11 @@ async function poolClean() {
 // Returns whatever claimFn returns.
 async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
-  // Phase 1: check if offload is needed (inside lock)
-  const needsOffload = await checkOffloadNeeded();
+
+  // Phase 1: check if offload is needed (inside lock).
+  // _pendingOffloads prevents two concurrent callers from both deciding to
+  // offload the same idle session (TOCTOU race).
+  const needsOffload = await checkOffloadNeeded(1, _pendingOffloads);
   if (needsOffload === false) throw new Error("Pool not initialized");
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
@@ -1569,21 +1586,25 @@ async function withFreshSlot(claimFn) {
   }
 
   // Phase 3: claim fresh slot atomically (inside lock — no gap for races)
-  return withPoolLock(async () => {
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const sessions = await getSessions();
-    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
+  try {
+    return await withPoolLock(async () => {
+      const pool = readPool();
+      if (!pool) throw new Error("Pool not initialized");
+      const sessions = await getSessions();
+      const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
 
-    const slot = pool.slots.find((s) => {
-      if (s.status === POOL_STATUS.FRESH) return true;
-      const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
-      return session && session.status === STATUS.FRESH;
+      const slot = pool.slots.find((s) => {
+        if (s.status === POOL_STATUS.FRESH) return true;
+        const session = s.sessionId ? sessionMap.get(s.sessionId) : null;
+        return session && session.status === STATUS.FRESH;
+      });
+      if (!slot) throw new Error("No fresh slots available");
+
+      return claimFn(pool, slot);
     });
-    if (!slot) throw new Error("No fresh slots available");
-
-    return claimFn(pool, slot);
-  });
+  } finally {
+    if (needsOffload) _pendingOffloads.delete(needsOffload.sessionId);
+  }
 }
 
 async function poolResume(sessionId) {

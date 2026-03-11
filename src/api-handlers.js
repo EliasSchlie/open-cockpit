@@ -536,7 +536,7 @@ function buildApiHandlers() {
         const result = await poll(
           async () => {
             const pool = readPool();
-            const slot = pool?.slots?.[msg.slotIndex];
+            const slot = pool?.slots?.find((s) => s.index === msg.slotIndex);
             if (!slot?.sessionId) return null;
             const sessions = await getSessions();
             const session = sessions.find(
