@@ -358,6 +358,55 @@ function enrichSessionsWithGraphData(sessions) {
     }
   }
   if (graphChanged) writeSessionGraph(graph);
+
+  // Ensure parent stubs exist for orphaned children. When a parent session is
+  // cleaned up (slot reused, PID file removed) without being archived, its
+  // children lose their grouping anchor. Add minimal archived entries so
+  // buildSessionTree can still group children under their parent.
+  const knownIds = new Set(sessions.map((s) => s.sessionId));
+  for (const s of [...sessions]) {
+    if (!s.parentSessionId || knownIds.has(s.parentSessionId)) continue;
+    // Parent referenced but not in sessions list — create stub
+    const parentId = s.parentSessionId;
+    knownIds.add(parentId);
+    // Persist stub to disk so it survives across polls
+    const parentDir = path.join(OFFLOADED_DIR, parentId);
+    if (!fs.existsSync(parentDir)) {
+      secureMkdirSync(parentDir, { recursive: true });
+      const stubMeta = {
+        sessionId: parentId,
+        claudeSessionId: parentId,
+        archived: true,
+        archivedAt: new Date().toISOString(),
+        lastInteractionTs: 0,
+      };
+      secureWriteFileSync(
+        path.join(parentDir, "meta.json"),
+        JSON.stringify(stubMeta, null, 2),
+      );
+    }
+    // Add to sessions list so sidebar can group children under it
+    const meta = readOffloadMeta(parentId);
+    const parentGraph = graph[parentId];
+    sessions.push({
+      pid: null,
+      sessionId: parentId,
+      alive: false,
+      cwd: meta?.cwd || null,
+      home: os.homedir(),
+      gitRoot: meta?.gitRoot || null,
+      project: meta?.cwd ? path.basename(meta.cwd) : null,
+      hasIntention: !!meta?.intentionHeading,
+      intentionHeading: meta?.intentionHeading || null,
+      status: STATUS.ARCHIVED,
+      idleTs: meta?.lastInteractionTs || 0,
+      claudeSessionId: meta?.claudeSessionId || null,
+      hasSnapshot: false,
+      origin: meta?.origin || null,
+      parentSessionId: parentGraph?.parentSessionId || null,
+      initiator: parentGraph?.initiator || null,
+    });
+  }
 }
 
 // Render raw PTY buffer into readable screen text using a headless terminal.
