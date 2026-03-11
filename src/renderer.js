@@ -680,6 +680,27 @@ async function archiveCurrentSession() {
   await loadSessions();
 }
 
+// --- Restart current archived/offloaded session ---
+
+async function restartCurrentSession() {
+  if (!state.currentSessionId) return;
+  const session = state.cachedSessions.find(
+    (s) => s.sessionId === state.currentSessionId,
+  );
+  if (!session) return;
+  if (session.status !== STATUS.ARCHIVED && session.status !== STATUS.OFFLOADED)
+    return;
+
+  if (session.status === STATUS.ARCHIVED) {
+    try {
+      await window.api.unarchiveSession(session.sessionId);
+    } catch (err) {
+      debugLog("session", `unarchive failed: ${err.message}`);
+    }
+  }
+  await resumeOffloadedSession(session);
+}
+
 // --- Setup script picker ---
 
 function showSetupScriptPicker(scripts) {
@@ -812,6 +833,7 @@ initCommandPalette({
   cycleTabInFocusedLeaf,
   jumpToRecentIdle,
   archiveCurrentSession,
+  restartCurrentSession,
   toggleSidebar,
   togglePaneFocus,
   focusEditor,
@@ -1082,6 +1104,7 @@ window.api.onSplitDown(() => splitFocusedTab("down"));
 window.api.onFocusExternalTerminal(focusCurrentExternalTerminal);
 window.api.onJumpRecentIdle(jumpToRecentIdle);
 window.api.onArchiveCurrentSession(archiveCurrentSession);
+window.api.onRestartCurrentSession(restartCurrentSession);
 window.api.onOpenInCursor(() => {
   if (state.currentSessionCwd) window.api.openInCursor(state.currentSessionCwd);
 });

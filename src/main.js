@@ -356,6 +356,12 @@ function buildMenu() {
           accelerator: accel("archive-current-session"),
           click: () => send("archive-current-session"),
         },
+        {
+          label: "Restart Current Session",
+          accelerator: accel("restart-current-session"),
+          click: () => send("restart-current-session"),
+          visible: !!accel("restart-current-session"),
+        },
         { type: "separator" },
         {
           label: "Search Sessions",

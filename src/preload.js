@@ -35,6 +35,7 @@ const channels = [
   "split-down",
   "jump-recent-idle",
   "archive-current-session",
+  "restart-current-session",
   "open-in-cursor",
   "open-pool-settings",
   "session-info",
@@ -249,6 +250,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("jump-recent-idle", () => callback()),
   onArchiveCurrentSession: (callback) =>
     ipcRenderer.on("archive-current-session", () => callback()),
+  onRestartCurrentSession: (callback) =>
+    ipcRenderer.on("restart-current-session", () => callback()),
   onOpenInCursor: (callback) =>
     ipcRenderer.on("open-in-cursor", () => callback()),
   onOpenPoolSettings: (callback) =>
