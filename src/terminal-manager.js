@@ -683,8 +683,28 @@ export async function reconnectAllPtys() {
       }
       continue;
     }
+
+    // For pool sessions with both a pool terminal and fallback shells,
+    // only reconnect the pool terminal — the shells were spawned as
+    // fallback during a restart race and should be discarded.
+    const hasPoolTerm = sessionPtys.some((p) => p.isPoolTui);
+    let toReconnect = sessionPtys;
+    if (hasPoolTerm && sessionPtys.length > 1) {
+      const fallbacks = sessionPtys.filter((p) => !p.isPoolTui);
+      toReconnect = sessionPtys.filter((p) => p.isPoolTui);
+      if (fallbacks.length > 0) {
+        debugLog(
+          "startup",
+          `discarding ${fallbacks.length} fallback shell(s) for pool session ${sid.slice(0, 8)} (termIds: ${fallbacks.map((p) => p.termId).join(",")})`,
+        );
+        for (const p of fallbacks) {
+          window.api.ptyKill(p.termId).catch(() => {});
+        }
+      }
+    }
+
     const results = await Promise.allSettled(
-      sessionPtys.map((p) => reconnectTerminal(p)),
+      toReconnect.map((p) => reconnectTerminal(p)),
     );
     const entries = [];
     for (let i = 0; i < results.length; i++) {
