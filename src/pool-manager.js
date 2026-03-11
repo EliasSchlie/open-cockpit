@@ -1239,7 +1239,9 @@ function killOrphanedTerminals(sessionId) {
 // Check if an idle session should be offloaded to maintain fresh slot availability.
 // Returns offload target info, null (enough fresh slots), or false (pool not initialized).
 // Acquires pool lock for the check.
-async function checkOffloadNeeded(minFresh = 1) {
+// reserveSet: optional Set — if provided, excludes its members from candidates and
+// atomically adds the found target (inside the lock) to prevent TOCTOU races.
+async function checkOffloadNeeded(minFresh = 1, reserveSet) {
   const { getSessions } = getSessionDiscovery();
   return withPoolLock(async () => {
     const pool = readPool();
@@ -1247,7 +1249,12 @@ async function checkOffloadNeeded(minFresh = 1) {
     const sessions = await getSessions();
     enrichSessionsWithGraphData(sessions);
     const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    return findOffloadTarget(pool, sessionMap, minFresh);
+    if (reserveSet) {
+      for (const sid of reserveSet) sessionMap.delete(sid);
+    }
+    const target = findOffloadTarget(pool, sessionMap, minFresh);
+    if (target && reserveSet) reserveSet.add(target.sessionId);
+    return target;
   });
 }
 
@@ -1564,20 +1571,10 @@ async function poolClean() {
 async function withFreshSlot(claimFn) {
   const { getSessions } = getSessionDiscovery();
 
-  // Phase 1: inside lock, find offload target AND reserve it atomically.
-  // Excluding _pendingOffloads from the session map prevents two concurrent
-  // callers from both deciding to offload (TOCTOU race).
-  const needsOffload = await withPoolLock(async () => {
-    const pool = readPool();
-    if (!pool) return false;
-    const sessions = await getSessions();
-    enrichSessionsWithGraphData(sessions);
-    const sessionMap = new Map(sessions.map((s) => [s.sessionId, s]));
-    for (const sid of _pendingOffloads) sessionMap.delete(sid);
-    const target = findOffloadTarget(pool, sessionMap);
-    if (target) _pendingOffloads.add(target.sessionId);
-    return target;
-  });
+  // Phase 1: check if offload is needed (inside lock).
+  // _pendingOffloads prevents two concurrent callers from both deciding to
+  // offload the same idle session (TOCTOU race).
+  const needsOffload = await checkOffloadNeeded(1, _pendingOffloads);
   if (needsOffload === false) throw new Error("Pool not initialized");
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
