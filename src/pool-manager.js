@@ -1470,8 +1470,6 @@ async function syncPoolStatuses(sessions) {
   });
 }
 
-// Remove idle-signal and session-pid files for a PID so it doesn't appear
-// as a ghost session after process death.
 // Clean up orphaned processes: alive PIDs in session-pids that aren't
 // tracked by any pool slot or daemon PTY. Only kill processes confirmed
 // to be pool-origin (OPEN_COCKPIT_POOL=1 env var) — never external or
@@ -1526,11 +1524,13 @@ async function cleanupOrphanedProcesses(
         cleanupPidFiles(file);
       }
     }
-  } catch {
-    /* ENOENT — no session-pids dir */
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
   }
 }
 
+// Remove idle-signal and session-pid files for a PID so it doesn't appear
+// as a ghost session after process death.
 function cleanupPidFiles(pidStr) {
   for (const dir of [IDLE_SIGNALS_DIR, SESSION_PIDS_DIR]) {
     try {

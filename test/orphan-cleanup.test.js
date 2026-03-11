@@ -5,6 +5,7 @@ import {
   beforeAll,
   beforeEach,
   afterAll,
+  afterEach,
   vi,
 } from "vitest";
 import fs from "fs";
@@ -30,6 +31,10 @@ beforeAll(() => {
   OFFLOADED_DIR = env.resolve("offloaded");
   IDLE_SIGNALS_DIR = env.resolve("idle-signals");
   poolManager = env.requireFresh("pool-manager.js");
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(() => {
