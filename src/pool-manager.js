@@ -1243,58 +1243,46 @@ async function reconcilePool() {
     pruneSessionGraph(pool);
 
     // Clean up orphaned processes: alive PIDs in session-pids that aren't
-    // tracked by any pool slot, daemon PTY, or offload metadata.
-    // These are remnants from previous pool incarnations (e.g., pool was
-    // destroyed and re-created, but old Claude processes survived).
+    // tracked by any pool slot or daemon PTY. Only kill processes confirmed
+    // to be pool-origin (OPEN_COCKPIT_POOL=1 env var) — never external or
+    // custom sessions.
     const knownPids = new Set(pool.slots.map((s) => String(s.pid)));
-    // Also include PIDs managed by the daemon (covers custom sessions)
     for (const [, pty] of daemonPtys) {
       if (pty.pid) knownPids.add(String(pty.pid));
     }
     try {
-      for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
-        if (knownPids.has(file)) continue; // Tracked by pool or daemon — skip
+      const pidFiles = fs.readdirSync(SESSION_PIDS_DIR);
+      const orphanCandidates = [];
+      for (const file of pidFiles) {
+        if (knownPids.has(file)) continue;
         const pid = Number(file);
         if (!Number.isFinite(pid)) continue;
         if (!isPidAlive(pid)) {
-          // Dead process — just clean up the PID file
           cleanupPidFiles(file);
           continue;
         }
-        // Alive process not tracked by pool or daemon — check if it's a
-        // known session (has offload metadata). Only kill processes that
-        // look like orphaned pool slots (spawned with
-        // --dangerously-skip-permissions).
+        // Alive process not tracked by pool or daemon — candidate
         const sessionId = fs
           .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
           .trim();
         if (!sessionId) continue;
         const meta = readOffloadMeta(sessionId);
         if (meta) continue; // Has offload data — managed session
-        // Check if the process command includes pool flags (heuristic).
-        // Use /proc on Linux, ps on macOS. Skip on Windows (no reliable way).
-        let cmdLine = "";
-        try {
-          if (process.platform === "linux") {
-            cmdLine = fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8");
-          } else if (process.platform === "darwin") {
-            const { execFileSync } = require("child_process");
-            cmdLine = execFileSync(
-              "ps",
-              ["-p", String(pid), "-o", "command="],
-              {
-                encoding: "utf-8",
-                timeout: 2000,
-              },
-            ).trim();
-          }
-        } catch {
-          /* process inspection failed — skip */
-        }
-        if (cmdLine.includes("--dangerously-skip-permissions")) {
+        orphanCandidates.push({ file, pid, sessionId });
+      }
+      if (orphanCandidates.length > 0) {
+        // Use proper origin detection (checks OPEN_COCKPIT_POOL env var
+        // via ps eww / /proc) — only kill confirmed pool-origin processes.
+        const { batchDetectOrigins } = getSessionDiscovery();
+        const origins = await batchDetectOrigins(
+          orphanCandidates.map((c) => c.pid),
+        );
+        for (const { file, pid, sessionId } of orphanCandidates) {
+          const origin = origins.get(String(pid));
+          if (origin !== "pool") continue; // Not a pool process — leave it alone
           _debugLog(
             "main",
-            `Killing orphaned pool process PID ${pid} session=${sessionId} (not tracked by any pool slot or daemon PTY)`,
+            `Killing orphaned pool process PID ${pid} session=${sessionId} (origin=${origin}, not tracked by any pool slot)`,
           );
           try {
             process.kill(pid, "SIGTERM");
