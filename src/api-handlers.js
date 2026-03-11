@@ -485,14 +485,28 @@ function buildApiHandlers() {
   handlers["pool-followup"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
     if (!msg.prompt) throw new Error("prompt required");
+
+    // Check if session is not live — auto-resume it first.
+    // poolResume no longer requires offload metadata (just the session ID),
+    // so any session known to the graph can be resumed.
+    // Read outside withPoolLock intentionally: poolResume is idempotent
+    // (throws if already live/restoring), so a stale read is safe.
+    const pool = readPool();
+    const liveSlot = pool?.slots?.find((s) => s.sessionId === msg.sessionId);
+    if (!liveSlot) {
+      await poolResume(msg.sessionId);
+      // Wait for the resumed session to become idle before sending prompt
+      await waitForSessionIdle(msg.sessionId, 60000);
+    }
+
     return withPoolLock(async () => {
-      const { pool, slot } = findSlotBySessionId(msg.sessionId);
+      const { pool: p, slot } = findSlotBySessionId(msg.sessionId);
       const status = await getEffectiveSlotStatus(slot);
       if (status !== POOL_STATUS.IDLE)
         throw new Error(`Session is ${status}, expected idle`);
       await sendPromptToTerminal(slot.termId, msg.prompt);
       slot.status = POOL_STATUS.BUSY;
-      writePool(pool);
+      writePool(p);
       return {
         type: "started",
         sessionId: slot.sessionId,

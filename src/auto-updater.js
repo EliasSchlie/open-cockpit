@@ -1,5 +1,13 @@
-const { autoUpdater } = require("electron-updater");
 const { INSTANCE_NAME } = require("./paths");
+
+// Lazy-require electron-updater — the top-level import crashes in dev mode
+// because electron-updater accesses app.getVersion() at require time,
+// before Electron's app object is fully initialized.
+let autoUpdater;
+function getAutoUpdater() {
+  if (!autoUpdater) autoUpdater = require("electron-updater").autoUpdater;
+  return autoUpdater;
+}
 const { UPDATE_STATUS } = require("./session-statuses");
 
 const UPDATE_CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
@@ -65,34 +73,35 @@ function init({ debugLog, send }) {
     return;
   }
 
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  const au = getAutoUpdater();
+  au.autoDownload = false;
+  au.autoInstallOnAppQuit = true;
 
-  autoUpdater.setFeedURL({
+  au.setFeedURL({
     provider: "github",
     owner: "EliasSchlie",
     repo: "open-cockpit",
   });
 
-  autoUpdater.on("checking-for-update", () => {
+  au.on("checking-for-update", () => {
     _debugLog("auto-updater", "checking for update");
     _setState({ status: UPDATE_STATUS.CHECKING });
     _emit();
   });
 
-  autoUpdater.on("update-available", (info) => {
+  au.on("update-available", (info) => {
     _debugLog("auto-updater", `update available: v${info.version}`);
     _setState({ status: UPDATE_STATUS.AVAILABLE, version: info.version });
     _emit();
   });
 
-  autoUpdater.on("update-not-available", () => {
+  au.on("update-not-available", () => {
     _debugLog("auto-updater", "up to date");
     _setState({ status: UPDATE_STATUS.UP_TO_DATE });
     _emit();
   });
 
-  autoUpdater.on("download-progress", (progress) => {
+  au.on("download-progress", (progress) => {
     _setState({
       status: UPDATE_STATUS.DOWNLOADING,
       version: _state.version,
@@ -105,13 +114,13 @@ function init({ debugLog, send }) {
     _emitThrottled();
   });
 
-  autoUpdater.on("update-downloaded", (info) => {
+  au.on("update-downloaded", (info) => {
     _debugLog("auto-updater", `update downloaded: v${info.version}`);
     _setState({ status: UPDATE_STATUS.DOWNLOADED, version: info.version });
     _emit();
   });
 
-  autoUpdater.on("error", (err) => {
+  au.on("error", (err) => {
     _debugLog("auto-updater", `error: ${err.message}`);
     _setState({
       status: UPDATE_STATUS.ERROR,
@@ -122,13 +131,13 @@ function init({ debugLog, send }) {
   });
 
   // Initial check on startup
-  autoUpdater.checkForUpdates().catch((err) => {
+  au.checkForUpdates().catch((err) => {
     _debugLog("auto-updater", `initial check failed: ${err.message}`);
   });
 
   // Periodic checks
   _intervalId = setInterval(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
+    au.checkForUpdates().catch((err) => {
       _debugLog("auto-updater", `periodic check failed: ${err.message}`);
     });
   }, UPDATE_CHECK_INTERVAL);
@@ -140,23 +149,27 @@ function checkForUpdates() {
     _emit();
     return Promise.resolve();
   }
-  return autoUpdater.checkForUpdates().catch((err) => {
-    _debugLog("auto-updater", `manual check failed: ${err.message}`);
-    throw err;
-  });
+  return getAutoUpdater()
+    .checkForUpdates()
+    .catch((err) => {
+      _debugLog("auto-updater", `manual check failed: ${err.message}`);
+      throw err;
+    });
 }
 
 function downloadUpdate() {
   if (INSTANCE_NAME) return Promise.resolve();
-  return autoUpdater.downloadUpdate().catch((err) => {
-    _debugLog("auto-updater", `download failed: ${err.message}`);
-    throw err;
-  });
+  return getAutoUpdater()
+    .downloadUpdate()
+    .catch((err) => {
+      _debugLog("auto-updater", `download failed: ${err.message}`);
+      throw err;
+    });
 }
 
 function installUpdate() {
   if (INSTANCE_NAME) return;
-  autoUpdater.quitAndInstall();
+  getAutoUpdater().quitAndInstall();
 }
 
 function destroy() {

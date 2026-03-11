@@ -598,40 +598,9 @@ async function getOffloadedSessions() {
     }
   }
 
-  // Cascade: auto-archive offloaded children whose parent is archived.
-  // Without this, sub-agent sessions offloaded before parent death linger in Recent.
-  const hasOffloaded = sessions.some((s) => s.status === STATUS.OFFLOADED);
-  if (hasOffloaded) {
-    const archivedIds = new Set(
-      sessions
-        .filter((s) => s.status === STATUS.ARCHIVED)
-        .map((s) => s.sessionId),
-    );
-    if (archivedIds.size > 0) {
-      const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
-      for (const s of sessions) {
-        if (s.status !== STATUS.OFFLOADED) continue;
-        const entry = sessionGraph[s.sessionId];
-        if (!entry?.parentSessionId) continue;
-        if (!archivedIds.has(entry.parentSessionId)) continue;
-        s.status = STATUS.ARCHIVED;
-        // Persist so this doesn't recompute every time
-        const meta = readOffloadMeta(s.sessionId);
-        if (meta && !meta.archived) {
-          meta.archived = true;
-          meta.archivedAt = meta.archivedAt || new Date().toISOString();
-          try {
-            secureWriteFileSync(
-              path.join(OFFLOADED_DIR, s.sessionId, "meta.json"),
-              JSON.stringify(meta, null, 2),
-            );
-          } catch {
-            /* best-effort */
-          }
-        }
-      }
-    }
-  }
+  // Children follow their parent's section in the UI (via session graph),
+  // but are never cascade-archived — they stay offloaded so the parent can
+  // resume conversations with them when reloaded.
 
   return sessions;
 }
