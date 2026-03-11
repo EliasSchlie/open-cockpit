@@ -1277,16 +1277,16 @@ async function preWarmPool() {
   for (let i = 0; i < minFresh; i++) {
     let target;
     try {
-      target = await checkOffloadNeeded(minFresh);
+      target = await checkOffloadNeeded(minFresh, _pendingOffloads);
     } catch (err) {
       // "No fresh or idle slots available" is expected — anything else is a bug
       if (!err.message?.includes("No fresh or idle")) {
         _debugLog("main", `Pre-warm check failed: ${err.message}`);
       }
-      return;
+      return; // checkOffloadNeeded only adds to _pendingOffloads on success
     }
     if (target === false) return; // Pool not initialized
-    if (!target) return; // Enough fresh slots
+    if (!target) return; // Enough fresh slots (nothing added to _pendingOffloads)
     _debugLog(
       "main",
       `Pre-warming pool: offloading session ${target.sessionId}`,
@@ -1296,6 +1296,8 @@ async function preWarmPool() {
     } catch (err) {
       _debugLog("main", `Pre-warm offload failed: ${err.message}`);
       return;
+    } finally {
+      _pendingOffloads.delete(target.sessionId);
     }
   }
 }
