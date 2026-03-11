@@ -1,5 +1,13 @@
-const { autoUpdater } = require("electron-updater");
 const { INSTANCE_NAME } = require("./paths");
+
+// Lazy-require electron-updater — the top-level import crashes in dev mode
+// because electron-updater accesses app.getVersion() at require time,
+// before Electron's app object is fully initialized.
+let autoUpdater;
+function getAutoUpdater() {
+  if (!autoUpdater) autoUpdater = require("electron-updater").autoUpdater;
+  return autoUpdater;
+}
 const { UPDATE_STATUS } = require("./session-statuses");
 
 const UPDATE_CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
