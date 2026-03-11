@@ -1242,59 +1242,7 @@ async function reconcilePool() {
     // Prune session graph — remove entries for sessions that no longer exist
     pruneSessionGraph(pool);
 
-    // Clean up orphaned processes: alive PIDs in session-pids that aren't
-    // tracked by any pool slot or daemon PTY. Only kill processes confirmed
-    // to be pool-origin (OPEN_COCKPIT_POOL=1 env var) — never external or
-    // custom sessions.
-    const knownPids = new Set(pool.slots.map((s) => String(s.pid)));
-    for (const [, pty] of daemonPtys) {
-      if (pty.pid) knownPids.add(String(pty.pid));
-    }
-    try {
-      const pidFiles = fs.readdirSync(SESSION_PIDS_DIR);
-      const orphanCandidates = [];
-      for (const file of pidFiles) {
-        if (knownPids.has(file)) continue;
-        const pid = Number(file);
-        if (!Number.isFinite(pid)) continue;
-        if (!isPidAlive(pid)) {
-          cleanupPidFiles(file);
-          continue;
-        }
-        // Alive process not tracked by pool or daemon — candidate
-        const sessionId = fs
-          .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
-          .trim();
-        if (!sessionId) continue;
-        const meta = readOffloadMeta(sessionId);
-        if (meta) continue; // Has offload data — managed session
-        orphanCandidates.push({ file, pid, sessionId });
-      }
-      if (orphanCandidates.length > 0) {
-        // Use proper origin detection (checks OPEN_COCKPIT_POOL env var
-        // via ps eww / /proc) — only kill confirmed pool-origin processes.
-        const { batchDetectOrigins } = getSessionDiscovery();
-        const origins = await batchDetectOrigins(
-          orphanCandidates.map((c) => c.pid),
-        );
-        for (const { file, pid, sessionId } of orphanCandidates) {
-          const origin = origins.get(String(pid));
-          if (origin !== "pool") continue; // Not a pool process — leave it alone
-          _debugLog(
-            "main",
-            `Killing orphaned pool process PID ${pid} session=${sessionId} (origin=${origin}, not tracked by any pool slot)`,
-          );
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch {
-            /* ESRCH */
-          }
-          cleanupPidFiles(file);
-        }
-      }
-    } catch {
-      /* ENOENT — no session-pids dir */
-    }
+    await cleanupOrphanedProcesses(pool, daemonPtys);
   });
 
   // Restore missing sessions OUTSIDE the pool lock to avoid deadlock
@@ -1524,6 +1472,65 @@ async function syncPoolStatuses(sessions) {
 
 // Remove idle-signal and session-pid files for a PID so it doesn't appear
 // as a ghost session after process death.
+// Clean up orphaned processes: alive PIDs in session-pids that aren't
+// tracked by any pool slot or daemon PTY. Only kill processes confirmed
+// to be pool-origin (OPEN_COCKPIT_POOL=1 env var) — never external or
+// custom sessions.
+async function cleanupOrphanedProcesses(
+  pool,
+  daemonPtys,
+  { _detectOrigins } = {},
+) {
+  const knownPids = new Set(pool.slots.map((s) => String(s.pid)));
+  for (const [, pty] of daemonPtys) {
+    if (pty.pid) knownPids.add(String(pty.pid));
+  }
+  try {
+    const pidFiles = fs.readdirSync(SESSION_PIDS_DIR);
+    const orphanCandidates = [];
+    for (const file of pidFiles) {
+      if (knownPids.has(file)) continue;
+      const pid = Number(file);
+      if (!Number.isFinite(pid)) continue;
+      if (!isPidAlive(pid)) {
+        cleanupPidFiles(file);
+        continue;
+      }
+      // Alive process not tracked by pool or daemon — candidate
+      const sessionId = fs
+        .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
+        .trim();
+      if (!sessionId) continue;
+      const meta = readOffloadMeta(sessionId);
+      if (meta) continue; // Has offload data — managed session
+      orphanCandidates.push({ file, pid, sessionId });
+    }
+    if (orphanCandidates.length > 0) {
+      // Use proper origin detection (checks OPEN_COCKPIT_POOL env var
+      // via ps eww / /proc) — only kill confirmed pool-origin processes.
+      const detectFn =
+        _detectOrigins || getSessionDiscovery().batchDetectOrigins;
+      const origins = await detectFn(orphanCandidates.map((c) => c.pid));
+      for (const { file, pid, sessionId } of orphanCandidates) {
+        const origin = origins.get(String(pid));
+        if (origin !== "pool") continue; // Not a pool process — leave it alone
+        _debugLog(
+          "main",
+          `Killing orphaned pool process PID ${pid} session=${sessionId} (origin=${origin}, not tracked by any pool slot)`,
+        );
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* ESRCH */
+        }
+        cleanupPidFiles(file);
+      }
+    }
+  } catch {
+    /* ENOENT — no session-pids dir */
+  }
+}
+
 function cleanupPidFiles(pidStr) {
   for (const dir of [IDLE_SIGNALS_DIR, SESSION_PIDS_DIR]) {
     try {
@@ -2052,4 +2059,5 @@ module.exports = {
   focusExternalTerminal,
   closeExternalTerminal,
   setTerminalDims,
+  cleanupOrphanedProcesses,
 };
