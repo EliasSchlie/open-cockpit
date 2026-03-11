@@ -645,9 +645,15 @@ export async function reconnectAllPtys() {
   // Reconnect each session's terminals (skip orphaned terminals with no session)
   for (const [sid, sessionPtys] of bySession) {
     if (sid === "__none__") {
-      debugLog("startup", `detaching ${sessionPtys.length} orphaned PTYs`);
-      for (const p of sessionPtys) {
-        window.api.ptyDetach(p.termId).catch(() => {});
+      // Don't detach pool-slot PTYs — they may not have a sessionId yet
+      // (trackNewSlot hasn't resolved). Detaching them would orphan the
+      // Claude process and break pool status detection.
+      const orphans = sessionPtys.filter((p) => !p.isPoolTui);
+      if (orphans.length > 0) {
+        debugLog("startup", `detaching ${orphans.length} orphaned PTYs`);
+        for (const p of orphans) {
+          window.api.ptyDetach(p.termId).catch(() => {});
+        }
       }
       continue;
     }
