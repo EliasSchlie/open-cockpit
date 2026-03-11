@@ -32,13 +32,13 @@
   }
   if (instanceName) {
     process.env.OPEN_COCKPIT_INSTANCE_NAME = instanceName;
-    if (!process.env.OPEN_COCKPIT_DIR) {
-      process.env.OPEN_COCKPIT_DIR = require("path").join(
-        require("os").homedir(),
-        ".open-cockpit-dev",
-        instanceName,
-      );
-    }
+    // Always override — OPEN_COCKPIT_DIR may be inherited from a base-instance
+    // pool session, which would cause the dev instance to share production state.
+    process.env.OPEN_COCKPIT_DIR = require("path").join(
+      require("os").homedir(),
+      ".open-cockpit-dev",
+      instanceName,
+    );
     console.log(`[open-cockpit] Instance: ${instanceName}`);
     console.log(`[open-cockpit] Dir:      ${process.env.OPEN_COCKPIT_DIR}`);
     console.log(
