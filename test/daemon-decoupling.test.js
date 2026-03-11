@@ -24,9 +24,6 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
     expect(paths.ACTIVE_SESSIONS_FILE).toBe(
       path.join(env.dir, "active-sessions.json"),
     );
-    expect(paths.PENDING_RESTORE_FILE).toBe(
-      path.join(env.dir, "pending-restore.json"),
-    );
     expect(paths.POOL_SETTINGS_FILE).toBe(
       path.join(env.dir, "pool-settings.json"),
     );
