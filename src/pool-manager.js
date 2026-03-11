@@ -1106,6 +1106,8 @@ async function reconcilePool() {
         // Clean up terminal input cache for old termId
         terminalHasInputCache.delete(slot.termId);
         // Auto-offload session before killing, so it stays discoverable
+        // in the sidebar. poolResume doesn't need offload meta anymore,
+        // but the sidebar only shows offloaded sessions that have meta.
         if (slot.sessionId && !readOffloadMeta(slot.sessionId)) {
           try {
             await writeOffloadMeta(slot.sessionId, {
