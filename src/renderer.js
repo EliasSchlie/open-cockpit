@@ -156,43 +156,24 @@ async function selectSession(session) {
     // Resolve the daemon terminal ID for pool/custom sessions
     let daemonTermId = null;
     if (session.origin === "pool") {
-      // Pool slots may not have sessionIds yet after a restart (registry
-      // restore runs async). Retry a few times before giving up.
-      const MAX_SLOT_RETRIES = 6;
-      const SLOT_RETRY_DELAY = 2000;
-      let slot = null;
-      for (let attempt = 0; attempt <= MAX_SLOT_RETRIES; attempt++) {
-        const pool = await window.api.poolRead();
-        if (gen !== state.sessionGeneration) {
-          debugLog("session", `race abort gen=${gen} at poolRead`);
-          return;
-        }
-        slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
-        if (slot) {
-          debugLog(
-            "session",
-            `pool slot found: index=${slot.index} termId=${slot.termId} status=${slot.status}`,
-          );
-          break;
-        }
-        if (attempt < MAX_SLOT_RETRIES) {
-          debugLog(
-            "session",
-            `pool slot NOT FOUND for session=${session.sessionId} — retry ${attempt + 1}/${MAX_SLOT_RETRIES} (pool has ${pool?.slots.length} slots)`,
-          );
-          await new Promise((r) => setTimeout(r, SLOT_RETRY_DELAY));
-          if (gen !== state.sessionGeneration) {
-            debugLog("session", `race abort gen=${gen} at slotRetry`);
-            return;
-          }
-        } else {
-          debugLog(
-            "session",
-            `pool slot NOT FOUND for session=${session.sessionId} after ${MAX_SLOT_RETRIES} retries (pool has ${pool?.slots.length} slots, sessionIds: ${pool?.slots.map((s) => s.sessionId?.slice(0, 8)).join(",")})`,
-          );
-        }
+      const pool = await window.api.poolRead();
+      if (gen !== state.sessionGeneration) {
+        debugLog("session", `race abort gen=${gen} at poolRead`);
+        return;
       }
-      daemonTermId = slot?.termId || null;
+      const slot = pool?.slots.find((s) => s.sessionId === session.sessionId);
+      daemonTermId = slot?.termId ?? null;
+      if (!slot) {
+        debugLog(
+          "session",
+          `pool slot NOT FOUND for session=${session.sessionId} (pool has ${pool?.slots.length} slots, sessionIds: ${pool?.slots.map((s) => s.sessionId?.slice(0, 8)).join(",")})`,
+        );
+      } else {
+        debugLog(
+          "session",
+          `pool slot found: index=${slot.index} termId=${slot.termId} status=${slot.status}`,
+        );
+      }
     } else if (session.origin === "custom") {
       const allPtys = await window.api.ptyList();
       if (gen !== state.sessionGeneration) {
