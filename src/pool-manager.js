@@ -730,7 +730,7 @@ async function spawnPoolSlot(index, args) {
 // Called before pool destruction (explicit or daemon crash) so poolInit can resume them.
 // Accepts pool object to avoid redundant disk read (callers already hold it).
 // Only saves user-spawned sessions with active statuses (busy/idle/typing).
-async function extractPendingRestore(pool) {
+function extractPendingRestore(pool) {
   if (!pool) return [];
 
   const graph = readSessionGraph();
@@ -749,14 +749,6 @@ async function extractPendingRestore(pool) {
     // Skip agent-spawned sessions (initiator: model)
     const graphEntry = graph[slot.sessionId];
     if (graphEntry?.initiator === INITIATOR.MODEL) continue;
-
-    // Create offload metadata so poolResume can find the session
-    if (!readOffloadMeta(slot.sessionId)) {
-      await writeOffloadMeta(slot.sessionId, {
-        claudeSessionId: slot.sessionId,
-        origin: "pool",
-      });
-    }
 
     restorableIds.push(slot.sessionId);
   }
@@ -924,13 +916,6 @@ async function restoreFromActiveRegistry() {
     let restored = 0;
     for (const entry of userSessions) {
       try {
-        // Ensure offload meta exists so poolResume can find the claudeSessionId
-        if (!readOffloadMeta(entry.sessionId)) {
-          await writeOffloadMeta(entry.sessionId, {
-            claudeSessionId: entry.claudeSessionId,
-            origin: "pool",
-          });
-        }
         await poolResume(entry.sessionId);
         restored++;
         _debugLog("main", `Registry-restored session ${entry.sessionId}`);
@@ -1738,10 +1723,10 @@ async function poolResume(sessionId) {
     }
   }
 
+  // The session ID is the Claude session ID — no offload metadata needed.
+  // If offload meta exists with a different claudeSessionId, honor it (legacy).
   const meta = readOffloadMeta(sessionId);
-  if (!meta) throw new Error("No offload data for session");
-  const claudeSessionId = meta.claudeSessionId || meta.sessionId;
-  if (!claudeSessionId) throw new Error("No Claude session ID stored");
+  const claudeSessionId = meta?.claudeSessionId || sessionId;
 
   // Add guard after all validation — stays active until trackNewSlot resolves
   // (which happens async after poolResume returns).
