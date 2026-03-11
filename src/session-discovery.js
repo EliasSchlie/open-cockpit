@@ -523,6 +523,11 @@ async function getOffloadedSessions() {
     return [];
   }
   const graph = readJsonSync(SESSION_GRAPH_FILE, {});
+  const parentIds = new Set(
+    Object.values(graph)
+      .map((e) => e.parentSessionId)
+      .filter(Boolean),
+  );
   const sessions = [];
   for (const dir of dirs) {
     try {
@@ -537,7 +542,13 @@ async function getOffloadedSessions() {
         parentId && fs.existsSync(path.join(OFFLOADED_DIR, parentId));
 
       // Delete empty sessions (no snapshot + no intention) — they were never used.
-      if (!hasSnapshot && !meta.intentionHeading && !isChildWithParent) {
+      // But keep parent sessions that have children in the graph.
+      if (
+        !hasSnapshot &&
+        !meta.intentionHeading &&
+        !isChildWithParent &&
+        !parentIds.has(dir)
+      ) {
         try {
           fs.rmSync(path.join(OFFLOADED_DIR, dir), { recursive: true });
           // Clean up empty intention file if it exists
@@ -879,6 +890,11 @@ async function getSessionsUncached() {
     }
   }
   const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
+  const graphParentIds = new Set(
+    Object.values(sessionGraph)
+      .map((e) => e.parentSessionId)
+      .filter(Boolean),
+  );
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (s.status !== STATUS.DEAD) continue;
@@ -900,8 +916,9 @@ async function getSessionsUncached() {
 
     const offloadDir = path.join(OFFLOADED_DIR, s.sessionId);
     if (!fs.existsSync(offloadDir)) {
-      // Skip archiving sessions that were never used (no intention = no user prompt)
-      if (!s.intentionHeading) {
+      // Skip archiving sessions that were never used (no intention = no user prompt).
+      // But keep parent sessions that have children in the graph — archive them instead.
+      if (!s.intentionHeading && !graphParentIds.has(s.sessionId)) {
         try {
           fs.unlinkSync(path.join(SESSION_PIDS_DIR, String(s.pid)));
         } catch (err) {
