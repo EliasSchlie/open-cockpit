@@ -182,12 +182,14 @@ async function loadSessions() {
   const { childIds } = tree;
   const isTopLevel = (s) => !childIds.has(s.sessionId);
 
-  // Parents with alive children should stay in a non-archive section even if
-  // the parent itself is archived/offloaded — keeps the tree visible.
-  const hasAliveChildren = (s) => {
+  // Parents with non-archived children should stay in a non-archive section
+  // even if the parent itself is archived/offloaded — keeps the tree visible.
+  const hasNonArchivedChildren = (s) => {
     const children = childrenMap.get(s.sessionId);
     if (!children) return false;
-    return children.some((c) => c.alive || hasAliveChildren(c));
+    return children.some(
+      (c) => c.status !== STATUS.ARCHIVED || hasNonArchivedChildren(c),
+    );
   };
 
   // Split into sections — pool and external mixed together (top-level only)
@@ -211,14 +213,16 @@ async function loadSessions() {
       (s.status === STATUS.IDLE ||
         s.status === STATUS.OFFLOADED ||
         // Archived/offloaded parents with alive children stay in Recent
-        (s.status === STATUS.ARCHIVED && hasAliveChildren(s))),
+        (s.status === STATUS.ARCHIVED && hasNonArchivedChildren(s))),
   );
   const processing = sessions.filter(
     (s) => isTopLevel(s) && notInCustom(s) && s.status === STATUS.PROCESSING,
   );
   const archived = sessions.filter(
     (s) =>
-      isTopLevel(s) && s.status === STATUS.ARCHIVED && !hasAliveChildren(s),
+      isTopLevel(s) &&
+      s.status === STATUS.ARCHIVED &&
+      !hasNonArchivedChildren(s),
   );
 
   // Build fingerprint to check if anything changed

@@ -1105,6 +1105,28 @@ async function reconcilePool() {
         }
         // Clean up terminal input cache for old termId
         terminalHasInputCache.delete(slot.termId);
+        // Auto-offload session before killing, so it stays discoverable
+        if (slot.sessionId && !readOffloadMeta(slot.sessionId)) {
+          try {
+            const graph = readSessionGraph();
+            const origin = graph[slot.sessionId]?.parentSessionId
+              ? "pool"
+              : undefined;
+            await writeOffloadMeta(slot.sessionId, {
+              claudeSessionId: slot.sessionId,
+              origin: origin || "pool",
+            });
+            _debugLog(
+              "main",
+              `Auto-offloaded session ${slot.sessionId} before slot recovery`,
+            );
+          } catch (err) {
+            _debugLog(
+              "main",
+              `Failed to auto-offload ${slot.sessionId}: ${err.message}`,
+            );
+          }
+        }
         // Kill old process/PTY before restarting
         await killSlotProcess(slot);
         // Auto-restart slot
@@ -1352,12 +1374,22 @@ function pruneSessionGraph(pool) {
     /* OFFLOADED_DIR may not exist */
   }
 
+  // Never prune entries that are part of a parent-child relationship.
+  // These must persist forever so children always appear under their parent.
+  const parentIds = new Set();
+  for (const entry of Object.values(graph)) {
+    if (entry.parentSessionId) parentIds.add(entry.parentSessionId);
+  }
+
   let pruned = false;
   for (const id of graphKeys) {
-    if (!knownIds.has(id)) {
-      delete graph[id];
-      pruned = true;
-    }
+    if (knownIds.has(id)) continue;
+    // Keep entries that are parents (have children pointing to them)
+    if (parentIds.has(id)) continue;
+    // Keep entries that are children (have a parentSessionId)
+    if (graph[id].parentSessionId) continue;
+    delete graph[id];
+    pruned = true;
   }
   if (pruned) writeSessionGraph(graph);
 }
