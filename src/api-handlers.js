@@ -487,7 +487,9 @@ function buildApiHandlers() {
     if (!msg.sessionId) throw new Error("sessionId required");
     if (!msg.prompt) throw new Error("prompt required");
 
-    // Check if session is offloaded — auto-resume it first
+    // Check if session is offloaded — auto-resume it first.
+    // Read outside withPoolLock intentionally: poolResume is idempotent
+    // (throws if already live/restoring), so a stale read is safe.
     const pool = readPool();
     const liveSlot = pool?.slots?.find((s) => s.sessionId === msg.sessionId);
     if (!liveSlot && readOffloadMeta(msg.sessionId)) {

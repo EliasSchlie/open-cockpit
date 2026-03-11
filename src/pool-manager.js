@@ -1108,13 +1108,9 @@ async function reconcilePool() {
         // Auto-offload session before killing, so it stays discoverable
         if (slot.sessionId && !readOffloadMeta(slot.sessionId)) {
           try {
-            const graph = readSessionGraph();
-            const origin = graph[slot.sessionId]?.parentSessionId
-              ? "pool"
-              : undefined;
             await writeOffloadMeta(slot.sessionId, {
               claudeSessionId: slot.sessionId,
-              origin: origin || "pool",
+              origin: "pool",
             });
             _debugLog(
               "main",
