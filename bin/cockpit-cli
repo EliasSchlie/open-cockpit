@@ -703,46 +703,8 @@ case "$CMD" in
   # ==========================================================================
 
   prompt)
-    # Send a prompt to an idle session (high-level, handles timing)
-    TARGET="${1:?target required (sessionId, @slot, or prefix)}"
-    shift
-    BLOCK=false
-    PROMPT=""
-    while [[ $# -gt 0 ]]; do
-      case "$1" in
-        --block) BLOCK=true; shift ;;
-        -v|--verbosity) VERBOSITY="${2:?verbosity level required}"; shift 2 ;;
-        -*) echo "Unknown option: $1" >&2; exit 1 ;;
-        *) PROMPT="$1"; shift ;;
-      esac
-    done
-    if [[ -z "$PROMPT" ]]; then
-      echo "Usage: cockpit-cli prompt <target> <text> [--block]" >&2
-      exit 1
-    fi
-
-    resolve_to_session_id "$TARGET"
-    SID="$RESOLVED_SESSION_ID"
-    PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-
-    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SID\",\"prompt\":$PROMPT_JSON}"
-    RESULT=$(send_api "$json")
-    check_error "$RESULT"
-
-    if $BLOCK; then
-      echo "$SID" >&2
-      wait_json="{\"type\":\"pool-wait\",\"id\":1,\"sessionId\":\"$SID\",\"timeout\":300000}"
-      WAIT_RESULT=$(send_api "$wait_json" 310)
-      check_error "$WAIT_RESULT"
-      BUFFER=$(json_field "$WAIT_RESULT" "buffer")
-      if [[ "$VERBOSITY" == "raw" ]]; then
-        printf '%s' "$BUFFER" | strip_ansi
-      else
-        apply_verbosity "$SID" "$BUFFER"
-      fi
-    else
-      echo "Prompt sent to $SID"
-    fi
+    # Alias for followup
+    exec "$0" ${DEV_FLAG:+--dev} ${INSTANCE_FLAG:+--instance "$INSTANCE_FLAG"} -v "$VERBOSITY" followup "$@"
     ;;
 
   type)
@@ -865,22 +827,24 @@ case "$CMD" in
     SESSION_ID="$RESOLVED_SESSION_ID"
     shift
     BLOCK=false
+    FORCE=false
     PROMPT=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --block) BLOCK=true; shift ;;
+        --force) FORCE=true; shift ;;
         -v|--verbosity) VERBOSITY="${2:?verbosity level required}"; shift 2 ;;
         -*) echo "Unknown option: $1" >&2; exit 1 ;;
         *) PROMPT="$1"; shift ;;
       esac
     done
     if [[ -z "$PROMPT" ]]; then
-      echo "Usage: cockpit-cli followup <id> <prompt> [--block]" >&2
+      echo "Usage: cockpit-cli followup <id> <prompt> [--block] [--force]" >&2
       exit 1
     fi
 
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON}"
+    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON,\"force\":$FORCE}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     SID=$(json_field "$RESULT" "sessionId")
@@ -1602,8 +1566,7 @@ Targets: Most commands accept a <target> which can be:
 
 ─── INTERACT ────────────────────────────────────────────────────────────────
 
-  prompt <target> <text> [--block]  Send a prompt to an idle session
-                                    --block waits for completion, prints result
+  prompt                             Alias for followup
 
   type <target> <text>           Type text into terminal (interprets \r, \n, etc.)
   key <target> <keyname>         Send a named key:
@@ -1615,7 +1578,7 @@ Targets: Most commands accept a <target> which can be:
 
   start <prompt> [--block]       Send prompt to fresh slot, return session ID
   resume <id> [--block]          Resume offloaded/archived session
-  followup <id> <prompt> [--block]  Follow up on idle session
+  followup <id> <prompt> [--block] [--force]  Follow up on session (--force skips idle check)
   wait [id]                      Wait for session to finish, print output
   capture <target>               Show live terminal content
   result <target>                Print output (error if still running)
@@ -1706,7 +1669,7 @@ Targets: Most commands accept a <target> which can be:
   cockpit-cli screen @2                       # See slot 2's terminal
   cockpit-cli watch 2947b                     # Follow agent output live
   cockpit-cli log 2947b                       # Read conversation history
-  cockpit-cli prompt 2947b "add error handling" --block  # Send prompt, wait
+  cockpit-cli followup 2947b "add error handling" --block # Send prompt, wait
   cockpit-cli key @0 ctrl-c                   # Send Ctrl+C to slot 0
   cockpit-cli type @1 'hello\r'               # Type "hello" + Enter
 

@@ -41,8 +41,9 @@ cockpit-cli intention 2947b "new text"  # Write intention file
 
 ```bash
 # High-level (handles timing automatically)
-cockpit-cli prompt @1 "add error handling"          # Send prompt to idle session
-cockpit-cli prompt 2947b "fix the bug" --block      # Send + wait for result
+cockpit-cli followup @1 "add error handling"        # Send prompt to idle session
+cockpit-cli followup 2947b "fix the bug" --block    # Send + wait for result
+cockpit-cli followup @1 "respond" --force           # Send even if not idle
 
 # Low-level keystrokes
 cockpit-cli type @1 'hello\r'                       # Type text (interprets escapes)
@@ -272,11 +273,11 @@ External tools (including other Claude Code sessions) can observe and interact w
 
 ### Recommended approach: high-level CLI commands
 
-The `screen`, `prompt`, `key`, and `type` commands handle ANSI stripping and timing automatically:
+The `screen`, `followup`, `key`, and `type` commands handle ANSI stripping and timing automatically:
 
 ```bash
 cockpit-cli screen @2            # Clean terminal output
-cockpit-cli prompt @1 "do X"     # Handles timing, sends prompt safely
+cockpit-cli followup @1 "do X"   # Handles timing, sends prompt safely
 cockpit-cli key @0 ctrl-c        # Named keys, no escape code memorization
 ```
 
