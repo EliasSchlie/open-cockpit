@@ -704,7 +704,7 @@ case "$CMD" in
 
   prompt)
     # Alias for followup
-    exec "$0" ${DEV_FLAG:+--dev} followup "$@"
+    exec "$0" ${DEV_FLAG:+--dev} ${INSTANCE_FLAG:+--instance "$INSTANCE_FLAG"} -v "$VERBOSITY" followup "$@"
     ;;
 
   type)
@@ -844,8 +844,7 @@ case "$CMD" in
     fi
 
     PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-    FORCE_JSON=$($FORCE && echo "true" || echo "false")
-    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON,\"force\":$FORCE_JSON}"
+    json="{\"type\":\"pool-followup\",\"id\":1,\"sessionId\":\"$SESSION_ID\",\"prompt\":$PROMPT_JSON,\"force\":$FORCE}"
     RESULT=$(send_api "$json")
     check_error "$RESULT"
     SID=$(json_field "$RESULT" "sessionId")
