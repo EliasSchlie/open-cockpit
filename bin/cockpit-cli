@@ -13,22 +13,172 @@ export PATH
 # --- Global flags (parsed before socket resolution) ---
 VERBOSITY="raw"
 INSTANCE_FLAG=""
+DEV_FLAG=""
 while [[ ${1:-} =~ ^- ]]; do
   case "$1" in
     -v|--verbosity) VERBOSITY="${2:?verbosity level required (raw|response|conversation|full)}"; shift 2 ;;
     --instance) INSTANCE_FLAG="${2:?instance name required}"; shift 2 ;;
+    --dev) DEV_FLAG=1; shift ;;
     *) break ;;
   esac
 done
 
+# --- Resolve --dev flag to session-owned instance name ---
+# Reuses detect_session_id pattern but against the base instance's session-pids dir,
+# and also captures the matched PID (the parent Claude process).
+BASE_OC_DIR="$HOME/.open-cockpit"
+if [ -n "$DEV_FLAG" ]; then
+  DEV_SESSION_ID=""
+  DEV_CLAUDE_PID=""
+  _pid=$$
+  while [[ -n "$_pid" && "$_pid" -gt 1 ]]; do
+    if [[ -f "$BASE_OC_DIR/session-pids/$_pid" ]]; then
+      DEV_SESSION_ID=$(cat "$BASE_OC_DIR/session-pids/$_pid" 2>/dev/null | tr -d '[:space:]')
+      DEV_CLAUDE_PID="$_pid"
+      break
+    fi
+    _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d '[:space:]')
+  done
+  if [ -z "$DEV_SESSION_ID" ]; then
+    echo "Error: --dev could not detect parent Claude session ID." >&2
+    echo "Make sure you're running this from within a Claude Code session." >&2
+    exit 1
+  fi
+  INSTANCE_FLAG="$DEV_SESSION_ID"
+fi
+
+# Send quit signal to a dev instance via its API socket. Args: <instance_dir>
+send_dev_quit() {
+  local dir="$1"
+  [ -S "$dir/api.sock" ] || return 0
+  node -e "const s=require('net').createConnection('$dir/api.sock');s.on('connect',()=>{s.write('{\"type\":\"quit\",\"id\":1}\n');setTimeout(()=>process.exit(0),500)});s.on('error',()=>process.exit(0))" 2>/dev/null || true
+  # Poll for daemon to exit (up to 2s) instead of fixed sleep
+  local i=0
+  while [ $i -lt 20 ] && [ -f "$dir/pty-daemon.pid" ]; do
+    local dpid; dpid=$(cat "$dir/pty-daemon.pid" 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$dpid" ]] && kill -0 "$dpid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+# Force-kill daemon for a dev instance. Args: <instance_dir>
+kill_dev_daemon() {
+  local dir="$1"
+  [ -f "$dir/pty-daemon.pid" ] || return 0
+  local dpid; dpid=$(cat "$dir/pty-daemon.pid" 2>/dev/null | tr -d '[:space:]')
+  if [[ -n "$dpid" ]] && kill -0 "$dpid" 2>/dev/null; then
+    kill "$dpid" 2>/dev/null || true
+    echo "Killed daemon (PID $dpid)." >&2
+  fi
+}
+
 # --- Resolve state directory ---
-# Priority: --instance flag > OPEN_COCKPIT_DIR env var > default (~/.open-cockpit)
+# Priority: --instance/--dev flag > OPEN_COCKPIT_DIR env var > default (~/.open-cockpit)
 if [ -n "$INSTANCE_FLAG" ]; then
   OC_DIR="$HOME/.open-cockpit-dev/$INSTANCE_FLAG"
 elif [ -n "${OPEN_COCKPIT_DIR:-}" ]; then
   OC_DIR="$OPEN_COCKPIT_DIR"
 else
-  OC_DIR="$HOME/.open-cockpit"
+  OC_DIR="$BASE_OC_DIR"
+fi
+
+# --- Handle 'dev' subcommand (before socket resolution — instance may not exist yet) ---
+if [[ "${1:-}" == "dev" ]]; then
+  shift
+  DEV_SUB="${1:-help}"; shift 2>/dev/null || true
+
+  # Require --dev flag for all dev subcommands
+  if [ -z "$DEV_FLAG" ]; then
+    echo "Error: 'dev' subcommand requires --dev flag." >&2
+    exit 1
+  fi
+
+  dev_instance_dir="$HOME/.open-cockpit-dev/$DEV_SESSION_ID"
+
+  case "$DEV_SUB" in
+    launch)
+      # Parse launch options
+      DEV_HIDDEN=""
+      DEV_WATCH=""
+      DEV_CWD=""
+      while [[ ${1:-} =~ ^- ]]; do
+        case "$1" in
+          --hidden) DEV_HIDDEN=1; shift ;;
+          --watch) DEV_WATCH=1; shift ;;
+          --cwd) DEV_CWD="${2:?cwd required}"; shift 2 ;;
+          *) echo "Unknown launch option: $1" >&2; exit 1 ;;
+        esac
+      done
+
+      # 1:1 enforcement — kill existing dev instance for this session
+      if [ -S "$dev_instance_dir/api.sock" ] || [ -f "$dev_instance_dir/pty-daemon.pid" ]; then
+        echo "Killing existing dev instance for session $DEV_SESSION_ID..." >&2
+        send_dev_quit "$dev_instance_dir"
+        kill_dev_daemon "$dev_instance_dir"
+      fi
+
+      # Find the project root (where package.json is)
+      if [ -n "$DEV_CWD" ]; then
+        PROJECT_DIR="$DEV_CWD"
+      else
+        # Default: the open-cockpit repo this CLI lives in
+        PROJECT_DIR="$SCRIPT_DIR/.."
+      fi
+      PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
+      # Build launch args
+      LAUNCH_ARGS=(--dev --instance "$DEV_SESSION_ID" --parent-pid "$DEV_CLAUDE_PID")
+      [ -n "$DEV_HIDDEN" ] && LAUNCH_ARGS+=(--hidden)
+
+      if [ -n "$DEV_WATCH" ]; then
+        # dev:watch uses scripts/dev-watch.js — pass electron args after "--"
+        (cd "$PROJECT_DIR" && \
+          nohup node scripts/dev-watch.js -- "${LAUNCH_ARGS[@]}" > /dev/null 2>&1 &)
+      else
+        (cd "$PROJECT_DIR" && npm run build && \
+          nohup npx electron . "${LAUNCH_ARGS[@]}" > /dev/null 2>&1 &)
+      fi
+      echo "Dev instance launched: $DEV_SESSION_ID" >&2
+      echo "  Dir: $dev_instance_dir" >&2
+      echo "  Parent PID: $DEV_CLAUDE_PID" >&2
+      echo "  CLI: cockpit-cli --dev <command>" >&2
+      exit 0
+      ;;
+    kill)
+      send_dev_quit "$dev_instance_dir"
+      kill_dev_daemon "$dev_instance_dir"
+      rm -f "$dev_instance_dir/api.sock" "$dev_instance_dir/pty-daemon.sock" "$dev_instance_dir/pty-daemon.pid" 2>/dev/null
+      echo "Dev instance cleaned up." >&2
+      exit 0
+      ;;
+    status)
+      if [ -S "$dev_instance_dir/api.sock" ]; then
+        echo "running"
+        echo "  Dir: $dev_instance_dir" >&2
+        if [ -f "$dev_instance_dir/pty-daemon.pid" ]; then
+          daemon_pid=$(cat "$dev_instance_dir/pty-daemon.pid" 2>/dev/null | tr -d '[:space:]')
+          if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+            echo "  Daemon: PID $daemon_pid (alive)" >&2
+          else
+            echo "  Daemon: not running" >&2
+          fi
+        fi
+      else
+        echo "stopped"
+      fi
+      exit 0
+      ;;
+    help|*)
+      echo "Usage: cockpit-cli --dev dev <subcommand>" >&2
+      echo "" >&2
+      echo "Subcommands:" >&2
+      echo "  launch [--hidden] [--watch] [--cwd <dir>]   Start dev instance for this session" >&2
+      echo "  kill                                         Kill dev instance + daemon" >&2
+      echo "  status                                       Check if dev instance is running" >&2
+      exit 0
+      ;;
+  esac
 fi
 
 # --- Resolve API socket ---
@@ -1395,6 +1545,8 @@ Usage: cockpit-cli [-v <level>] <command> [args...]
 Global flags:
   -v, --verbosity <level>        Output filter for result/capture/wait/--block
                                  Levels: raw (default), response, conversation, full
+  --dev                          Auto-detect parent Claude session, route to its dev instance
+  --instance <name>              Target a specific named instance
 
 Targets: Most commands accept a <target> which can be:
   • Full session ID (UUID)        e.g. 2947bf12-d307-499c-b50c-719f253a0e54
@@ -1498,6 +1650,14 @@ Targets: Most commands accept a <target> which can be:
   ui-state                       Get UI state (active session, session list)
   session-select <id>            Switch the active session in the UI
 
+─── DEV INSTANCES (session-owned) ───────────────────────────────────────
+
+  dev launch [--hidden] [--watch] [--cwd <dir>]
+                                   Start a dev instance owned by this Claude session
+                                   Requires --dev flag. 1:1 per session (auto-kills old)
+  dev kill                         Kill this session's dev instance + daemon
+  dev status                       Check if dev instance is running
+
 ─── LOW-LEVEL ───────────────────────────────────────────────────────────────
 
   ping                           Health check
@@ -1534,6 +1694,11 @@ Targets: Most commands accept a <target> which can be:
 
   cockpit-cli agents                                     # List available agents
   cockpit-cli agent code-review --staged                 # Run a named agent
+
+  cockpit-cli --dev dev launch --hidden             # Start dev instance for this session
+  cockpit-cli --dev pool init 3                     # Init pool on dev instance
+  cockpit-cli --dev start "fix bug" --block         # Send prompt to dev instance
+  cockpit-cli --dev dev kill                        # Kill dev instance + daemon
 USAGE
     [[ "$CMD" != "help" ]] && exit 1
     exit 0

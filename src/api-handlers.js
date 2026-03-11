@@ -399,6 +399,12 @@ function buildApiHandlers() {
     return { type: "ok", message: "Relaunching..." };
   };
 
+  handlers["quit"] = async () => {
+    const { app } = require("electron");
+    setTimeout(() => app.quit(), 100);
+    return { type: "ok", message: "Quitting..." };
+  };
+
   // --- Window visibility (Phase 3: Hidden Dev Mode) ---
   handlers["show"] = async () => {
     _requireMainWindow().show();
