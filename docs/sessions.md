@@ -52,7 +52,7 @@ Sessions track who started them and parent-child relationships in `~/.open-cockp
 - CLI also detects parent by walking PPID chain → `~/.open-cockpit/session-pids/`
 - API: `pool-start` accepts optional `parentSessionId`; `get-session-graph` returns the full graph
 - `get-sessions` response enriched with `parentSessionId` and `initiator` fields
-- **Child session archiving**: Dead child sessions are NOT independently auto-archived — they stay under their parent and only get archived when the parent is archived (depth-first cascade)
+- **Child session archiving**: Children always stay grouped under their parent. `archiveSession()` cascade-archives all descendants depth-first (server-side). Dead children are never independently auto-archived — they wait for the parent's cascade. Children without snapshot/intention are preserved on disk if they have a `parentSessionId` in the graph.
 
 ## Session pinning
 
