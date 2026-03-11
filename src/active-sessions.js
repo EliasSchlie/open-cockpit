@@ -22,9 +22,9 @@ function writeActiveRegistry(registry) {
   secureWriteFileSync(ACTIVE_SESSIONS_FILE, JSON.stringify(registry, null, 2));
 }
 
-function registerActiveSession(sessionId, claudeSessionId) {
+function registerActiveSession(sessionId) {
   const registry = readActiveRegistry();
-  registry[sessionId] = { claudeSessionId: claudeSessionId || sessionId };
+  registry[sessionId] = { claudeSessionId: sessionId };
   writeActiveRegistry(registry);
 }
 
@@ -38,9 +38,9 @@ function unregisterActiveSession(sessionId) {
 function getSessionsToRestore(liveSessionIds) {
   const registry = readActiveRegistry();
   const toRestore = [];
-  for (const [sessionId, entry] of Object.entries(registry)) {
+  for (const sessionId of Object.keys(registry)) {
     if (!liveSessionIds.has(sessionId)) {
-      toRestore.push({ sessionId, claudeSessionId: entry.claudeSessionId });
+      toRestore.push({ sessionId });
     }
   }
   return toRestore;
@@ -60,8 +60,7 @@ function syncRegistryWithPool(slots) {
     newRegistry[slot.sessionId] = { claudeSessionId: slot.sessionId };
   }
 
-  // Skip write if registry hasn't changed (key-set equality is sufficient
-  // since claudeSessionId always equals sessionId in this path)
+  // Skip write if registry hasn't changed
   const existing = readActiveRegistry();
   const existingKeys = new Set(Object.keys(existing));
   if (

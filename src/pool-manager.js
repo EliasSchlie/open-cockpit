@@ -48,11 +48,11 @@ const {
   DEFAULT_POOL_SIZE,
   ORPHAN_TERMINAL_TTL_MS,
   OPEN_COCKPIT_DIR,
-  PENDING_RESTORE_FILE,
   ACTIVE_SESSIONS_FILE,
   isPidAlive,
 } = require("./paths");
 const {
+  readActiveRegistry,
   unregisterActiveSession,
   getSessionsToRestore,
   syncRegistryWithPool,
@@ -726,120 +726,6 @@ async function spawnPoolSlot(index, args) {
   return createSlot(index, resp.termId, resp.pid);
 }
 
-// Extract restorable sessions from the current pool and save to pending-restore.json.
-// Called before pool destruction (explicit or daemon crash) so poolInit can resume them.
-// Accepts pool object to avoid redundant disk read (callers already hold it).
-// Only saves user-spawned sessions with active statuses (busy/idle/typing).
-function extractPendingRestore(pool) {
-  if (!pool) return [];
-
-  const graph = readSessionGraph();
-  const restorableIds = [];
-
-  for (const slot of pool.slots) {
-    if (!slot.sessionId) continue;
-    // Only save active sessions (busy, idle, typing)
-    if (
-      slot.status !== POOL_STATUS.BUSY &&
-      slot.status !== POOL_STATUS.IDLE &&
-      slot.status !== POOL_STATUS.TYPING
-    ) {
-      continue;
-    }
-    // Skip agent-spawned sessions (initiator: model)
-    const graphEntry = graph[slot.sessionId];
-    if (graphEntry?.initiator === INITIATOR.MODEL) continue;
-
-    restorableIds.push(slot.sessionId);
-  }
-
-  if (restorableIds.length > 0) {
-    secureWriteFileSync(
-      PENDING_RESTORE_FILE,
-      JSON.stringify(restorableIds, null, 2),
-    );
-    _debugLog("main", `Saved ${restorableIds.length} sessions for restore`);
-  }
-
-  return restorableIds;
-}
-
-// Restore sessions from pending-restore.json by resuming them into fresh pool slots.
-// Reuses poolResume for each entry (handles slot claiming, /resume, tracking, orphan re-tagging).
-// Fire-and-forget: runs in background, doesn't block poolInit/reconcilePool.
-async function restorePendingSessions() {
-  let sessionIds;
-  try {
-    sessionIds = JSON.parse(fs.readFileSync(PENDING_RESTORE_FILE, "utf-8"));
-  } catch {
-    return; // No pending restore file — nothing to do
-  }
-  if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
-    try {
-      fs.unlinkSync(PENDING_RESTORE_FILE);
-    } catch {}
-    return;
-  }
-
-  _debugLog(
-    "main",
-    `Restoring ${sessionIds.length} sessions from pending-restore`,
-  );
-
-  // Wait for enough fresh slots to restore into (slots start as "starting").
-  const needed = sessionIds.length;
-  try {
-    await poll(
-      () => {
-        const pool = readPool();
-        if (!pool) return false;
-        const freshCount = pool.slots.filter(
-          (s) => s.status === POOL_STATUS.FRESH,
-        ).length;
-        const nonStarting = pool.slots.filter(
-          (s) => s.status !== POOL_STATUS.STARTING,
-        ).length;
-        // Ready when we have enough fresh slots, or all slots have settled
-        return freshCount >= needed || nonStarting === pool.slots.length;
-      },
-      { interval: 500, timeout: 60000, label: "wait for fresh slots" },
-    );
-  } catch {
-    _debugLog("main", "Timed out waiting for fresh slots for restore");
-    // Don't delete the file — let the next poolInit try again
-    return;
-  }
-
-  let restored = 0;
-
-  for (const sessionId of sessionIds) {
-    if (!sessionId) continue;
-    try {
-      await poolResume(sessionId);
-      restored++;
-      _debugLog("main", `Restored session ${sessionId}`);
-    } catch (err) {
-      _debugLog(
-        "main",
-        `Failed to restore session ${sessionId}: ${err.message}`,
-      );
-      // Session stays in offloaded — user can manually resume
-    }
-  }
-
-  // Clean up pending restore file
-  try {
-    fs.unlinkSync(PENDING_RESTORE_FILE);
-  } catch {}
-
-  if (restored > 0) {
-    _debugLog(
-      "main",
-      `Session restore complete: ${restored}/${sessionIds.length} restored`,
-    );
-  }
-}
-
 // Restore sessions from the active-sessions registry.
 // Compares registry entries against live pool slots and resumes any missing ones.
 // This is the primary crash-recovery mechanism — runs on every reconcilePool cycle.
@@ -983,16 +869,9 @@ async function poolInit(size) {
 
   // Auto-restore sessions from a previous pool (fire-and-forget).
   // Runs after slot tracking starts so fresh slots become available.
-  // Try pending-restore first (legacy), then active registry (new).
-  restorePendingSessions()
-    .then(() =>
-      restoreFromActiveRegistry().catch((err) =>
-        _debugLog("main", `Registry restore after init failed: ${err.message}`),
-      ),
-    )
-    .catch((err) =>
-      _debugLog("main", `Session restore failed: ${err.message}`),
-    );
+  restoreFromActiveRegistry().catch((err) =>
+    _debugLog("main", `Session restore failed: ${err.message}`),
+  );
 
   return readPool();
 }
@@ -1174,7 +1053,6 @@ function cleanupStaleIdleSignals() {
 // Daemon terminals survive app restarts, so pool slots should still be alive.
 // Update any stale state (dead terminals, changed PIDs, etc.)
 async function reconcilePool() {
-  let shouldRestore = false;
   await withPoolLock(async () => {
     // Clean up stale temp files from previous writes/crashes
     try {
@@ -1208,10 +1086,8 @@ async function reconcilePool() {
       const pty = daemonPtys.get(slot.termId);
       return !pty || pty.exited;
     });
-    if (allDead) {
-      await extractPendingRestore(pool);
-      shouldRestore = true;
-    }
+    // No special handling needed for allDead — restoreFromActiveRegistry
+    // runs after every reconcile and handles crash recovery.
 
     for (const slot of pool.slots) {
       const pty = daemonPtys.get(slot.termId);
@@ -1299,24 +1175,10 @@ async function reconcilePool() {
     pruneSessionGraph(pool);
   });
 
-  // Trigger restore OUTSIDE the pool lock to avoid deadlock
-  // (restorePendingSessions acquires its own locks internally)
-  if (shouldRestore) {
-    restorePendingSessions().catch((err) =>
-      _debugLog(
-        "main",
-        `Session restore after reconcile failed: ${err.message}`,
-      ),
-    );
-  }
-
-  // Check active-sessions registry for sessions that need restoring.
-  // This catches cases where the app was killed before pending-restore was written.
-  try {
-    restoreFromActiveRegistry().catch((err) =>
-      _debugLog("main", `Active registry restore failed: ${err.message}`),
-    );
-  } catch {}
+  // Restore missing sessions OUTSIDE the pool lock to avoid deadlock
+  restoreFromActiveRegistry().catch((err) =>
+    _debugLog("main", `Session restore after reconcile failed: ${err.message}`),
+  );
 }
 
 function getPoolTermIds() {
@@ -1554,15 +1416,17 @@ async function killSlotProcess(slot) {
 }
 
 // Destroy pool: kill all slots and remove pool.json.
-// Saves restorable sessions to pending-restore.json before destroying,
-// so the next poolInit can automatically resume them.
+// The active-sessions registry persists across restarts so the next
+// poolInit can automatically resume them via restoreFromActiveRegistry.
 async function poolDestroy() {
   return withPoolLock(async () => {
     const pool = readPool();
     if (!pool) return;
 
-    // Save restorable sessions BEFORE killing anything
-    const savedIds = new Set(await extractPendingRestore(pool));
+    // Read the active-sessions registry to know which sessions should be
+    // restored (skip archiving those).
+    const registry = readActiveRegistry();
+    const savedIds = new Set(Object.keys(registry));
 
     const { terminalHasInputCache, getOffloadedSessions } =
       getSessionDiscovery();
@@ -1696,10 +1560,9 @@ async function poolResume(sessionId) {
   const { invalidateSessionsCache } = getSessionDiscovery();
   validateSessionId(sessionId);
 
-  // Prevent double-restore: guards against the race where restorePendingSessions
-  // and restoreFromActiveRegistry both try to restore the same session before
-  // trackNewSlot updates pool.json. The guard is added after validation so
-  // early throws don't need manual cleanup.
+  // Prevent double-restore: guards against the race where concurrent
+  // restoreFromActiveRegistry calls try to restore the same session before
+  // trackNewSlot updates pool.json.
   if (_pendingRestores.has(sessionId)) {
     _debugLog(
       "main",
@@ -2023,8 +1886,6 @@ module.exports = {
   syncPoolStatuses,
   killSlotProcess,
   poolDestroy,
-  extractPendingRestore,
-  restorePendingSessions,
   restoreFromActiveRegistry,
   validateTermId,
   readIntention,

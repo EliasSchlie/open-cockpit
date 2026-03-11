@@ -33,10 +33,6 @@ const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
 const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
 const DEFAULT_POOL_SIZE = 5;
 const ORPHAN_TERMINAL_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
-const PENDING_RESTORE_FILE = path.join(
-  OPEN_COCKPIT_DIR,
-  "pending-restore.json",
-);
 const ACTIVE_SESSIONS_FILE = path.join(
   OPEN_COCKPIT_DIR,
   "active-sessions.json",
@@ -76,7 +72,6 @@ module.exports = {
   DEBUG_LOG_MAX_SIZE,
   DEFAULT_POOL_SIZE,
   ORPHAN_TERMINAL_TTL_MS,
-  PENDING_RESTORE_FILE,
   ACTIVE_SESSIONS_FILE,
   PREFERENCES_FILE,
 };

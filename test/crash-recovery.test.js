@@ -103,9 +103,9 @@ describe("crash recovery via active-sessions registry", () => {
 
   it("getSessionsToRestore identifies crashed sessions", () => {
     // Pre-crash: 3 sessions were active
-    activeSessions.registerActiveSession("sess-A", "claude-A");
-    activeSessions.registerActiveSession("sess-B", "claude-B");
-    activeSessions.registerActiveSession("sess-C", "claude-C");
+    activeSessions.registerActiveSession("sess-A");
+    activeSessions.registerActiveSession("sess-B");
+    activeSessions.registerActiveSession("sess-C");
 
     // After restart: only sess-B is still alive in the new pool
     const liveSessionIds = new Set(["sess-B"]);
@@ -114,10 +114,6 @@ describe("crash recovery via active-sessions registry", () => {
     expect(toRestore).toHaveLength(2);
     const ids = toRestore.map((r) => r.sessionId).sort();
     expect(ids).toEqual(["sess-A", "sess-C"]);
-
-    // Each entry includes claudeSessionId for resume
-    const entryA = toRestore.find((r) => r.sessionId === "sess-A");
-    expect(entryA.claudeSessionId).toBe("claude-A");
   });
 
   it("full cycle: sync → crash → detect → restore list", () => {
@@ -156,8 +152,8 @@ describe("crash recovery via active-sessions registry", () => {
 
   it("sync during restore is suppressed", () => {
     // Pre-populate registry with sessions to restore
-    activeSessions.registerActiveSession("sess-A", "claude-A");
-    activeSessions.registerActiveSession("sess-B", "claude-B");
+    activeSessions.registerActiveSession("sess-A");
+    activeSessions.registerActiveSession("sess-B");
 
     // Simulate restore in progress
     activeSessions.setRestoreInProgress(true);
@@ -175,8 +171,8 @@ describe("crash recovery via active-sessions registry", () => {
   });
 
   it("unregister removes restored session from registry", () => {
-    activeSessions.registerActiveSession("sess-A", "claude-A");
-    activeSessions.registerActiveSession("sess-B", "claude-B");
+    activeSessions.registerActiveSession("sess-A");
+    activeSessions.registerActiveSession("sess-B");
 
     // Simulate successful restore of sess-A
     activeSessions.unregisterActiveSession("sess-A");

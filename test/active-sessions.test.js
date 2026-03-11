@@ -24,27 +24,21 @@ beforeEach(() => {
 describe("active-sessions registry", () => {
   describe("registerActiveSession", () => {
     it("adds a session to the registry", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
+      activeSessionsModule.registerActiveSession("sess-001");
       const registry = activeSessionsModule.readActiveRegistry();
       expect(registry["sess-001"]).toEqual({ claudeSessionId: "sess-001" });
     });
 
-    it("stores claudeSessionId separately when different", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "claude-abc");
-      const registry = activeSessionsModule.readActiveRegistry();
-      expect(registry["sess-001"].claudeSessionId).toBe("claude-abc");
-    });
-
     it("overwrites existing entry", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "old-id");
-      activeSessionsModule.registerActiveSession("sess-001", "new-id");
+      activeSessionsModule.registerActiveSession("sess-001");
+      activeSessionsModule.registerActiveSession("sess-001");
       const registry = activeSessionsModule.readActiveRegistry();
-      expect(registry["sess-001"].claudeSessionId).toBe("new-id");
+      expect(registry["sess-001"]).toEqual({ claudeSessionId: "sess-001" });
     });
 
     it("handles multiple sessions", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
-      activeSessionsModule.registerActiveSession("sess-002", "sess-002");
+      activeSessionsModule.registerActiveSession("sess-001");
+      activeSessionsModule.registerActiveSession("sess-002");
       const registry = activeSessionsModule.readActiveRegistry();
       expect(Object.keys(registry)).toHaveLength(2);
     });
@@ -52,7 +46,7 @@ describe("active-sessions registry", () => {
 
   describe("unregisterActiveSession", () => {
     it("removes a session from the registry", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
+      activeSessionsModule.registerActiveSession("sess-001");
       activeSessionsModule.unregisterActiveSession("sess-001");
       const registry = activeSessionsModule.readActiveRegistry();
       expect(registry["sess-001"]).toBeUndefined();
@@ -65,8 +59,8 @@ describe("active-sessions registry", () => {
     });
 
     it("leaves other sessions intact", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
-      activeSessionsModule.registerActiveSession("sess-002", "sess-002");
+      activeSessionsModule.registerActiveSession("sess-001");
+      activeSessionsModule.registerActiveSession("sess-002");
       activeSessionsModule.unregisterActiveSession("sess-001");
       const registry = activeSessionsModule.readActiveRegistry();
       expect(registry["sess-002"]).toBeDefined();
@@ -89,9 +83,9 @@ describe("active-sessions registry", () => {
 
   describe("getSessionsToRestore", () => {
     it("returns sessions in registry but not in live set", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
-      activeSessionsModule.registerActiveSession("sess-002", "sess-002");
-      activeSessionsModule.registerActiveSession("sess-003", "sess-003");
+      activeSessionsModule.registerActiveSession("sess-001");
+      activeSessionsModule.registerActiveSession("sess-002");
+      activeSessionsModule.registerActiveSession("sess-003");
 
       const liveSessionIds = new Set(["sess-002"]);
       const toRestore =
@@ -101,11 +95,10 @@ describe("active-sessions registry", () => {
         "sess-001",
         "sess-003",
       ]);
-      expect(toRestore[0].claudeSessionId).toBeDefined();
     });
 
     it("returns empty when all sessions are live", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
+      activeSessionsModule.registerActiveSession("sess-001");
       const liveSessionIds = new Set(["sess-001"]);
       const toRestore =
         activeSessionsModule.getSessionsToRestore(liveSessionIds);
@@ -121,7 +114,7 @@ describe("active-sessions registry", () => {
   describe("syncRegistryWithPool", () => {
     it("registers active sessions and removes inactive ones", () => {
       // Pre-populate with an old session that's no longer in pool
-      activeSessionsModule.registerActiveSession("old-sess", "old-sess");
+      activeSessionsModule.registerActiveSession("old-sess");
 
       const slots = [
         { sessionId: "sess-001", status: "idle" },
@@ -161,7 +154,7 @@ describe("active-sessions registry", () => {
     });
 
     it("skips sync when restore is in progress", () => {
-      activeSessionsModule.registerActiveSession("sess-001", "sess-001");
+      activeSessionsModule.registerActiveSession("sess-001");
       activeSessionsModule.setRestoreInProgress(true);
       try {
         // This should be a no-op — registry should keep sess-001
