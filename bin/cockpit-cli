@@ -302,8 +302,8 @@ send_api() {
   local attempt result
 
   for attempt in 1 2 3; do
-    result=$(_send_api_once "$json" "$timeout") && true
-    local rc=$?
+    local rc=0
+    result=$(_send_api_once "$json" "$timeout") || rc=$?
     if [[ $rc -ne 0 ]]; then
       return $rc
     fi
@@ -312,7 +312,7 @@ send_api() {
       return 0
     fi
     # Empty response — retry after brief delay
-    sleep 0.2
+    [[ $attempt -lt 3 ]] && sleep 0.2
   done
   echo "Error: API returned empty response after 3 attempts" >&2
   return 1
