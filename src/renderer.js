@@ -105,8 +105,11 @@ function toggleSidebar() {
 // --- Session selection ---
 
 async function selectSession(session) {
-  // If already viewing this session, nothing to do
-  if (session.sessionId === state.currentSessionId) return;
+  // If already viewing this session, just ensure terminal has focus
+  if (session.sessionId === state.currentSessionId) {
+    focusTerminal();
+    return;
+  }
 
   hideCurrentTerminals();
 

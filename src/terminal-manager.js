@@ -701,6 +701,9 @@ export async function reconnectAllPtys() {
 
     // Set up dock with restored terminals (including saved layout)
     initDockLayout(state.terminals, cached.dockLayout);
+
+    // Focus the terminal so the user can type immediately
+    focusTerminal();
   }
 }
 
