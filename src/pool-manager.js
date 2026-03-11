@@ -1243,13 +1243,17 @@ async function reconcilePool() {
     pruneSessionGraph(pool);
 
     // Clean up orphaned processes: alive PIDs in session-pids that aren't
-    // tracked by any pool slot and have no offload/archive metadata.
+    // tracked by any pool slot, daemon PTY, or offload metadata.
     // These are remnants from previous pool incarnations (e.g., pool was
     // destroyed and re-created, but old Claude processes survived).
-    const poolPids = new Set(pool.slots.map((s) => String(s.pid)));
+    const knownPids = new Set(pool.slots.map((s) => String(s.pid)));
+    // Also include PIDs managed by the daemon (covers custom sessions)
+    for (const [, pty] of daemonPtys) {
+      if (pty.pid) knownPids.add(String(pty.pid));
+    }
     try {
       for (const file of fs.readdirSync(SESSION_PIDS_DIR)) {
-        if (poolPids.has(file)) continue; // Tracked by pool — skip
+        if (knownPids.has(file)) continue; // Tracked by pool or daemon — skip
         const pid = Number(file);
         if (!Number.isFinite(pid)) continue;
         if (!isPidAlive(pid)) {
@@ -1257,10 +1261,10 @@ async function reconcilePool() {
           cleanupPidFiles(file);
           continue;
         }
-        // Alive process not tracked by pool — check if it's a known
-        // external/custom session (has offload metadata or is the current
-        // renderer session). Only kill processes that look like orphaned
-        // pool slots (spawned with --dangerously-skip-permissions).
+        // Alive process not tracked by pool or daemon — check if it's a
+        // known session (has offload metadata). Only kill processes that
+        // look like orphaned pool slots (spawned with
+        // --dangerously-skip-permissions).
         const sessionId = fs
           .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
           .trim();
@@ -1290,7 +1294,7 @@ async function reconcilePool() {
         if (cmdLine.includes("--dangerously-skip-permissions")) {
           _debugLog(
             "main",
-            `Killing orphaned pool process PID ${pid} session=${sessionId} (not tracked by any pool slot)`,
+            `Killing orphaned pool process PID ${pid} session=${sessionId} (not tracked by any pool slot or daemon PTY)`,
           );
           try {
             process.kill(pid, "SIGTERM");
