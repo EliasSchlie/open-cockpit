@@ -400,6 +400,7 @@ async function resumeOffloadedSession(session) {
     await window.api.watchIntention(newSession.sessionId);
   }
   await loadSessions();
+  focusTerminal();
 }
 
 // Poll getSessions until we find the session in a given pool slot
