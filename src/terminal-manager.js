@@ -309,12 +309,24 @@ export async function spawnTerminal(cwd, cmd, args, targetLeafId) {
 
 // Attach to an existing pool slot's PTY (no spawn — the Claude TUI is already running)
 export async function attachPoolTerminal(poolTermId) {
+  debugLog("attach", `attaching to pool terminal termId=${poolTermId}`);
   // Fetch the PTY's current dimensions so we can create xterm at the same size.
   // This prevents xterm.js reflow garbling when the replay buffer is written:
   // the buffer was rendered at these dimensions, so writing to a matching-size
   // terminal produces correct output. FitAddon later resizes to window dims.
   const allPtys = await window.api.ptyList();
   const ptyInfo = allPtys.find((p) => p.termId === poolTermId);
+  if (!ptyInfo) {
+    debugLog(
+      "attach",
+      `termId=${poolTermId} NOT FOUND in daemon (${allPtys.length} PTYs, termIds: ${allPtys.map((p) => p.termId).join(",")})`,
+    );
+  } else {
+    debugLog(
+      "attach",
+      `termId=${poolTermId} found: pid=${ptyInfo.pid} exited=${ptyInfo.exited} cols=${ptyInfo.cols} rows=${ptyInfo.rows} buffer=${ptyInfo.buffer ? ptyInfo.buffer.length + " chars" : "empty"} clients=${ptyInfo.clientCount}`,
+    );
+  }
 
   const container = document.createElement("div");
   container.style.cssText = "width:100%;height:100%;";
@@ -351,8 +363,12 @@ export async function attachPoolTerminal(poolTermId) {
   pendingTerminals.set(poolTermId, entry);
   try {
     await window.api.ptyAttach(poolTermId);
+    debugLog("attach", `ptyAttach succeeded for termId=${poolTermId}`);
   } catch (err) {
-    debugLog("pool", `attach failed poolTermId=${poolTermId}`, err.message);
+    debugLog(
+      "attach",
+      `ptyAttach FAILED for termId=${poolTermId}: ${err.message}`,
+    );
     const idx = state.terminals.indexOf(entry);
     if (idx !== -1) state.terminals.splice(idx, 1);
     term.dispose();
@@ -648,9 +664,19 @@ export async function reconnectAllPtys() {
       // Don't detach pool-slot PTYs — they may not have a sessionId yet
       // (trackNewSlot hasn't resolved). Detaching them would orphan the
       // Claude process and break pool status detection.
+      const poolPtys = sessionPtys.filter((p) => p.isPoolTui);
       const orphans = sessionPtys.filter((p) => !p.isPoolTui);
+      if (poolPtys.length > 0) {
+        debugLog(
+          "startup",
+          `skipping ${poolPtys.length} pool PTYs without sessionId (termIds: ${poolPtys.map((p) => p.termId).join(",")})`,
+        );
+      }
       if (orphans.length > 0) {
-        debugLog("startup", `detaching ${orphans.length} orphaned PTYs`);
+        debugLog(
+          "startup",
+          `detaching ${orphans.length} orphaned PTYs (termIds: ${orphans.map((p) => `${p.termId}/pid=${p.pid}`).join(", ")})`,
+        );
         for (const p of orphans) {
           window.api.ptyDetach(p.termId).catch(() => {});
         }
@@ -680,6 +706,11 @@ export async function reconnectAllPtys() {
       lastAccessed: Date.now(),
     });
   }
+
+  debugLog(
+    "startup",
+    `reconnected ${sessionTerminals.size} sessions (${[...sessionTerminals.keys()].map((s) => s.slice(0, 8)).join(", ")})`,
+  );
 
   // Restore the most recent alive session that has terminals
   const sessions = await window.api.getSessions();
