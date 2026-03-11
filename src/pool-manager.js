@@ -1581,13 +1581,8 @@ async function withFreshSlot(claimFn) {
 
   // Phase 2: offload outside lock (offloadSession acquires its own lock)
   if (needsOffload) {
-    try {
-      await executeOffload(needsOffload);
-      await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
-    } catch (err) {
-      _pendingOffloads.delete(needsOffload.sessionId);
-      throw err;
-    }
+    await executeOffload(needsOffload);
+    await pollForSessionId(needsOffload.pid, 30000, needsOffload.sessionId);
   }
 
   // Phase 3: claim fresh slot atomically (inside lock — no gap for races)
