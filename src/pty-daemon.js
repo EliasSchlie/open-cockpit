@@ -121,10 +121,12 @@ function handleSpawn(socket, msg) {
   const cwd = msg.cwd || os.homedir();
   const termId = nextTermId++;
 
-  // Strip Claude session env vars
+  // Strip Claude session env vars and origin-tagging vars inherited from daemon parent
   const cleanEnv = { ...process.env, TERM: "xterm-256color" };
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_SESSION_ID;
+  delete cleanEnv.OPEN_COCKPIT_POOL;
+  delete cleanEnv.OPEN_COCKPIT_CUSTOM;
   cleanEnv.PATH = joinPathEnv(EXTRA_PATH_DIRS, process.env.PATH);
 
   // Merge caller-provided env overrides (e.g. OPEN_COCKPIT_POOL for origin tagging)
