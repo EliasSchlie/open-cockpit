@@ -529,10 +529,10 @@ describe("cockpit-cli", () => {
   });
 
   describe("prompt", () => {
-    it("sends prompt to idle session", async () => {
+    it("sends prompt to idle session (alias for followup)", async () => {
       const r = await runCli(["prompt", "@0", "do something"]);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Prompt sent");
+      expect(r.stdout).toContain("abcd1234");
     });
 
     it("errors on external session", async () => {
