@@ -49,6 +49,7 @@ const {
   ORPHAN_TERMINAL_TTL_MS,
   OPEN_COCKPIT_DIR,
   ACTIVE_SESSIONS_FILE,
+  POOL_SPAWNED_PIDS_DIR,
   isPidAlive,
 } = require("./paths");
 const {
@@ -744,6 +745,29 @@ function getPoolArgs() {
   return parseFlags(getPoolFlags());
 }
 
+// Track PIDs spawned by this pool so orphan cleanup only kills our own processes.
+function recordSpawnedPid(pid) {
+  try {
+    fs.mkdirSync(POOL_SPAWNED_PIDS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(POOL_SPAWNED_PIDS_DIR, String(pid)), "");
+  } catch {}
+}
+
+function isSpawnedPid(pid) {
+  try {
+    fs.accessSync(path.join(POOL_SPAWNED_PIDS_DIR, String(pid)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeSpawnedPid(pid) {
+  try {
+    fs.unlinkSync(path.join(POOL_SPAWNED_PIDS_DIR, String(pid)));
+  } catch {}
+}
+
 // Spawn a single Claude session via the PTY daemon. Returns a slot object.
 // Pass pre-parsed args from getPoolArgs() to avoid redundant disk reads.
 async function spawnPoolSlot(index, args) {
@@ -763,6 +787,7 @@ async function spawnPoolSlot(index, args) {
     // correct size. Falls back to daemon default (80×24) on first launch.
     ...dims,
   });
+  recordSpawnedPid(resp.pid);
   return createSlot(index, resp.termId, resp.pid);
 }
 
@@ -1109,6 +1134,12 @@ async function reconcilePool() {
     if (!pool) {
       _debugLog("reconcile", "no pool file — skipping");
       return;
+    }
+
+    // Ensure all current slot PIDs are recorded as spawned by us.
+    // Handles upgrade from pre-spawned-pids code and crash recovery.
+    for (const slot of pool.slots) {
+      if (slot.pid) recordSpawnedPid(slot.pid);
     }
 
     const { terminalHasInputCache } = getSessionDiscovery();
@@ -1476,59 +1507,55 @@ async function syncPoolStatuses(sessions) {
   });
 }
 
-// Clean up orphaned processes: alive PIDs in session-pids that aren't
-// tracked by any pool slot or daemon PTY. Only kill processes confirmed
-// to be pool-origin (OPEN_COCKPIT_POOL=1 env var) — never external or
-// custom sessions.
-async function cleanupOrphanedProcesses(
-  pool,
-  daemonPtys,
-  { _detectOrigins } = {},
-) {
+// Clean up orphaned processes: alive PIDs that this pool manager spawned
+// (tracked in pool-spawned-pids/) but that are no longer tracked by any
+// pool slot or daemon PTY. Only kills processes we have a record of
+// spawning — never processes that merely inherited OPEN_COCKPIT_POOL=1
+// from a parent session.
+async function cleanupOrphanedProcesses(pool, daemonPtys) {
   const knownPids = new Set(pool.slots.map((s) => String(s.pid)));
   for (const [, pty] of daemonPtys) {
     if (pty.pid) knownPids.add(String(pty.pid));
   }
   try {
-    const pidFiles = fs.readdirSync(SESSION_PIDS_DIR);
-    const orphanCandidates = [];
-    for (const file of pidFiles) {
-      if (knownPids.has(file)) continue;
+    // Clean up dead entries from pool-spawned-pids/
+    let spawnedFiles;
+    try {
+      spawnedFiles = fs.readdirSync(POOL_SPAWNED_PIDS_DIR);
+    } catch (err) {
+      if (err.code === "ENOENT") return;
+      throw err;
+    }
+    for (const file of spawnedFiles) {
       const pid = Number(file);
       if (!Number.isFinite(pid)) continue;
       if (!isPidAlive(pid)) {
+        removeSpawnedPid(pid);
         cleanupPidFiles(file);
         continue;
       }
-      // Alive process not tracked by pool or daemon — candidate
-      const sessionId = fs
-        .readFileSync(path.join(SESSION_PIDS_DIR, file), "utf-8")
-        .trim();
-      if (!sessionId) continue;
-      const meta = readOffloadMeta(sessionId);
-      if (meta) continue; // Has offload data — managed session
-      orphanCandidates.push({ file, pid, sessionId });
-    }
-    if (orphanCandidates.length > 0) {
-      // Use proper origin detection (checks OPEN_COCKPIT_POOL env var
-      // via ps eww / /proc) — only kill confirmed pool-origin processes.
-      const detectFn =
-        _detectOrigins || getSessionDiscovery().batchDetectOrigins;
-      const origins = await detectFn(orphanCandidates.map((c) => c.pid));
-      for (const { file, pid, sessionId } of orphanCandidates) {
-        const origin = origins.get(String(pid));
-        if (origin !== "pool") continue; // Not a pool process — leave it alone
-        _debugLog(
-          "main",
-          `Killing orphaned pool process PID ${pid} session=${sessionId} (origin=${origin}, not tracked by any pool slot)`,
-        );
-        try {
-          process.kill(pid, "SIGTERM");
-        } catch {
-          /* ESRCH */
-        }
-        cleanupPidFiles(file);
+      if (knownPids.has(file)) continue;
+      // Alive process we spawned but no longer tracked — check offload metadata
+      const sessionPidFile = path.join(SESSION_PIDS_DIR, file);
+      let sessionId;
+      try {
+        sessionId = fs.readFileSync(sessionPidFile, "utf-8").trim();
+      } catch {}
+      if (sessionId) {
+        const meta = readOffloadMeta(sessionId);
+        if (meta) continue; // Has offload data — managed session
       }
+      _debugLog(
+        "main",
+        `Killing orphaned pool process PID ${pid} session=${sessionId || "unknown"} (spawned by this pool, not tracked by any slot)`,
+      );
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        /* ESRCH */
+      }
+      removeSpawnedPid(pid);
+      cleanupPidFiles(file);
     }
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
