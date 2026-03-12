@@ -38,6 +38,7 @@ const ACTIVE_SESSIONS_FILE = path.join(
   "active-sessions.json",
 );
 const PREFERENCES_FILE = path.join(OPEN_COCKPIT_DIR, "preferences.json");
+const POOL_SPAWNED_PIDS_DIR = path.join(OPEN_COCKPIT_DIR, "pool-spawned-pids");
 
 function isPidAlive(pid) {
   try {
@@ -74,4 +75,5 @@ module.exports = {
   ORPHAN_TERMINAL_TTL_MS,
   ACTIVE_SESSIONS_FILE,
   PREFERENCES_FILE,
+  POOL_SPAWNED_PIDS_DIR,
 };

@@ -19,6 +19,7 @@ const SUBDIRS = [
   "offloaded",
   "setup-scripts",
   "layouts",
+  "pool-spawned-pids",
 ];
 
 /**

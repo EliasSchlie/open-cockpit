@@ -18,9 +18,9 @@ let poolManager;
 let SESSION_PIDS_DIR;
 let OFFLOADED_DIR;
 let IDLE_SIGNALS_DIR;
+let POOL_SPAWNED_PIDS_DIR;
 
 let killCalls;
-let originOverrides;
 const realProcessKill = process.kill.bind(process);
 
 const uuid = () => crypto.randomUUID();
@@ -30,6 +30,7 @@ beforeAll(() => {
   SESSION_PIDS_DIR = env.resolve("session-pids");
   OFFLOADED_DIR = env.resolve("offloaded");
   IDLE_SIGNALS_DIR = env.resolve("idle-signals");
+  POOL_SPAWNED_PIDS_DIR = env.resolve("pool-spawned-pids");
   poolManager = env.requireFresh("pool-manager.js");
 });
 
@@ -43,7 +44,6 @@ afterAll(() => {
 
 beforeEach(() => {
   killCalls = [];
-  originOverrides = new Map();
   vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     if (signal === "SIGTERM") {
       killCalls.push(pid);
@@ -52,7 +52,12 @@ beforeEach(() => {
     return realProcessKill(pid, signal);
   });
   // Clean test dirs
-  for (const dir of [SESSION_PIDS_DIR, IDLE_SIGNALS_DIR, OFFLOADED_DIR]) {
+  for (const dir of [
+    SESSION_PIDS_DIR,
+    IDLE_SIGNALS_DIR,
+    OFFLOADED_DIR,
+    POOL_SPAWNED_PIDS_DIR,
+  ]) {
     for (const f of fs.readdirSync(dir).filter((f) => !f.startsWith("."))) {
       fs.rmSync(path.join(dir, f), { recursive: true, force: true });
     }
@@ -61,6 +66,10 @@ beforeEach(() => {
 
 function writePidFile(pid, sessionId) {
   fs.writeFileSync(path.join(SESSION_PIDS_DIR, String(pid)), sessionId);
+}
+
+function writeSpawnedPid(pid) {
+  fs.writeFileSync(path.join(POOL_SPAWNED_PIDS_DIR, String(pid)), "");
 }
 
 function writeOffloadMeta(sessionId) {
@@ -76,111 +85,103 @@ function pidFileExists(pid) {
   return fs.existsSync(path.join(SESSION_PIDS_DIR, String(pid)));
 }
 
+function spawnedPidExists(pid) {
+  return fs.existsSync(path.join(POOL_SPAWNED_PIDS_DIR, String(pid)));
+}
+
 const ALIVE_PID = process.pid;
 const DEAD_PID = 2147483647;
 
 describe("cleanupOrphanedProcesses", () => {
-  function detectOrigins(pids) {
-    const map = new Map();
-    for (const pid of pids) {
-      map.set(String(pid), originOverrides.get(String(pid)) || "ext");
-    }
-    return Promise.resolve(map);
-  }
-
-  const opts = { _detectOrigins: detectOrigins };
-
-  it("cleans up dead PID files", async () => {
+  it("cleans up dead spawned PID entries", async () => {
+    writeSpawnedPid(DEAD_PID);
     writePidFile(DEAD_PID, uuid());
 
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
+    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map());
 
+    expect(spawnedPidExists(DEAD_PID)).toBe(false);
     expect(pidFileExists(DEAD_PID)).toBe(false);
     expect(killCalls).toEqual([]);
   });
 
   it("skips PIDs tracked by pool slots", async () => {
+    writeSpawnedPid(ALIVE_PID);
     writePidFile(ALIVE_PID, uuid());
 
     await poolManager.cleanupOrphanedProcesses(
       { slots: [{ pid: ALIVE_PID }] },
       new Map(),
-      opts,
     );
 
+    expect(spawnedPidExists(ALIVE_PID)).toBe(true);
     expect(pidFileExists(ALIVE_PID)).toBe(true);
     expect(killCalls).toEqual([]);
   });
 
   it("skips PIDs tracked by daemon PTYs", async () => {
+    writeSpawnedPid(ALIVE_PID);
     writePidFile(ALIVE_PID, uuid());
 
     await poolManager.cleanupOrphanedProcesses(
       { slots: [] },
       new Map([["term-1", { pid: ALIVE_PID }]]),
-      opts,
     );
 
+    expect(spawnedPidExists(ALIVE_PID)).toBe(true);
     expect(pidFileExists(ALIVE_PID)).toBe(true);
     expect(killCalls).toEqual([]);
   });
 
-  it("skips PIDs with offload metadata", async () => {
+  it("skips spawned PIDs with offload metadata", async () => {
     const sid = uuid();
+    writeSpawnedPid(ALIVE_PID);
     writePidFile(ALIVE_PID, sid);
     writeOffloadMeta(sid);
 
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
+    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map());
+
+    expect(spawnedPidExists(ALIVE_PID)).toBe(true);
+    expect(killCalls).toEqual([]);
+  });
+
+  it("never kills processes not in pool-spawned-pids (even if in session-pids)", async () => {
+    writePidFile(ALIVE_PID, uuid());
+    // No writeSpawnedPid — this process wasn't spawned by us
+
+    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map());
 
     expect(pidFileExists(ALIVE_PID)).toBe(true);
     expect(killCalls).toEqual([]);
   });
 
-  it("skips alive external sessions (origin=ext)", async () => {
+  it("kills orphaned spawned process not tracked by any slot", async () => {
+    writeSpawnedPid(ALIVE_PID);
     writePidFile(ALIVE_PID, uuid());
-    originOverrides.set(String(ALIVE_PID), "ext");
 
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
-
-    expect(pidFileExists(ALIVE_PID)).toBe(true);
-    expect(killCalls).toEqual([]);
-  });
-
-  it("skips alive custom sessions (origin=custom)", async () => {
-    writePidFile(ALIVE_PID, uuid());
-    originOverrides.set(String(ALIVE_PID), "custom");
-
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
-
-    expect(pidFileExists(ALIVE_PID)).toBe(true);
-    expect(killCalls).toEqual([]);
-  });
-
-  it("kills orphaned pool processes not tracked by any slot", async () => {
-    writePidFile(ALIVE_PID, uuid());
-    originOverrides.set(String(ALIVE_PID), "pool");
-
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
+    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map());
 
     expect(killCalls).toEqual([ALIVE_PID]);
+    expect(spawnedPidExists(ALIVE_PID)).toBe(false);
     expect(pidFileExists(ALIVE_PID)).toBe(false);
   });
 
-  it("skips PID files with empty session ID", async () => {
-    writePidFile(ALIVE_PID, "");
+  it("kills orphaned spawned process even without session-pids entry", async () => {
+    writeSpawnedPid(ALIVE_PID);
+    // No writePidFile — session-pids entry missing (hooks didn't fire)
 
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
+    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map());
 
-    expect(killCalls).toEqual([]);
+    expect(killCalls).toEqual([ALIVE_PID]);
+    expect(spawnedPidExists(ALIVE_PID)).toBe(false);
   });
 
-  it("handles missing session-pids directory gracefully", async () => {
-    fs.rmSync(SESSION_PIDS_DIR, { recursive: true });
+  it("handles missing pool-spawned-pids directory gracefully", async () => {
+    fs.rmSync(POOL_SPAWNED_PIDS_DIR, { recursive: true });
 
-    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map(), opts);
+    await poolManager.cleanupOrphanedProcesses({ slots: [] }, new Map());
 
     expect(killCalls).toEqual([]);
 
-    fs.mkdirSync(SESSION_PIDS_DIR, { recursive: true });
+    fs.mkdirSync(POOL_SPAWNED_PIDS_DIR, { recursive: true });
   });
 });
