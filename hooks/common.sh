@@ -12,6 +12,9 @@ umask 077
 
 source "$(dirname "${BASH_SOURCE[0]}")/log-error.sh"
 
+# Skip test sessions (e.g. claude-pool integration tests)
+[ -n "${CLAUDE_POOL_TEST:-}" ] && exit 0
+
 # --- Directory constants (used by sourcing scripts) ---
 # OPEN_COCKPIT_DIR is set by pool-manager for dev instance sessions.
 # Falls back to ~/.open-cockpit for base instance and non-pool sessions.
