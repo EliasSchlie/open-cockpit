@@ -40,7 +40,8 @@ See [docs/dev-instances.md](docs/dev-instances.md) for full details.
 
 Two independent pipelines: **plugin** (automatic) and **app** (manual).
 
-- **Plugin**: Every push to `main` auto-bumps `.claude-plugin/plugin.json` and updates the marketplace. Requires `APP_ID` and `APP_PRIVATE_KEY` secrets.
+- **Plugin local dev**: `./deploy-plugin.sh` (bumps version, copies to cache, then `/reload-plugins`)
+- **Plugin publish**: Include `[publish]` in commit message — CI reads version from `plugin.json` and updates the marketplace. No CI version bump — `deploy-plugin.sh` owns the version.
 - **App**: Tag push → CI builds all platforms → publish the draft. See [docs/releasing.md](docs/releasing.md).
 
 ## Plans

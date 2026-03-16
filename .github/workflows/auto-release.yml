@@ -1,27 +1,75 @@
-name: Auto-release plugin
+name: Publish plugin to marketplace
 
 on:
   push:
     branches: [main]
-    paths:
-      - "hooks/**"
-      - "skills/**"
-      - "bin/**"
-      - ".claude-plugin/**"
   workflow_dispatch:
 
 jobs:
-  release:
-    uses: EliasSchlie/claude-plugins/.github/workflows/plugin-release.yml@main
-    with:
-      plugin-name: open-cockpit
-      run-tests: true
-    secrets:
-      APP_ID: ${{ secrets.APP_ID }}
-      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+  publish:
+    if: contains(github.event.head_commit.message, '[publish]') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: open-cockpit,claude-plugins
+
+      - name: Checkout plugin repo
+        uses: actions/checkout@v5
+
+      - name: Run tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm test
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing v$version"
+
+      - name: Update marketplace
+        run: |
+          git clone https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/EliasSchlie/claude-plugins.git /tmp/marketplace
+          cd /tmp/marketplace
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            python3 -c "
+          import json
+          mp = json.load(open('.claude-plugin/marketplace.json'))
+          for p in mp['plugins']:
+              if p['name'] == 'open-cockpit':
+                  p['version'] = '${{ steps.version.outputs.version }}'
+                  break
+          json.dump(mp, open('.claude-plugin/marketplace.json', 'w'), indent=2)
+          print()
+          "
+            git add .claude-plugin/marketplace.json
+            if git diff --cached --quiet; then
+              echo "No version change needed"
+              exit 0
+            fi
+            git commit -m "Update open-cockpit to v${{ steps.version.outputs.version }} [skip ci]"
+            if git push origin main; then
+              echo "Published v${{ steps.version.outputs.version }} to marketplace"
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt), retrying..."
+            git reset --hard HEAD~1
+          done
+          echo "Failed after 3 attempts"
+          exit 1
 
   notify-failure:
-    needs: release
+    needs: publish
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -31,17 +79,16 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const title = `Plugin auto-release failed (${context.sha.slice(0, 7)})`;
+            const title = `Plugin publish failed (${context.sha.slice(0, 7)})`;
             const body = [
-              `The auto-release workflow failed for commit [\`${context.sha.slice(0, 7)}\`](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}).`,
+              `The publish workflow failed for commit [\`${context.sha.slice(0, 7)}\`](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}).`,
               '',
               `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               `**Commit message:** ${context.payload.head_commit?.message?.split('\n')[0] || 'unknown'}`,
               '',
-              'Plugin users will not receive this update until the release is fixed.',
+              'Plugin users will not receive this update until the publish is fixed.',
             ].join('\n');
 
-            // Don't create duplicates — check for open issues with same title
             const { data: existing } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
