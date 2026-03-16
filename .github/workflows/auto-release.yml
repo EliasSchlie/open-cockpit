@@ -20,6 +20,8 @@ jobs:
 
       - name: Checkout plugin repo
         uses: actions/checkout@v5
+        with:
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Run tests
         uses: actions/setup-node@v4
@@ -27,12 +29,27 @@ jobs:
           node-version: 22
       - run: npm ci && npm test
 
-      - name: Read version
+      - name: Bump and read version
         id: version
         run: |
-          version=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Publishing v$version"
+          PLUGIN_JSON=".claude-plugin/plugin.json"
+          current=$(python3 -c "import json; print(json.load(open('$PLUGIN_JSON'))['version'])")
+          IFS='.' read -r major minor patch <<< "$current"
+          new="${major}.${minor}.$((patch + 1))"
+          python3 -c "
+          import json
+          p = json.load(open('$PLUGIN_JSON'))
+          p['version'] = '$new'
+          json.dump(p, open('$PLUGIN_JSON', 'w'), indent=2)
+          print()
+          "
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$PLUGIN_JSON"
+          git commit -m "Release v${new} [skip ci]"
+          git push
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "Publishing v$new (was $current)"
 
       - name: Update marketplace
         run: |
