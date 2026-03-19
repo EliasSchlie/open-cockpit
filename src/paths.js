@@ -17,9 +17,7 @@ const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
 const COLORS_FILE = path.join(OPEN_COCKPIT_DIR, "colors.json");
 const SESSION_PIDS_DIR = path.join(OPEN_COCKPIT_DIR, "session-pids");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
-const DAEMON_SOCKET = path.join(OPEN_COCKPIT_DIR, "pty-daemon.sock");
-const DAEMON_SCRIPT = path.join(__dirname, "pty-daemon.js");
-const DAEMON_PID_FILE = path.join(OPEN_COCKPIT_DIR, "pty-daemon.pid");
+// Legacy daemon paths removed — PTY management delegated to claude-term/claude-pool
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
 const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
@@ -57,9 +55,6 @@ module.exports = {
   COLORS_FILE,
   SESSION_PIDS_DIR,
   CLAUDE_PROJECTS_DIR,
-  DAEMON_SOCKET,
-  DAEMON_SCRIPT,
-  DAEMON_PID_FILE,
   IDLE_SIGNALS_DIR,
   OFFLOADED_DIR,
   POOL_FILE,

@@ -55,8 +55,6 @@ const DEFAULT_SHORTCUTS = {
   "relaunch-app": "CmdOrCtrl+Shift+R",
   // Restart current archived/offloaded session
   "restart-current-session": "",
-  // Restart daemon (kills all terminals)
-  "restart-daemon": "",
   // These are handled via before-input-event, not menu accelerators
   "next-terminal-tab-alt": "Ctrl+Tab",
   "prev-terminal-tab-alt": "Ctrl+Shift+Tab",

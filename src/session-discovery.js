@@ -10,29 +10,20 @@ const {
 } = require("./platform");
 const { sortSessions } = require("./sort-sessions");
 const { parseOrigins, detectOrigin } = require("./parse-origins");
-const {
-  parseTerminalHasInput,
-  checkTerminalInputs,
-} = require("./terminal-input");
-const { readPool: readPoolFile, isSlotUncommitted } = require("./pool");
-const { STATUS, POOL_STATUS } = require("./session-statuses");
+// terminal-input no longer needed — pool input detection via claude-pool's pendingInput
+const { STATUS } = require("./session-statuses");
 const {
   secureMkdirSync,
   secureWriteFileSync,
   readJsonSync,
 } = require("./secure-fs");
-const {
-  daemonRequest,
-  daemonSend,
-  daemonSendSafe,
-} = require("./daemon-client");
+const { daemonSendSafe } = require("./daemon-client");
 const {
   SESSION_PIDS_DIR,
   CLAUDE_PROJECTS_DIR,
   IDLE_SIGNALS_DIR,
   INTENTIONS_DIR,
   OFFLOADED_DIR,
-  POOL_FILE,
   SESSION_GRAPH_FILE,
   isPidAlive,
 } = require("./paths");
@@ -40,9 +31,11 @@ const {
 // --- Init pattern for injected dependencies ---
 let _debugLog = () => {};
 let _onSessionsChanged = null;
-function init({ debugLog, onSessionsChanged }) {
+let _claudePoolClient = null;
+function init({ debugLog, onSessionsChanged, claudePoolClient }) {
   if (debugLog) _debugLog = debugLog;
   _onSessionsChanged = onSessionsChanged;
+  if (claudePoolClient) _claudePoolClient = claudePoolClient;
 }
 
 // --- Inline helpers (copied from main.js, not worth a separate module) ---
@@ -77,8 +70,14 @@ function removeOffloadData(sessionId) {
   }
 }
 
-function readPool() {
-  return readPoolFile(POOL_FILE);
+async function getPoolSessions() {
+  if (!_claudePoolClient || !_claudePoolClient.isConnected()) return null;
+  try {
+    const resp = await _claudePoolClient.ls({ verbosity: "flat" });
+    return resp.sessions || [];
+  } catch {
+    return null;
+  }
 }
 
 // --- Module-level state ---
@@ -193,134 +192,32 @@ async function pollTerminalInput() {
   if (pollInFlight) return;
   pollInFlight = true;
   try {
-    const pool = readPool();
-    if (!pool) return;
-
-    const freshSlots = pool.slots.filter((s) => isSlotUncommitted(s.status));
-    if (freshSlots.length === 0) return;
-
-    // Single daemon call to get all terminal buffers
-    let ptys;
-    try {
-      const resp = await daemonRequest({ type: "list" });
-      ptys = resp.ptys || [];
-    } catch (err) {
-      _debugLog("main", "pollTerminalInput: daemon unavailable", err.message);
-      return;
-    }
-
-    const freshTermIds = new Set(freshSlots.map((s) => s.termId));
-    const ptyTermIds = new Set(ptys.map((p) => p.termId));
-    const ptyByTermId = new Map(ptys.map((p) => [p.termId, p]));
-    let results = await checkTerminalInputs(ptys, freshTermIds);
-
-    // Batch jitter-verify: collect terminals that detected input without
-    // recent user keystrokes, jitter them all, re-read once, re-parse.
-    const suspectTermIds = new Set();
-    for (const [termId, inputText] of results) {
-      if (inputText && !recentWriteTermIds.has(termId)) {
-        const pty = ptyByTermId.get(termId);
-        if (pty && pty.cols) suspectTermIds.add(termId);
-      }
-    }
-    if (suspectTermIds.size > 0) {
-      try {
-        for (const termId of suspectTermIds) {
-          const pty = ptyByTermId.get(termId);
-          daemonSendSafe({
-            type: "resize",
-            termId,
-            cols: pty.cols + 1,
-            rows: pty.rows,
-          });
-          daemonSendSafe({
-            type: "resize",
-            termId,
-            cols: pty.cols,
-            rows: pty.rows,
-          });
-        }
-        await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
-        const resp2 = await daemonRequest({ type: "list" });
-        const refreshedPtys = resp2.ptys || [];
-        const verified = await checkTerminalInputs(
-          refreshedPtys,
-          suspectTermIds,
-        );
-        // Merge verified results back — replace suspect entries
-        const merged = new Map(results);
-        for (const [termId, text] of verified) {
-          if (suspectTermIds.has(termId)) {
-            if (text) {
-              merged.set(termId, text);
-            } else {
-              merged.delete(termId);
-              _debugLog("main", `Jitter cleared artifact for termId=${termId}`);
-            }
-          }
-        }
-        results = merged;
-      } catch (err) {
-        _debugLog(
-          "main",
-          "batch jitter failed, trusting detections",
-          err.message,
-        );
-      }
-    }
+    if (!_claudePoolClient || !_claudePoolClient.isConnected()) return;
+    const resp = await _claudePoolClient.ls({ verbosity: "flat" });
+    const sessions = resp.sessions || [];
 
     let changed = false;
-    for (const [termId, inputText] of results) {
-      const prev = terminalHasInputCache.get(termId) || "";
-      if (inputText) {
-        // Verified or trusted — update cache
-        consecutiveMisses.delete(termId);
-        if (inputText !== prev) {
-          terminalHasInputCache.set(termId, inputText);
+
+    // Use pendingInput from claude-pool
+    for (const s of sessions) {
+      const prev = terminalHasInputCache.get(s.sessionId) || "";
+      if (s.pendingInput) {
+        if (s.pendingInput !== prev) {
+          terminalHasInputCache.set(s.sessionId, s.pendingInput);
           changed = true;
         }
       } else if (prev) {
-        // Previously had input, now empty.
-        // If the user recently typed (e.g. backspaced to empty), clear immediately.
-        // Otherwise require consecutive misses to guard against transient parse failures.
-        if (recentWriteTermIds.has(termId)) {
-          terminalHasInputCache.delete(termId);
-          consecutiveMisses.delete(termId);
-          changed = true;
-        } else {
-          const misses = (consecutiveMisses.get(termId) || 0) + 1;
-          consecutiveMisses.set(termId, misses);
-          if (misses >= MISS_THRESHOLD) {
-            terminalHasInputCache.delete(termId);
-            consecutiveMisses.delete(termId);
-            changed = true;
-            _debugLog(
-              "main",
-              `Terminal input cleared for termId=${termId} after ${MISS_THRESHOLD} consecutive misses`,
-            );
-          }
-        }
-      }
-    }
-
-    // Clear stale cache entries for fresh slots whose PTY disappeared
-    for (const termId of freshTermIds) {
-      if (!ptyTermIds.has(termId) && terminalHasInputCache.has(termId)) {
-        terminalHasInputCache.delete(termId);
-        consecutiveMisses.delete(termId);
+        terminalHasInputCache.delete(s.sessionId);
         changed = true;
       }
-    }
-
-    // Prune recentWriteTermIds — only keep entries for current fresh terminals
-    for (const termId of recentWriteTermIds) {
-      if (!freshTermIds.has(termId)) recentWriteTermIds.delete(termId);
     }
 
     if (changed) {
       invalidateSessionsCache();
       if (_onSessionsChanged) _onSessionsChanged();
     }
+  } catch (err) {
+    _debugLog("main", "pollTerminalInput failed", err.message);
   } finally {
     pollInFlight = false;
   }
@@ -328,17 +225,10 @@ async function pollTerminalInput() {
 
 // Trigger a poll shortly after a keystroke is written to a fresh pool terminal.
 // Debounced so rapid typing doesn't flood — only the trailing edge fires.
-// Pool check is inside the callback to avoid disk I/O on every keystroke.
 function triggerPollOnWrite(termId) {
   recentWriteTermIds.add(termId);
   clearTimeout(writeDebounceTimer);
   writeDebounceTimer = setTimeout(() => {
-    const pool = readPool();
-    if (!pool) return;
-    const slot = pool.slots.find(
-      (s) => s.termId === termId && isSlotUncommitted(s.status),
-    );
-    if (!slot) return;
     pollTerminalInput().catch((err) =>
       _debugLog(
         "main",
@@ -646,12 +536,16 @@ async function batchGetCwds(pids) {
 // Internal — not exported. Use getSessions() from other modules.
 async function getSessionsUncached() {
   const sessions = [];
-  const pool = readPool();
-  // Pre-build session->slot map for O(1) lookups
-  const poolSlotMap = new Map();
-  if (pool) {
-    for (const slot of pool.slots) {
-      if (slot.sessionId) poolSlotMap.set(slot.sessionId, slot);
+  // Get pool session IDs from claude-pool
+  let poolSessionIds = new Set();
+  if (_claudePoolClient && _claudePoolClient.isConnected()) {
+    try {
+      const resp = await _claudePoolClient.ls({ verbosity: "flat" });
+      for (const s of resp.sessions || []) {
+        poolSessionIds.add(s.sessionId);
+      }
+    } catch {
+      /* pool not running */
     }
   }
 
@@ -705,12 +599,14 @@ async function getSessionsUncached() {
     let status;
     let idleTs = 0;
     let staleIdle = false;
-    const poolSlot = poolSlotMap.get(sessionId);
+    const isPoolSession = poolSessionIds.has(sessionId);
     // Only check intention content for pool sessions (avoids unnecessary file reads for external/idle)
-    const intentionContent = poolSlot ? readIntention(sessionId).trim() : "";
+    const intentionContent = isPoolSession
+      ? readIntention(sessionId).trim()
+      : "";
     const hasIntentionContent = !!intentionContent;
     const hasTermInput = !!(
-      poolSlot && terminalHasInputCache.get(poolSlot.termId)
+      isPoolSession && terminalHasInputCache.get(sessionId)
     );
 
     // Track activation: triggers NOT in FRESH_TRIGGERS mean the session has
@@ -770,7 +666,7 @@ async function getSessionsUncached() {
       // the session has real user interaction or isn't a pool session.
       if (
         staleTimeout &&
-        (!poolSlot ||
+        (!isPoolSession ||
           (await transcriptContains(
             jsonlPathCache.get(sessionId),
             '"type":"user"',
@@ -793,7 +689,7 @@ async function getSessionsUncached() {
         const jsonlPath = jsonlPathCache.get(sessionId);
         if (isActivated) {
           status = STATUS.PROCESSING;
-        } else if (poolSlot) {
+        } else if (isPoolSession) {
           // Pool sessions always have idle signals when idle (pool-init,
           // stop, tool, permission, session-clear). syncPoolStatuses
           // recreates missing pool-init signals for fresh slots. So a
@@ -819,8 +715,8 @@ async function getSessionsUncached() {
         if (preview) intentionPreview = preview.slice(0, 80);
       }
       if (!intentionPreview && hasTermInput) {
-        const termText = poolSlot
-          ? terminalHasInputCache.get(poolSlot.termId)
+        const termText = isPoolSession
+          ? terminalHasInputCache.get(sessionId)
           : null;
         if (termText) intentionPreview = termText.slice(0, 80);
       }
@@ -882,13 +778,6 @@ async function getSessionsUncached() {
   // Archive dead sessions (save as archived without snapshot).
   // Child sessions are never independently auto-archived — archiveSession()
   // cascade-archives all descendants when the parent is archived.
-  const poolForArchive = readPool();
-  const poolSessionIdsForArchive = new Set();
-  if (poolForArchive) {
-    for (const slot of poolForArchive.slots) {
-      if (slot.sessionId) poolSessionIdsForArchive.add(slot.sessionId);
-    }
-  }
   const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});
   const graphParentIds = new Set(
     Object.values(sessionGraph)
@@ -944,7 +833,7 @@ async function getSessionsUncached() {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
-      const origin = poolSessionIdsForArchive.has(s.sessionId)
+      const origin = poolSessionIds.has(s.sessionId)
         ? "pool"
         : originCache.get(String(s.pid)) || "ext";
 
@@ -989,12 +878,7 @@ async function getSessionsUncached() {
   }
 
   // Tag sessions with origin: pool, sub-claude, or ext
-  const poolSessionIds = new Set();
-  if (pool) {
-    for (const slot of pool.slots) {
-      if (slot.sessionId) poolSessionIds.add(slot.sessionId);
-    }
-  }
+  // (poolSessionIds already populated at the top of this function)
   // Batch detect origins for all alive non-pool sessions in one ps call
   const needOriginPids = sessions
     .filter((s) => s.alive && !poolSessionIds.has(s.sessionId))
@@ -1075,13 +959,6 @@ function computeDirFingerprint() {
       parts.push(`o:${st.mtimeMs}`);
     } catch {
       /* ENOENT — dir may not exist yet */
-    }
-    // Pool state changes (new slots, killed sessions)
-    try {
-      const st = fs.statSync(POOL_FILE);
-      parts.push(`pool:${st.mtimeMs}`);
-    } catch {
-      /* ENOENT — pool may not be initialized */
     }
     return parts.join("|");
   } catch {

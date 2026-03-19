@@ -88,8 +88,7 @@
     "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
-    "electron-updater": "^6.8.3",
-    "node-pty": "^1.1.0"
+    "electron-updater": "^6.8.3"
   },
   "devDependencies": {
     "electron": "^33.0.0",

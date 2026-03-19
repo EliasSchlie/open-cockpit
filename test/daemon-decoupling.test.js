@@ -17,8 +17,6 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
 
   it("all paths point to OPEN_COCKPIT_DIR", () => {
     const paths = env.requireFresh("paths.js");
-    expect(paths.DAEMON_SOCKET).toBe(path.join(env.dir, "pty-daemon.sock"));
-    expect(paths.DAEMON_PID_FILE).toBe(path.join(env.dir, "pty-daemon.pid"));
     expect(paths.POOL_FILE).toBe(path.join(env.dir, "pool.json"));
     expect(paths.API_SOCKET).toBe(path.join(env.dir, "api.sock"));
     expect(paths.ACTIVE_SESSIONS_FILE).toBe(
@@ -39,8 +37,6 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
 
   it("no -dev suffixed file names", () => {
     const paths = env.requireFresh("paths.js");
-    // All paths should use simple names, no branching
-    expect(paths.DAEMON_SOCKET).not.toContain("-dev");
     expect(paths.POOL_FILE).not.toContain("-dev");
     expect(paths.API_SOCKET).not.toContain("-dev");
     expect(paths.ACTIVE_SESSIONS_FILE).not.toContain("-dev");
@@ -62,8 +58,6 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
     }
   });
 
-  // Load paths.js with custom env vars, bypassing requireFresh() which
-  // always sets OPEN_COCKPIT_DIR to env.dir. Used to test path resolution.
   function loadPathsWithEnv(envOverrides) {
     const req = createRequire(import.meta.url);
     const pathsPath = path.resolve(import.meta.dirname, "../src/paths.js");

@@ -97,8 +97,8 @@ contextBridge.exposeInMainWorld("api", {
   // Pool management
   poolInit: (size) => ipcRenderer.invoke("pool-init", size),
   poolResize: (newSize) => ipcRenderer.invoke("pool-resize", newSize),
-  poolHealth: () => ipcRenderer.invoke("pool-health"),
   poolRead: () => ipcRenderer.invoke("pool-read"),
+  poolHealth: () => ipcRenderer.invoke("pool-health"),
   poolDestroy: () => ipcRenderer.invoke("pool-destroy"),
   poolClean: () => ipcRenderer.invoke("pool-clean"),
   poolGetFlags: () => ipcRenderer.invoke("pool-get-flags"),
