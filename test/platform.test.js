@@ -116,10 +116,12 @@ describe("getExtraPathDirs", () => {
     }
   });
 
-  it("includes .claude/local/bin in home dir", () => {
+  it("returns dirs not already in process.env.PATH", () => {
     const dirs = platform.getExtraPathDirs();
-    const home = os.homedir();
-    expect(dirs).toContain(path.join(home, ".claude", "local", "bin"));
+    const currentDirs = new Set((process.env.PATH || "").split(path.delimiter));
+    for (const dir of dirs) {
+      expect(currentDirs.has(dir)).toBe(false);
+    }
   });
 });
 
