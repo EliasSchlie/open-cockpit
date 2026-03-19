@@ -47,16 +47,54 @@ function joinPathEnv(dirs, existingPath) {
 
 // --- Extra PATH directories ---
 
+let _cachedExtraDirs = null;
+
 function getExtraPathDirs() {
+  if (_cachedExtraDirs) return _cachedExtraDirs;
+
+  if (IS_WINDOWS) {
+    _cachedExtraDirs = [];
+    return _cachedExtraDirs;
+  }
+
+  // Try resolving PATH from a login shell — picks up Homebrew, nvm, etc.
+  // that aren't in process.env.PATH when launched from Dock/Spotlight.
+  try {
+    const shell = process.env.SHELL || "/bin/zsh";
+    const { execFileSync } = require("child_process");
+    const loginPath = execFileSync(shell, ["-lc", "echo $PATH"], {
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+
+    if (loginPath) {
+      const currentDirs = new Set(
+        (process.env.PATH || "").split(path.delimiter),
+      );
+      _cachedExtraDirs = loginPath
+        .split(path.delimiter)
+        .filter((d) => d && !currentDirs.has(d));
+      console.log(
+        `[platform] Login shell PATH resolved ${_cachedExtraDirs.length} extra dirs`,
+      );
+      return _cachedExtraDirs;
+    }
+  } catch (err) {
+    console.error(
+      "[platform] Login shell PATH failed, using fallback:",
+      err.message,
+    );
+  }
+
+  // Fallback: hardcoded essentials
   const home = os.homedir();
-  const dirs = [
+  _cachedExtraDirs = [
     path.join(home, ".claude", "local", "bin"),
     path.join(home, ".local", "bin"),
+    "/usr/local/bin",
   ];
-  if (!IS_WINDOWS) {
-    dirs.push("/usr/local/bin");
-  }
-  return dirs;
+  return _cachedExtraDirs;
 }
 
 // --- Claude binary discovery ---
