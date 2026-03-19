@@ -9,7 +9,7 @@
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
-const { execFile } = require("child_process");
+const { execFile, execFileSync } = require("child_process");
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 
@@ -60,8 +60,7 @@ function getExtraPathDirs() {
   // Try resolving PATH from a login shell — picks up Homebrew, nvm, etc.
   // that aren't in process.env.PATH when launched from Dock/Spotlight.
   try {
-    const shell = process.env.SHELL || "/bin/zsh";
-    const { execFileSync } = require("child_process");
+    const shell = getDefaultShell();
     const loginPath = execFileSync(shell, ["-lc", "echo $PATH"], {
       encoding: "utf-8",
       timeout: 3000,
