@@ -192,7 +192,7 @@ async function offloadSession(
   sessionId,
   termId,
   claudeSessionId,
-  { cwd, gitRoot, pid } = {},
+  { cwd, gitRoot, pid, archived } = {},
 ) {
   // Get terminal buffer and render to readable text
   let snapshot = null;
@@ -214,6 +214,7 @@ async function offloadSession(
     claudeSessionId,
     snapshot,
     origin: "pool",
+    archived,
   });
   // Session is no longer active — remove from crash-recovery registry
   try {
@@ -500,7 +501,10 @@ async function archiveSingleSession(sessionId) {
   const pool = readPool();
   const slot = pool?.slots?.find((s) => s.sessionId === sessionId);
   if (slot) {
-    // Pool session: offload it first, then mark archived
+    // Pool session: offload it first, marked as archived from the start.
+    // archived flag is passed through to writeOffloadMeta so the meta is
+    // created with archived=true BEFORE PID file deletion triggers fs.watch
+    // events that could cause a stale intermediate refresh.
     const { getSessions } = getSessionDiscovery();
     const sessions = await getSessions();
     const session = sessions.find((s) => s.sessionId === sessionId);
@@ -508,29 +512,25 @@ async function archiveSingleSession(sessionId) {
       cwd: session?.cwd,
       gitRoot: session?.gitRoot,
       pid: session?.pid,
-    });
-    // Poll for offload meta to be written (up to 5s)
-    for (let i = 0; i < 50; i++) {
-      if (readOffloadMeta(sessionId)) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-
-  // Mark as archived (may have been just written by offloadSession)
-  const updatedMeta = readOffloadMeta(sessionId);
-  if (updatedMeta) {
-    updatedMeta.archived = true;
-    updatedMeta.archivedAt = updatedMeta.archivedAt || new Date().toISOString();
-    secureWriteFileSync(
-      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
-      JSON.stringify(updatedMeta, null, 2),
-    );
-  } else {
-    // No offload data yet — create archive-only meta
-    await writeOffloadMeta(sessionId, {
-      claudeSessionId: sessionId,
       archived: true,
     });
+  } else {
+    // Non-pool session — create archive-only meta
+    const existingMeta = readOffloadMeta(sessionId);
+    if (existingMeta) {
+      existingMeta.archived = true;
+      existingMeta.archivedAt =
+        existingMeta.archivedAt || new Date().toISOString();
+      secureWriteFileSync(
+        path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+        JSON.stringify(existingMeta, null, 2),
+      );
+    } else {
+      await writeOffloadMeta(sessionId, {
+        claudeSessionId: sessionId,
+        archived: true,
+      });
+    }
   }
   killOrphanedTerminals(sessionId);
 }
