@@ -566,7 +566,7 @@ async function offloadSession(
   let snapshot = null;
   try {
     const resp = await client.capture(sessionId, { source: "buffer" });
-    if (resp.buffer) snapshot = await renderBufferToText(resp.buffer);
+    if (resp.content) snapshot = await renderBufferToText(resp.content);
   } catch (err) {
     console.error(
       "[main] Failed to get terminal snapshot for offload of session",

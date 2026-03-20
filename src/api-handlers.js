@@ -162,36 +162,20 @@ const sharedHandlers = {
   "pool-resize": async ({ size }) => poolResize(size),
   "pool-read": async () => {
     // Return pool data compatible with the old pool.json structure.
-    // The renderer uses this to find sessionId→termId mappings.
+    // Uses debug-slots for accurate per-slot data (index, pid, sessionId, state).
     if (!_poolClient || !_poolClient.isConnected()) return null;
     try {
-      const health = await _poolClient.health();
-      // health.slots is a summary object {fresh:N, idle:N,...}, not an array.
-      // Get actual session data from ls for the slot array.
-      const lsResp = await _poolClient.ls({ verbosity: "flat" });
-      const sessions = lsResp.sessions || [];
-      const slots = sessions.map((s, i) => ({
-        index: i,
+      const resp = await _poolClient.debugSlots();
+      const rawSlots = resp.slots || [];
+      const slots = rawSlots.map((s) => ({
+        index: s.index,
         sessionId: s.sessionId || null,
-        status: s.status || "unknown",
+        status: s.state || "unknown",
         pid: s.pid || null,
         // In the new model, termId = sessionId for pool sessions
-        termId: s.sessionId,
+        termId: s.sessionId || null,
       }));
-      // Add placeholders for fresh slots (not yet sessions)
-      const freshCount = health.slots?.fresh || 0;
-      const totalSlots = health.size || 0;
-      const sessionCount = slots.length;
-      for (let i = sessionCount; i < totalSlots; i++) {
-        slots.push({
-          index: i,
-          sessionId: null,
-          status: i - sessionCount < freshCount ? "fresh" : "starting",
-          pid: null,
-          termId: null,
-        });
-      }
-      return { poolSize: totalSlots, slots };
+      return { poolSize: slots.length, slots };
     } catch {
       return null;
     }
@@ -523,6 +507,50 @@ function buildApiHandlers() {
     type: "session-graph",
     graph: readSessionGraph(),
   });
+
+  // --- Slot access (via claude-pool debug-slots) ---
+
+  handlers["slot-status"] = async (msg) => {
+    if (msg.slotIndex === undefined) throw new Error("slotIndex required");
+    const client = _requirePoolClient();
+    const resp = await client.debugSlots();
+    const slot = (resp.slots || []).find((s) => s.index === msg.slotIndex);
+    if (!slot) throw new Error(`No slot at index ${msg.slotIndex}`);
+    return {
+      type: "slot",
+      slot: {
+        index: slot.index,
+        pid: slot.pid,
+        status: slot.state,
+        sessionId: slot.sessionId || null,
+        healthStatus: slot.state,
+      },
+    };
+  };
+
+  handlers["slot-read"] = async (msg) => {
+    if (msg.slotIndex === undefined) throw new Error("slotIndex required");
+    const client = _requirePoolClient();
+    const resp = await client.debugCapture(msg.slotIndex);
+    return {
+      type: "buffer",
+      slotIndex: msg.slotIndex,
+      buffer: resp.content || "",
+    };
+  };
+
+  handlers["slot-write"] = async (msg) => {
+    if (msg.slotIndex === undefined) throw new Error("slotIndex required");
+    if (msg.data === undefined) throw new Error("data required");
+    const client = _requirePoolClient();
+    // Find the session in the slot to send input
+    const slotsResp = await client.debugSlots();
+    const slot = (slotsResp.slots || []).find((s) => s.index === msg.slotIndex);
+    if (!slot?.sessionId)
+      throw new Error(`Slot ${msg.slotIndex} has no session`);
+    await client.input(slot.sessionId, msg.data);
+    return { type: "ok" };
+  };
 
   // --- Session terminals (via claude-term) ---
 

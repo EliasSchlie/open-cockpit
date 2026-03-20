@@ -461,6 +461,20 @@ class ClaudePoolClient {
     return this.request({ type: "input", sessionId, data });
   }
 
+  // --- Debug ---
+
+  /** Get per-slot data (index, pid, pidAlive, sessionId, state). */
+  async debugSlots() {
+    return this.request({ type: "debug-slots" });
+  }
+
+  /** Get raw terminal buffer for a slot by index. */
+  async debugCapture(slotIndex, raw) {
+    const msg = { type: "debug-capture", slot: slotIndex };
+    if (raw) msg.raw = true;
+    return this.request(msg);
+  }
+
   // --- Event subscription ---
 
   async subscribe(filters = {}) {
