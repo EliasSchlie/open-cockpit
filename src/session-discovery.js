@@ -917,7 +917,8 @@ async function getSessionsUncached() {
           cwd: ps.cwd || ps.spawnCwd || null,
           home: os.homedir(),
           gitRoot: null,
-          project: ps.cwd ? path.basename(ps.cwd) : null,
+          project:
+            ps.cwd || ps.spawnCwd ? path.basename(ps.cwd || ps.spawnCwd) : null,
           hasIntention: false,
           intentionHeading: null,
           status,

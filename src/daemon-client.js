@@ -13,9 +13,6 @@ let _debugLog = () => {};
 // Track shell-tab terminals (vs pool sessions)
 const knownTermIds = new Set();
 
-// Track active claude-pool attach sockets (sessionId → net.Socket)
-const poolAttachSockets = new Map();
-
 function init({ onPtyEvent, debugLog }) {
   if (debugLog) _debugLog = debugLog;
 
@@ -233,5 +230,4 @@ module.exports = {
   destroySocket,
   getClient,
   knownTermIds,
-  poolAttachSockets,
 };

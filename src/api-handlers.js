@@ -166,7 +166,7 @@ const sharedHandlers = {
       const health = await _poolClient.health();
       // health.slots is a summary object {fresh:N, idle:N,...}, not an array.
       // Get actual session data from ls for the slot array.
-      const lsResp = await _poolClient.ls({ verbosity: "full" });
+      const lsResp = await _poolClient.ls({ verbosity: "flat" });
       const sessions = lsResp.sessions || [];
       const slots = sessions.map((s, i) => ({
         index: i,
