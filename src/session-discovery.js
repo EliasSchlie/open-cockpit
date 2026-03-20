@@ -17,7 +17,6 @@ const {
   secureWriteFileSync,
   readJsonSync,
 } = require("./secure-fs");
-const { daemonSendSafe } = require("./daemon-client");
 const {
   SESSION_PIDS_DIR,
   CLAUDE_PROJECTS_DIR,
@@ -168,18 +167,6 @@ let writeDebounceTimer = null;
 
 function freshOrTyping(hasIntentionContent, hasTermInput) {
   return hasIntentionContent || hasTermInput ? STATUS.TYPING : STATUS.FRESH;
-}
-
-// Force a clean TUI redraw by jittering the terminal width (cols+1 → cols).
-// Claude Code's TUI redraws on SIGWINCH, flushing any mid-frame artifacts
-// from the PTY buffer. A short delay lets the TUI finish writing its clean
-// frame before the caller re-reads.
-const JITTER_SETTLE_MS = 50;
-
-async function jitterTerminal(termId, cols, rows) {
-  daemonSendSafe({ type: "resize", termId, cols: cols + 1, rows });
-  daemonSendSafe({ type: "resize", termId, cols, rows });
-  await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
 }
 
 async function pollTerminalInput() {
@@ -1104,7 +1091,6 @@ module.exports = {
   findGitRoot,
   pollTerminalInput,
   triggerPollOnWrite,
-  jitterTerminal,
   terminalHasInputCache: terminalInputApi,
   getJsonlSize,
 };

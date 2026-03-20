@@ -81,7 +81,9 @@ async function getSessionTerminals(sessionId) {
   const resp = await daemonRequest({ type: "list" });
   const terms = resp.ptys
     .filter((p) => p.owner === sessionId && p.alive !== false)
-    .sort((a, b) => (a.term_id || a.termId) - (b.term_id || b.termId));
+    .sort((a, b) =>
+      String(a.termId || "").localeCompare(String(b.termId || "")),
+    );
 
   let shellCount = 0;
   return terms.map((p, i) => {
