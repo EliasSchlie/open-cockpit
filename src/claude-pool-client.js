@@ -187,7 +187,7 @@ class ClaudePoolClient {
   async request(msg, timeoutMs = 30000) {
     await this.ensureConnected();
     return new Promise((resolve, reject) => {
-      const id = ++this._reqId;
+      const id = `r${++this._reqId}`;
       msg.id = id;
       const timer = setTimeout(() => {
         if (this._pending.has(id)) {

@@ -447,13 +447,11 @@ function buildApiHandlers() {
       prompt: msg.prompt,
       parent: msg.parentSessionId,
     });
-    if (msg.parentSessionId) {
-      recordSessionRelation(
-        resp.sessionId,
-        msg.parentSessionId,
-        INITIATOR.MODEL,
-      );
-    }
+    recordSessionRelation(
+      resp.sessionId,
+      msg.parentSessionId || null,
+      msg.parentSessionId ? INITIATOR.MODEL : INITIATOR.USER,
+    );
     return { type: "started", sessionId: resp.sessionId };
   };
 
@@ -598,7 +596,7 @@ function buildApiHandlers() {
       type: "read-buffer",
       term_id: tab.termId,
     });
-    const beforeBuffer = beforeResp.data || "";
+    const beforeBuffer = beforeResp.buffer || "";
     daemonSendSafe({
       type: "write",
       term_id: tab.termId,
@@ -612,7 +610,7 @@ function buildApiHandlers() {
         type: "read-buffer",
         term_id: tab.termId,
       });
-      const buf = bufResp.data || "";
+      const buf = bufResp.buffer || "";
       if (buf.length > beforeBuffer.length) {
         const newContent = buf.slice(beforeBuffer.length);
         const clean = stripAnsi(newContent);
@@ -635,7 +633,7 @@ function buildApiHandlers() {
       type: "read-buffer",
       term_id: tab.termId,
     });
-    const delta = (finalResp.data || "").slice(beforeBuffer.length);
+    const delta = (finalResp.buffer || "").slice(beforeBuffer.length);
     throw new Error(
       `Command timed out after ${timeoutMs}ms. Partial output: ${stripAnsi(delta).trim()}`,
     );

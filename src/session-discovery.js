@@ -198,16 +198,17 @@ async function pollTerminalInput() {
 
     let changed = false;
 
-    // Use pendingInput from claude-pool
+    // Use pendingInput from claude-pool (go through terminalInputApi
+    // to keep consecutiveMisses tracking in sync)
     for (const s of sessions) {
-      const prev = terminalHasInputCache.get(s.sessionId) || "";
+      const prev = terminalInputApi.get(s.sessionId) || "";
       if (s.pendingInput) {
         if (s.pendingInput !== prev) {
-          terminalHasInputCache.set(s.sessionId, s.pendingInput);
+          terminalInputApi.set(s.sessionId, s.pendingInput);
           changed = true;
         }
       } else if (prev) {
-        terminalHasInputCache.delete(s.sessionId);
+        terminalInputApi.delete(s.sessionId);
         changed = true;
       }
     }
@@ -925,6 +926,7 @@ async function getSessionsUncached() {
         intentionHeading: null,
         status,
         idleTs: 0,
+        staleIdle: false,
         origin: "pool",
       });
     }
