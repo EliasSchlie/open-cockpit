@@ -17,11 +17,8 @@ const INTENTIONS_DIR = path.join(OPEN_COCKPIT_DIR, "intentions");
 const COLORS_FILE = path.join(OPEN_COCKPIT_DIR, "colors.json");
 const SESSION_PIDS_DIR = path.join(OPEN_COCKPIT_DIR, "session-pids");
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
-// Legacy daemon paths removed — PTY management delegated to claude-term/claude-pool
 const IDLE_SIGNALS_DIR = path.join(OPEN_COCKPIT_DIR, "idle-signals");
 const OFFLOADED_DIR = path.join(OPEN_COCKPIT_DIR, "offloaded");
-const POOL_FILE = path.join(OPEN_COCKPIT_DIR, "pool.json");
-const POOL_SETTINGS_FILE = path.join(OPEN_COCKPIT_DIR, "pool-settings.json");
 const AGENTS_DIR = path.join(OPEN_COCKPIT_DIR, "agents");
 const SETUP_SCRIPTS_DIR = path.join(OPEN_COCKPIT_DIR, "setup-scripts");
 const LAYOUTS_DIR = path.join(OPEN_COCKPIT_DIR, "layouts");
@@ -30,13 +27,7 @@ const API_SOCKET = path.join(OPEN_COCKPIT_DIR, "api.sock");
 const DEBUG_LOG_FILE = path.join(OPEN_COCKPIT_DIR, "debug.log");
 const DEBUG_LOG_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
 const DEFAULT_POOL_SIZE = 5;
-const ORPHAN_TERMINAL_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
-const ACTIVE_SESSIONS_FILE = path.join(
-  OPEN_COCKPIT_DIR,
-  "active-sessions.json",
-);
 const PREFERENCES_FILE = path.join(OPEN_COCKPIT_DIR, "preferences.json");
-const POOL_SPAWNED_PIDS_DIR = path.join(OPEN_COCKPIT_DIR, "pool-spawned-pids");
 
 function isPidAlive(pid) {
   try {
@@ -57,8 +48,6 @@ module.exports = {
   CLAUDE_PROJECTS_DIR,
   IDLE_SIGNALS_DIR,
   OFFLOADED_DIR,
-  POOL_FILE,
-  POOL_SETTINGS_FILE,
   AGENTS_DIR,
   SETUP_SCRIPTS_DIR,
   LAYOUTS_DIR,
@@ -67,8 +56,5 @@ module.exports = {
   DEBUG_LOG_FILE,
   DEBUG_LOG_MAX_SIZE,
   DEFAULT_POOL_SIZE,
-  ORPHAN_TERMINAL_TTL_MS,
-  ACTIVE_SESSIONS_FILE,
   PREFERENCES_FILE,
-  POOL_SPAWNED_PIDS_DIR,
 };

@@ -17,14 +17,7 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
 
   it("all paths point to OPEN_COCKPIT_DIR", () => {
     const paths = env.requireFresh("paths.js");
-    expect(paths.POOL_FILE).toBe(path.join(env.dir, "pool.json"));
     expect(paths.API_SOCKET).toBe(path.join(env.dir, "api.sock"));
-    expect(paths.ACTIVE_SESSIONS_FILE).toBe(
-      path.join(env.dir, "active-sessions.json"),
-    );
-    expect(paths.POOL_SETTINGS_FILE).toBe(
-      path.join(env.dir, "pool-settings.json"),
-    );
     expect(paths.SESSION_GRAPH_FILE).toBe(
       path.join(env.dir, "session-graph.json"),
     );
@@ -37,9 +30,7 @@ describe("instance isolation — paths derive from OPEN_COCKPIT_DIR", () => {
 
   it("no -dev suffixed file names", () => {
     const paths = env.requireFresh("paths.js");
-    expect(paths.POOL_FILE).not.toContain("-dev");
     expect(paths.API_SOCKET).not.toContain("-dev");
-    expect(paths.ACTIVE_SESSIONS_FILE).not.toContain("-dev");
   });
 
   it("INSTANCE_NAME is null when OPEN_COCKPIT_INSTANCE_NAME not set", () => {
