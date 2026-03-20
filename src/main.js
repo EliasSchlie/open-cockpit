@@ -537,6 +537,14 @@ app.whenReady().then(async () => {
   apiHandlersModule.init({
     getMainWindow: () => mainWindow,
     claudePoolClient: poolClient,
+    onSessionArchived: (sessionId) => {
+      // Clean up attach socket for archived session
+      const sock = poolAttachSockets.get(sessionId);
+      if (sock) {
+        sock.destroy();
+        poolAttachSockets.delete(sessionId);
+      }
+    },
   });
 
   // Start claude-term connection (don't crash if it fails — it auto-starts)

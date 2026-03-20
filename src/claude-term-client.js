@@ -83,6 +83,10 @@ class ClaudeTermClient {
     return this._connecting;
   }
 
+  isConnected() {
+    return this._socket && !this._socket.destroyed;
+  }
+
   async ensureConnected() {
     if (this._socket && !this._socket.destroyed) return;
     try {

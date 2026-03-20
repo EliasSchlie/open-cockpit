@@ -9,7 +9,12 @@ const net = require("net");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawn: spawnChild, execFileSync } = require("child_process");
+const { spawn: spawnChild } = require("child_process");
+const {
+  secureMkdirSync,
+  secureWriteFileSync,
+  readJsonSync,
+} = require("./secure-fs");
 
 const CLAUDE_POOL_HOME =
   process.env.CLAUDE_POOL_HOME || path.join(os.homedir(), ".claude-pool");
@@ -37,15 +42,11 @@ class ClaudePoolClient {
 
   _resolveSocket() {
     if (this._socketPath) return this._socketPath;
-    try {
-      const registry = JSON.parse(fs.readFileSync(POOLS_REGISTRY, "utf-8"));
-      const entry = registry[this._poolName];
-      if (entry?.socket) {
-        this._socketPath = entry.socket;
-        return this._socketPath;
-      }
-    } catch {
-      // Registry doesn't exist
+    const registry = readJsonSync(POOLS_REGISTRY, {});
+    const entry = registry[this._poolName];
+    if (entry?.socket) {
+      this._socketPath = entry.socket;
+      return this._socketPath;
     }
     // Default path
     this._socketPath = path.join(CLAUDE_POOL_HOME, this._poolName, "api.sock");
@@ -209,19 +210,12 @@ class ClaudePoolClient {
     const poolDir = path.join(CLAUDE_POOL_HOME, this._poolName);
 
     // Write config first
-    fs.mkdirSync(poolDir, { recursive: true, mode: 0o700 });
+    secureMkdirSync(poolDir, { recursive: true });
     const configPath = path.join(poolDir, "config.json");
-    let config = {};
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    } catch {
-      // New pool
-    }
+    let config = readJsonSync(configPath, {});
     if (size) config.size = size;
     if (flags !== undefined) config.flags = flags;
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), {
-      mode: 0o600,
-    });
+    secureWriteFileSync(configPath, JSON.stringify(config, null, 2));
 
     // Start daemon if not running
     if (!this.isConnected()) {
@@ -281,13 +275,8 @@ class ClaudePoolClient {
       // New registry
     }
     registry[this._poolName] = { socket: sockPath };
-    fs.mkdirSync(path.dirname(POOLS_REGISTRY), {
-      recursive: true,
-      mode: 0o700,
-    });
-    fs.writeFileSync(POOLS_REGISTRY, JSON.stringify(registry, null, 2), {
-      mode: 0o600,
-    });
+    secureMkdirSync(path.dirname(POOLS_REGISTRY), { recursive: true });
+    secureWriteFileSync(POOLS_REGISTRY, JSON.stringify(registry, null, 2));
   }
 
   _findDaemonBinary() {

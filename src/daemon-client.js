@@ -4,7 +4,6 @@
  *
  * Translates between old pty-daemon message format and claude-term format.
  */
-const fs = require("fs");
 const { ClaudeTermClient } = require("./claude-term-client");
 
 let _client = null;
@@ -40,7 +39,7 @@ function getClient() {
 
 function isDaemonRunning() {
   if (!_client) return false;
-  return fs.existsSync(_client._socketPath);
+  return _client.isConnected();
 }
 
 async function ensureDaemon() {
@@ -163,21 +162,10 @@ async function _handleKill(msg) {
 }
 
 async function _handleList(_msg) {
-  // List all terminals (not filtered by owner) for OC compatibility
+  // List all terminals (not filtered by owner) for OC compatibility.
+  // ClaudeTermClient.list() already normalizes field names.
   const terminals = await _client.list(null);
-  return {
-    type: "list-result",
-    ptys: terminals.map((t) => ({
-      termId: t.termId,
-      pid: t.pid,
-      cmd: t.cmd,
-      cwd: t.cwd,
-      cols: t.cols,
-      rows: t.rows,
-      owner: t.owner,
-      alive: t.alive,
-    })),
-  };
+  return { type: "list-result", ptys: terminals };
 }
 
 async function _handleReadBuffer(msg) {

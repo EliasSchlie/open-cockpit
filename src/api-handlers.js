@@ -48,13 +48,15 @@ const {
 } = require("./pool-manager");
 
 let _getMainWindow = () => null;
+let _onSessionArchived = null;
 
 /** @type {import('./claude-pool-client').ClaudePoolClient | null} */
 let _poolClient = null;
 
-function init({ getMainWindow, claudePoolClient }) {
+function init({ getMainWindow, claudePoolClient, onSessionArchived }) {
   _getMainWindow = getMainWindow;
   if (claudePoolClient) _poolClient = claudePoolClient;
+  if (onSessionArchived) _onSessionArchived = onSessionArchived;
 }
 
 /** Get main window or throw if unavailable. */
@@ -179,11 +181,12 @@ const sharedHandlers = {
       // Add placeholders for fresh slots (not yet sessions)
       const freshCount = health.slots?.fresh || 0;
       const totalSlots = health.size || 0;
-      for (let i = slots.length; i < totalSlots; i++) {
+      const sessionCount = slots.length;
+      for (let i = sessionCount; i < totalSlots; i++) {
         slots.push({
           index: i,
           sessionId: null,
-          status: i < slots.length + freshCount ? "fresh" : "starting",
+          status: i - sessionCount < freshCount ? "fresh" : "starting",
           pid: null,
           termId: null,
         });
@@ -207,7 +210,10 @@ const sharedHandlers = {
     return minFreshSlots;
   },
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
-  "archive-session": async ({ sessionId }) => archiveSession(sessionId),
+  "archive-session": async ({ sessionId }) => {
+    await archiveSession(sessionId);
+    if (_onSessionArchived) _onSessionArchived(sessionId);
+  },
   "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
   "list-agents": async ({ cwd }) => {
     const agents = new Map(); // name -> { name, path, description, scope, args }
@@ -429,7 +435,7 @@ function buildApiHandlers() {
       type: "read-buffer",
       term_id: msg.termId,
     });
-    return { type: "buffer", buffer: resp.data || "" };
+    return { type: "buffer", buffer: resp.buffer || "" };
   };
 
   // --- Pool interaction (via claude-pool) ---
@@ -538,7 +544,7 @@ function buildApiHandlers() {
       type: "read-buffer",
       term_id: tab.termId,
     });
-    return { type: "buffer", termId: tab.termId, buffer: resp.data || "" };
+    return { type: "buffer", termId: tab.termId, buffer: resp.buffer || "" };
   };
 
   handlers["session-term-write"] = async (msg) => {
