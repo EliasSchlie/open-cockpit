@@ -19,8 +19,6 @@
 const OPEN_COCKPIT_DIR = process.env.OPEN_COCKPIT_TEST_DIR || path.join(os.homedir(), ".open-cockpit");
 ```
 
-**Same for `pty-daemon.js`** (it has its own hardcoded path).
-
 Each test file:
 1. Creates a temp dir (`/tmp/open-cockpit-test-XXXX/`)
 2. Sets `OPEN_COCKPIT_TEST_DIR` before importing modules (vitest `beforeAll`)
@@ -119,30 +117,25 @@ Set up real files in the test dir, run `getSessions()`.
 Implementation: Create real PID files pointing to `$$` (test process PID) for "alive" sessions, and a known-dead PID for dead ones. Write real idle signal JSON files. Create real offload dirs with meta.json.
 
 ### 2.2 `daemon-client.test.js` — NEW
-Start a real PTY daemon in the test dir, communicate over its socket.
+Test the claude-term adapter (daemon-client.js wraps claude-term-client.js).
 
 | Test | What it verifies |
 |------|-----------------|
-| `startDaemon` + `connectToDaemon` → connected | Daemon lifecycle |
-| `daemonRequest` spawn + list → terminal created | PTY creation |
+| `daemonRequest` spawn + list → terminal created | PTY creation via claude-term |
 | `daemonRequest` write → data in buffer | Terminal I/O |
 | `daemonRequest` resize → acknowledged | Terminal resize |
 | `daemonRequest` kill → terminal removed | Terminal cleanup |
-| Daemon auto-starts on first request | Lazy startup |
 | Timeout on unresponsive request | Error handling |
 | Socket reconnect after daemon restart | Recovery |
 
-⚠️ Requires `node-pty` compiled for Node (not Electron). May need `ELECTRON_RUN_AS_NODE=1` or a vitest-compatible daemon startup.
-
 ### 2.3 `pool-lifecycle.test.js` — NEW
-Test pool read/write/sync in the isolated dir.
+Test pool-manager delegation to claude-pool in the isolated dir.
 
 | Test | What it verifies |
 |------|-----------------|
-| `writePool` + `readPool` roundtrip | Atomic write/read |
-| `syncStatuses` marks dead slots | Status sync with real PIDs |
 | `computePoolHealth` with mixed slot states | Health calculation |
-| Pool lock serializes concurrent writes | No data races |
+| Pool init delegates to claude-pool API | Socket call made |
+| Pool destroy delegates to claude-pool API | Socket call made |
 
 ---
 

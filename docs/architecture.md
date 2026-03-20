@@ -53,10 +53,8 @@ All paths derive from `OPEN_COCKPIT_DIR` (defaults to `~/.open-cockpit/`). See [
 
 | Path | Purpose |
 |------|---------|
-| `pool.json` | Pool state |
 | `pool-settings.json` | Pool settings (session flags) |
 | `session-pids/<PID>` | Session ID mapping (written by hooks) |
-| `pool-spawned-pids/<PID>` | PIDs spawned by pool manager (for orphan cleanup) |
 | `intentions/<session_id>.md` | Intention files |
 | `idle-signals/<PID>` | Idle signal files |
 | `session-graph.json` | Parent-child relationships |

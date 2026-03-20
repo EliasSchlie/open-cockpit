@@ -35,11 +35,9 @@ fresh → typing → processing → idle → offloaded (graceful /clear, snapsho
 - **Sidebar**: Archive section appears below Processing. Archived sessions are dimmed.
 - **Resume**: Click an archived session → "Restart" button or right-click → "Restart". Acquires a fresh pool slot, runs `/resume <claudeSessionId>`, creates a new session with a new ID.
 - **Resume flow** (spans pool-manager.js → renderer.js):
-  1. `poolResume(oldId)`: claims fresh slot inside `withPoolLock`, sends `/resume`, clears `slot.sessionId`, writes pool
-  2. After lock releases: removes offload data immediately (prevents stale "offloaded" entry in sidebar)
-  3. `trackNewSlot` polls in background until Claude's `SessionStart` hook writes the new session ID
-  4. Renderer's `pollForResumedSession` polls pool.json for the slot's new session ID
-  5. Once resolved: renderer updates `state.currentSessionId`, re-tags terminals, reloads intention file + watcher
+  1. `poolResume(oldId)`: requests a fresh slot from claude-pool, sends `/resume`, removes offload data immediately (prevents stale "offloaded" entry in sidebar)
+  2. Polls claude-pool API in background until the slot's new session ID is resolved
+  3. Once resolved: renderer updates `state.currentSessionId`, re-tags terminals, reloads intention file + watcher
 - **Unarchive**: Right-click archived session → "Move to Recent" moves it back to offloaded (no restart).
 - **Data**: `archived: true` flag in `~/.open-cockpit/offloaded/<id>/meta.json`.
 
@@ -59,7 +57,7 @@ Sessions track who started them and parent-child relationships in `~/.open-cockp
 Pool slots can be pinned to prevent LRU offloading:
 - `pool-pin { sessionId, duration }` — pin for N seconds (default 120)
 - `pool-unpin { sessionId }` — release pin
-- `pinnedUntil` field in pool.json slots; expired pins auto-cleared on eviction check
+- `pinnedUntil` tracked by claude-pool; expired pins auto-cleared on eviction check
 - CLI: `cockpit-cli pin <target> [seconds]` / `cockpit-cli unpin <target>`
 
 ## Origin tags
