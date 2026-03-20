@@ -489,11 +489,14 @@ app.whenReady().then(async () => {
   startPluginVersionWatch();
 
   // First-run checks: claude binary, plugin, ~/.open-cockpit/ directory
+  debugLog("main", "running first-run checks...");
   await checkFirstRun();
+  debugLog("main", "first-run checks complete");
 
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
   // Initialize claude-pool client
+  debugLog("main", "initializing claude-pool client...");
   poolClient = new ClaudePoolClient({
     debugLog,
     onEvent: (msg) => {
@@ -537,12 +540,26 @@ app.whenReady().then(async () => {
   });
 
   // Start claude-term connection (don't crash if it fails — it auto-starts)
+  debugLog("main", "connecting to claude-term...");
   try {
     await daemonClient.ensureDaemon();
+    debugLog("main", "claude-term connected");
   } catch (err) {
     debugLog(
       "main",
       `claude-term connection failed (non-fatal): ${err.message}`,
+    );
+  }
+
+  // Connect to claude-pool (non-fatal — pool may not be initialized yet)
+  debugLog("main", "connecting to claude-pool...");
+  try {
+    await poolClient.connect();
+    debugLog("main", "claude-pool connected");
+  } catch (err) {
+    debugLog(
+      "main",
+      `claude-pool not running (expected if pool not initialized): ${err.message}`,
     );
   }
 
@@ -660,8 +677,11 @@ app.whenReady().then(async () => {
   });
 
   // --- Register shared IPC handlers ---
+  // Skip handlers that main.js overrides with pool-routing logic
+  const overriddenHandlers = new Set(["pty-write", "pty-resize"]);
   const { sharedHandlers, ipcArgMap } = apiHandlersModule;
   for (const [name, argMapper] of Object.entries(ipcArgMap)) {
+    if (overriddenHandlers.has(name)) continue;
     ipcMain.handle(name, (_e, ...args) =>
       sharedHandlers[name](argMapper(...args)),
     );
@@ -683,7 +703,7 @@ app.whenReady().then(async () => {
     if (poolAttachSockets.has(termId)) {
       // Pool session — resize via claude-pool API
       try {
-        await poolClient.resizeSession(termId, cols, rows);
+        await poolClient.ptyResize(termId, cols, rows);
       } catch (err) {
         debugLog("main", `pool resize failed for ${termId}: ${err.message}`);
       }

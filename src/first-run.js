@@ -103,6 +103,8 @@ function isPluginVersionMismatch(pluginVersion, appVersion) {
 async function checkFirstRun() {
   secureMkdirSync(OPEN_COCKPIT_DIR, { recursive: true });
 
+  const isHidden = process.env.OPEN_COCKPIT_HIDDEN === "1";
+
   let claudePath;
   try {
     claudePath = resolveClaudePath();
@@ -111,6 +113,12 @@ async function checkFirstRun() {
   }
 
   if (!claudePath) {
+    if (isHidden) {
+      console.error(
+        "[first-run] Claude Code CLI not found — skipping dialog in hidden mode",
+      );
+      return;
+    }
     const { response } = await dialog.showMessageBox({
       type: "error",
       title: "Claude Code Not Found",
@@ -131,6 +139,12 @@ async function checkFirstRun() {
   }
 
   if (!isPluginInstalled()) {
+    if (isHidden) {
+      console.error(
+        "[first-run] Plugin not installed — skipping dialog in hidden mode",
+      );
+      return;
+    }
     const { response } = await dialog.showMessageBox({
       type: "question",
       title: "Plugin Not Installed",
