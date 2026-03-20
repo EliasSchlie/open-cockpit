@@ -80,7 +80,7 @@ async function getSessionTerminals(sessionId) {
   validateSessionId(sessionId);
   const resp = await daemonRequest({ type: "list" });
   const terms = resp.ptys
-    .filter((p) => p.owner === sessionId && !p.exited)
+    .filter((p) => p.owner === sessionId && p.alive !== false)
     .sort((a, b) => (a.term_id || a.termId) - (b.term_id || b.termId));
 
   let shellCount = 0;

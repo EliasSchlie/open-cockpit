@@ -105,10 +105,9 @@ const staleLoggedSessions = new Set();
 // Track last-seen JSONL file sizes and when they last changed (sessionId -> { size, changedAt })
 const jsonlSizeTracker = new Map();
 
-// Terminal input detection via buffer parsing (true ground truth).
-// Cached results refreshed by pollTerminalInput() every TERMINAL_POLL_MS.
-const terminalHasInputCache = new Map(); // termId -> input text string
-const TERMINAL_POLL_MS = 10_000;
+// Terminal input detection via claude-pool's pendingInput field.
+// Cached results refreshed by pollTerminalInput() (keyed by sessionId).
+const terminalHasInputCache = new Map(); // sessionId -> input text string
 const TERMINAL_WRITE_DEBOUNCE_MS = 500;
 
 // Track consecutive empty-parse results per termId. A cached "has input" entry
@@ -183,11 +182,6 @@ async function jitterTerminal(termId, cols, rows) {
   await new Promise((r) => setTimeout(r, JITTER_SETTLE_MS));
 }
 
-// Track terminals that have received user keystrokes (via write API).
-// When a write-triggered poll detects text, we trust it without jitter.
-// Cleared when the terminal transitions out of fresh/typing.
-const recentWriteTermIds = new Set();
-
 async function pollTerminalInput() {
   if (pollInFlight) return;
   pollInFlight = true;
@@ -226,8 +220,7 @@ async function pollTerminalInput() {
 
 // Trigger a poll shortly after a keystroke is written to a fresh pool terminal.
 // Debounced so rapid typing doesn't flood — only the trailing edge fires.
-function triggerPollOnWrite(termId) {
-  recentWriteTermIds.add(termId);
+function triggerPollOnWrite(_termId) {
   clearTimeout(writeDebounceTimer);
   writeDebounceTimer = setTimeout(() => {
     pollTerminalInput().catch((err) =>
