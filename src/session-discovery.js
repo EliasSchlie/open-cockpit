@@ -538,15 +538,25 @@ async function batchGetCwds(pids) {
 async function getSessionsUncached() {
   const sessions = [];
   // Get pool sessions from claude-pool (single call, reused for both
-  // origin tagging and pool session injection later in this function)
-  let poolSessionIds = new Set();
+  // origin tagging and pool session injection later in this function).
+  //
+  // Pool internal IDs differ from Claude session UUIDs. We track both
+  // pool IDs and pool PIDs so PID-discovered sessions can be correctly
+  // tagged as pool origin.
+  let poolSessionIds = new Set(); // pool internal IDs
+  let poolPids = new Set(); // PIDs of pool session processes
   let poolSessionsFull = [];
   if (_claudePoolClient && _claudePoolClient.isConnected()) {
     try {
-      const resp = await _claudePoolClient.ls({ verbosity: "full" });
+      const resp = await _claudePoolClient.ls({
+        verbosity: "full",
+        archived: true,
+        parent: "none",
+      });
       poolSessionsFull = resp.sessions || [];
       for (const s of poolSessionsFull) {
         poolSessionIds.add(s.sessionId);
+        if (s.pid) poolPids.add(String(s.pid));
       }
     } catch {
       /* pool not running */
@@ -603,7 +613,8 @@ async function getSessionsUncached() {
     let status;
     let idleTs = 0;
     let staleIdle = false;
-    const isPoolSession = poolSessionIds.has(sessionId);
+    const isPoolSession =
+      poolSessionIds.has(sessionId) || poolPids.has(String(pid));
     // Only check intention content for pool sessions (avoids unnecessary file reads for external/idle)
     const intentionContent = isPoolSession
       ? readIntention(sessionId).trim()
@@ -837,9 +848,11 @@ async function getSessionsUncached() {
       // Recover cwd from JSONL since lsof doesn't work on dead processes
       let cwd = s.cwd || (await getCwdFromJsonl(s.sessionId));
       let gitRoot = s.gitRoot || (await findGitRoot(cwd));
-      const origin = poolSessionIds.has(s.sessionId)
-        ? "pool"
-        : originCache.get(String(s.pid)) || "ext";
+      const origin =
+        poolSessionIds.has(s.sessionId) ||
+        (s.pid && poolPids.has(String(s.pid)))
+          ? "pool"
+          : originCache.get(String(s.pid)) || "ext";
 
       secureMkdirSync(offloadDir, { recursive: true });
       const meta = {
@@ -884,11 +897,19 @@ async function getSessionsUncached() {
   // Add pool sessions from claude-pool that aren't already discovered via PID files.
   // This ensures pool sessions are visible even when hooks write to a different dir
   // (e.g., dev instances) or when PID files are missing.
-  // Use poolSessionsFull from the single ls() call at the top of this function
+  //
+  // IMPORTANT: Pool internal IDs (e.g. "d1b65c90c75b") differ from Claude session
+  // UUIDs (e.g. "8af44336-091f-...") written to PID files. Dedup by BOTH sessionId
+  // AND PID to prevent the same session appearing twice.
   const discoveredIds = new Set(sessions.map((s) => s.sessionId));
+  const discoveredPids = new Set(
+    sessions.filter((s) => s.pid).map((s) => String(s.pid)),
+  );
   {
     for (const ps of poolSessionsFull) {
       if (discoveredIds.has(ps.sessionId)) continue;
+      // Skip if a PID-discovered session already covers this pool slot's process
+      if (ps.pid && discoveredPids.has(String(ps.pid))) continue;
       // Map claude-pool status to OC status
       let status;
       switch (ps.status) {
@@ -933,14 +954,16 @@ async function getSessionsUncached() {
   }
 
   // Tag sessions with origin: pool, sub-claude, or ext
-  // (poolSessionIds already populated at the top of this function)
-  // Batch detect origins for all alive non-pool sessions in one ps call
+  // Check both pool internal IDs and pool PIDs (since PID-discovered
+  // sessions have Claude UUIDs, not pool IDs)
+  const isPoolSession = (s) =>
+    poolSessionIds.has(s.sessionId) || (s.pid && poolPids.has(String(s.pid)));
   const needOriginPids = sessions
-    .filter((s) => s.alive && !poolSessionIds.has(s.sessionId))
+    .filter((s) => s.alive && !isPoolSession(s))
     .map((s) => s.pid);
   const originMap = await batchDetectOrigins(needOriginPids);
   for (const s of sessions) {
-    if (poolSessionIds.has(s.sessionId)) {
+    if (isPoolSession(s)) {
       s.origin = "pool";
     } else if (s.alive) {
       s.origin = originMap.get(String(s.pid)) || "ext";

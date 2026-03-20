@@ -501,8 +501,9 @@ app.whenReady().then(async () => {
     debugLog,
     onEvent: (msg) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      // Forward pool events to renderer as needed
-      if (msg.type === "session-state-changed") {
+      // Any pool event (session created, status change, etc.) → refresh sidebar
+      if (msg.event) {
+        sessionDiscovery.invalidateSessionsCache();
         send("sessions-changed");
       }
     },
@@ -564,6 +565,11 @@ app.whenReady().then(async () => {
   try {
     await poolClient.connect();
     debugLog("main", "claude-pool connected");
+    // Subscribe to session events so sidebar refreshes on pool changes
+    poolClient.subscribe({
+      events: ["created", "status", "updated"],
+    });
+    debugLog("main", "subscribed to claude-pool events");
   } catch (err) {
     debugLog(
       "main",

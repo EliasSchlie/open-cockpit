@@ -477,9 +477,12 @@ class ClaudePoolClient {
 
   // --- Event subscription ---
 
-  async subscribe(filters = {}) {
+  /** Subscribe to events. Fire-and-forget — events arrive via onEvent callback.
+   *  The subscribe command is a streaming response (no single completion line),
+   *  so we use sendSafe instead of request. */
+  subscribe(filters = {}) {
     const msg = { type: "subscribe", ...filters };
-    return this.request(msg);
+    this.sendSafe(msg);
   }
 }
 
