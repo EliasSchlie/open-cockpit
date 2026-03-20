@@ -877,6 +877,59 @@ async function getSessionsUncached() {
     sessions.splice(i, 1);
   }
 
+  // Add pool sessions from claude-pool that aren't already discovered via PID files.
+  // This ensures pool sessions are visible even when hooks write to a different dir
+  // (e.g., dev instances) or when PID files are missing.
+  const discoveredIds = new Set(sessions.map((s) => s.sessionId));
+  if (_claudePoolClient && _claudePoolClient.isConnected()) {
+    try {
+      const resp = await _claudePoolClient.ls({ verbosity: "full" });
+      for (const ps of resp.sessions || []) {
+        if (discoveredIds.has(ps.sessionId)) continue;
+        // Map claude-pool status to OC status
+        let status;
+        switch (ps.status) {
+          case "idle":
+            status = STATUS.IDLE;
+            break;
+          case "processing":
+            status = STATUS.PROCESSING;
+            break;
+          case "offloaded":
+            status = STATUS.OFFLOADED;
+            break;
+          case "archived":
+            status = STATUS.ARCHIVED;
+            break;
+          case "queued":
+            status = STATUS.PROCESSING;
+            break;
+          case "error":
+            status = STATUS.DEAD;
+            break;
+          default:
+            status = STATUS.FRESH;
+        }
+        sessions.push({
+          pid: ps.pid || null,
+          sessionId: ps.sessionId,
+          alive: !!ps.pid,
+          cwd: ps.cwd || ps.spawnCwd || null,
+          home: os.homedir(),
+          gitRoot: null,
+          project: ps.cwd ? path.basename(ps.cwd) : null,
+          hasIntention: false,
+          intentionHeading: null,
+          status,
+          idleTs: 0,
+          origin: "pool",
+        });
+      }
+    } catch {
+      /* pool query failed — proceed with PID-discovered sessions only */
+    }
+  }
+
   // Tag sessions with origin: pool, sub-claude, or ext
   // (poolSessionIds already populated at the top of this function)
   // Batch detect origins for all alive non-pool sessions in one ps call

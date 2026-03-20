@@ -159,22 +159,36 @@ const sharedHandlers = {
   "pool-init": async ({ size }) => poolInit(size),
   "pool-resize": async ({ size }) => poolResize(size),
   "pool-read": async () => {
-    // Return pool data in a format compatible with the old pool.json structure.
-    // The renderer uses this to find slot→sessionId→termId mappings.
+    // Return pool data compatible with the old pool.json structure.
+    // The renderer uses this to find sessionId→termId mappings.
     if (!_poolClient || !_poolClient.isConnected()) return null;
     try {
       const health = await _poolClient.health();
-      // Map claude-pool health to old pool.json format
-      return {
-        poolSize: health.size || 0,
-        slots: (health.slots || []).map((s, i) => ({
+      // health.slots is a summary object {fresh:N, idle:N,...}, not an array.
+      // Get actual session data from ls for the slot array.
+      const lsResp = await _poolClient.ls({ verbosity: "full" });
+      const sessions = lsResp.sessions || [];
+      const slots = sessions.map((s, i) => ({
+        index: i,
+        sessionId: s.sessionId || null,
+        status: s.status || "unknown",
+        pid: s.pid || null,
+        // In the new model, termId = sessionId for pool sessions
+        termId: s.sessionId,
+      }));
+      // Add placeholders for fresh slots (not yet sessions)
+      const freshCount = health.slots?.fresh || 0;
+      const totalSlots = health.size || 0;
+      for (let i = slots.length; i < totalSlots; i++) {
+        slots.push({
           index: i,
-          sessionId: s.sessionId || null,
-          status: s.status || "unknown",
-          pid: s.pid || null,
-          termId: s.sessionId, // In the new model, termId = sessionId for pool sessions
-        })),
-      };
+          sessionId: null,
+          status: i < slots.length + freshCount ? "fresh" : "starting",
+          pid: null,
+          termId: null,
+        });
+      }
+      return { poolSize: totalSlots, slots };
     } catch {
       return null;
     }
