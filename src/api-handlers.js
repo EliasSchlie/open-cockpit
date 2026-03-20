@@ -145,7 +145,7 @@ const sharedHandlers = {
   "pty-write": async ({ termId, data }) => {
     validateTermId(termId);
     await ensureDaemon();
-    daemonSendSafe({ type: "write", term_id: termId, data });
+    daemonSendSafe({ type: "write", termId, data });
     triggerPollOnWrite(termId);
   },
   "pty-list": async () => {
@@ -154,7 +154,7 @@ const sharedHandlers = {
   },
   "pty-kill": async ({ termId }) => {
     validateTermId(termId);
-    await daemonRequest({ type: "kill", term_id: termId });
+    await daemonRequest({ type: "kill", termId });
   },
   "pool-init": async ({ size }) => poolInit(size),
   "pool-resize": async ({ size }) => poolResize(size),

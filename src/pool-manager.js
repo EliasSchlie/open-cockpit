@@ -758,10 +758,10 @@ function getCachedClaudePath() {
   return _cachedClaudePath;
 }
 
-// Validate termId — still used by api-handlers
+// Validate termId — accepts both string (claude-term) and number (legacy)
 function validateTermId(termId) {
-  if (typeof termId !== "number" || !Number.isFinite(termId)) {
-    throw new Error("Invalid termId: must be a number");
+  if (!termId) {
+    throw new Error("termId is required");
   }
 }
 

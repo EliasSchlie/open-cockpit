@@ -166,7 +166,8 @@ async function _handleKill(msg) {
 }
 
 async function _handleList(_msg) {
-  const terminals = await _client.list(_msg.owner);
+  // List all terminals (not filtered by owner) for OC compatibility
+  const terminals = await _client.list(null);
   return {
     type: "list-result",
     ptys: terminals.map((t) => ({

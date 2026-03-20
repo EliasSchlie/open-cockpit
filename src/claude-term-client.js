@@ -289,10 +289,12 @@ class ClaudeTermClient {
     return this.request({ type: "kill", term_id: termId });
   }
 
-  /** List terminals. Returns array of terminal info objects. */
+  /** List terminals. Returns array of terminal info objects.
+   *  Pass null/undefined for all terminals, or a specific owner string. */
   async list(owner) {
     const msg = { type: "list" };
-    if (owner) msg.owner = owner;
+    // Pass empty string to get all terminals, specific owner to filter
+    msg.owner = owner || "";
     const resp = await this.request(msg);
     // Normalize field names for OC compatibility
     return (resp.terminals || []).map((t) => ({
