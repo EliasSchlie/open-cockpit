@@ -143,11 +143,8 @@ async function selectSession(session) {
     dom.sessionView.classList.remove("colored");
   }
 
-  // Offloaded/archived: show snapshot inline instead of a terminal
-  if (
-    session.status === STATUS.OFFLOADED ||
-    session.status === STATUS.ARCHIVED
-  ) {
+  // Archived: show transcript inline instead of a terminal
+  if (session.status === STATUS.ARCHIVED) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals

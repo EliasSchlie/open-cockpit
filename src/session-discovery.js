@@ -378,25 +378,17 @@ async function getOffloadedSessions() {
     try {
       const meta = readOffloadMeta(dir);
       if (!meta) continue;
-      const snapshotFile = path.join(OFFLOADED_DIR, dir, "snapshot.log");
-      const hasSnapshot = fs.existsSync(snapshotFile);
-      // Preserve child sessions whose parent still exists (even without
-      // snapshot/intention) so they stay grouped under their parent.
+
+      // Preserve child sessions whose parent still exists so they stay grouped.
       const parentId = graph[dir]?.parentSessionId;
       const isChildWithParent =
         parentId && fs.existsSync(path.join(OFFLOADED_DIR, parentId));
 
-      // Delete empty sessions (no snapshot + no intention) — they were never used.
+      // Delete empty sessions (no intention) — they were never used.
       // But keep parent sessions that have children in the graph.
-      if (
-        !hasSnapshot &&
-        !meta.intentionHeading &&
-        !isChildWithParent &&
-        !parentIds.has(dir)
-      ) {
+      if (!meta.intentionHeading && !isChildWithParent && !parentIds.has(dir)) {
         try {
           fs.rmSync(path.join(OFFLOADED_DIR, dir), { recursive: true });
-          // Clean up empty intention file if it exists
           const intentionPath = path.join(INTENTIONS_DIR, `${dir}.md`);
           try {
             const stat = fs.statSync(intentionPath);
@@ -415,25 +407,6 @@ async function getOffloadedSessions() {
         continue;
       }
 
-      // Sessions without a snapshot can't be meaningfully resumed — treat as archived
-      const isArchived = meta.archived || !hasSnapshot;
-      if (!meta.archived && !hasSnapshot) {
-        // Persist the archived flag so this doesn't recompute every time
-        meta.archived = true;
-        meta.archivedAt = meta.archivedAt || new Date().toISOString();
-        try {
-          secureWriteFileSync(
-            path.join(OFFLOADED_DIR, dir, "meta.json"),
-            JSON.stringify(meta, null, 2),
-          );
-        } catch (err) {
-          console.error(
-            "[main] Failed to auto-archive stale session",
-            dir,
-            err.message,
-          );
-        }
-      }
       sessions.push({
         pid: null,
         sessionId: meta.sessionId || dir,
@@ -444,10 +417,9 @@ async function getOffloadedSessions() {
         project: meta.cwd ? path.basename(meta.cwd) : null,
         hasIntention: meta.intentionHeading != null,
         intentionHeading: meta.intentionHeading || null,
-        status: isArchived ? STATUS.ARCHIVED : STATUS.OFFLOADED,
+        status: STATUS.ARCHIVED,
         idleTs: meta.lastInteractionTs || 0,
         claudeSessionId: meta.claudeSessionId || null,
-        hasSnapshot,
         origin: meta.origin || null,
       });
     } catch (err) {
@@ -753,7 +725,7 @@ async function getSessionsUncached() {
   sessions.length = 0;
   sessions.push(...dedupedSessions);
 
-  // Archive dead sessions (save as archived without snapshot).
+  // Archive dead sessions (write local metadata for sidebar display).
   // Child sessions are never independently auto-archived — archiveSession()
   // cascade-archives all descendants when the parent is archived.
   const sessionGraph = readJsonSync(SESSION_GRAPH_FILE, {});

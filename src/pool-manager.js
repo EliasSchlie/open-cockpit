@@ -246,36 +246,26 @@ function readOffloadMeta(sessionId) {
 }
 
 /**
- * Read session output from claude-pool (JSONL transcript).
- * Falls back to local snapshot.log for legacy offloaded sessions.
+ * Read session transcript from claude-pool (JSONL source).
  */
 async function readSessionSnapshot(sessionId) {
   validateSessionId(sessionId);
+  if (!_poolRegistry) return null;
 
-  // Try claude-pool first (works for archived/offloaded sessions)
-  if (_poolRegistry) {
-    try {
-      const result = await _poolRegistry.findPoolForSession(sessionId);
-      if (result) {
-        const resp = await result.client.capture(sessionId, {
-          source: "jsonl",
-          turns: 0,
-          detail: "last",
-        });
-        return resp.content || null;
-      }
-    } catch {
-      // Session not in any pool — fall through to local
-    }
-  }
-
-  // Legacy fallback: local snapshot file
-  const snapshotFile = path.join(OFFLOADED_DIR, sessionId, "snapshot.log");
   try {
-    return fs.readFileSync(snapshotFile, "utf-8");
+    const result = await _poolRegistry.findPoolForSession(sessionId);
+    if (result) {
+      const resp = await result.client.capture(sessionId, {
+        source: "jsonl",
+        turns: 0,
+        detail: "last",
+      });
+      return resp.content || null;
+    }
   } catch {
-    return null;
+    // Session not in any pool or capture failed
   }
+  return null;
 }
 
 function removeOffloadData(sessionId) {
