@@ -181,7 +181,7 @@ async function selectSession(session) {
         return;
       }
       const pty = allPtys.find(
-        (p) => p.sessionId === session.sessionId && !p.exited,
+        (p) => p.owner === session.sessionId && p.alive !== false,
       );
       daemonTermId = pty?.termId || null;
       debugLog(
@@ -423,8 +423,8 @@ async function resumeOffloadedSession(session) {
       const allPtys = await window.api.ptyList();
       const extraPtys = allPtys.filter(
         (p) =>
-          p.sessionId === newSession.sessionId &&
-          !p.exited &&
+          p.owner === newSession.sessionId &&
+          p.alive !== false &&
           p.termId !== result.termId,
       );
       for (const p of extraPtys) {
@@ -724,7 +724,7 @@ async function archiveCurrentSession() {
     // Custom session: kill the daemon PTY (fully kill, not offload)
     const allPtys = await window.api.ptyList();
     const pty = allPtys.find(
-      (p) => p.sessionId === session.sessionId && !p.exited,
+      (p) => p.owner === session.sessionId && p.alive !== false,
     );
     if (pty) window.api.ptyKill(pty.termId).catch(() => {});
     destroySessionTerminals(session.sessionId);

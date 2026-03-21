@@ -474,7 +474,13 @@ function stripAnsi(str) {
  * Initialize pool: start claude-pool daemon and create sessions.
  */
 async function poolInit(size, poolName) {
-  const client = _requireRegistry().requireConnectedClient(poolName);
+  const reg = _requireRegistry();
+  // Get or create client — pool may not be running yet (init starts it)
+  let client = reg.getClient(poolName);
+  if (!client) {
+    // Not in registry — connect (creates client even if daemon is down)
+    client = await reg.connectPool(poolName || reg.DEFAULT_POOL_NAME);
+  }
   size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
   const flags = await getPoolFlags(poolName);
   const result = await client.init(size, flags);
@@ -522,20 +528,10 @@ async function poolResume(sessionId) {
   const client = await _requireRegistry().clientForSessionOrDefault(sessionId);
   validateSessionId(sessionId);
 
-  // Unarchive local offload meta if present
-  const meta = readOffloadMeta(sessionId);
-  if (meta?.archived) {
-    delete meta.archived;
-    delete meta.archivedAt;
-    secureWriteFileSync(
-      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
-      JSON.stringify(meta, null, 2),
-    );
-  }
-
+  // Unarchive on pool side first — if this fails, local state is preserved
   const result = await client.unarchive(sessionId);
 
-  // Remove local offload data after successful resume
+  // Only update local state after successful pool-side unarchive
   removeOffloadData(sessionId);
 
   const { invalidateSessionsCache } = getSessionDiscovery();
@@ -581,16 +577,6 @@ async function offloadSession(
     snapshot,
     origin: "pool",
   });
-
-  // 3. Tell claude-pool to archive the session
-  try {
-    await client.archive(sessionId);
-  } catch (err) {
-    _debugLog(
-      "main",
-      `claude-pool archive failed for ${sessionId}: ${err.message}`,
-    );
-  }
 
   return meta;
 }
