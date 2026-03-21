@@ -73,19 +73,11 @@ contextBridge.exposeInMainWorld("api", {
   closeExternalTerminal: (pid) =>
     ipcRenderer.invoke("close-external-terminal", pid),
 
-  // Pool / offload
-  offloadSession: (sessionId, termId, claudeSessionId, sessionInfo) =>
-    ipcRenderer.invoke(
-      "offload-session",
-      sessionId,
-      termId,
-      claudeSessionId,
-      sessionInfo,
-    ),
+  // Session data
   removeOffloadData: (sessionId) =>
     ipcRenderer.invoke("remove-offload-data", sessionId),
-  readOffloadSnapshot: (sessionId) =>
-    ipcRenderer.invoke("read-offload-snapshot", sessionId),
+  readSessionSnapshot: (sessionId) =>
+    ipcRenderer.invoke("read-session-snapshot", sessionId),
   readOffloadMeta: (sessionId) =>
     ipcRenderer.invoke("read-offload-meta", sessionId),
   archiveSession: (sessionId) =>

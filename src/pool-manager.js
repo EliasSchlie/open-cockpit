@@ -2,7 +2,6 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const platform = require("./platform");
-const { Terminal: HeadlessTerminal } = require("@xterm/headless");
 const {
   secureMkdirSync,
   secureWriteFileSync,
@@ -203,52 +202,18 @@ function validateSessionId(sessionId) {
   }
 }
 
-async function renderBufferToText(buffer, cols = 200) {
-  if (!buffer) return null;
-  const term = new HeadlessTerminal({
-    cols,
-    rows: 500,
-    scrollback: 5000,
-    allowProposedApi: true,
-  });
-  await new Promise((resolve) => term.write(buffer, resolve));
-  const lines = [];
-  const buf = term.buffer.active;
-  let lastNonEmpty = -1;
-  for (let i = buf.length - 1; i >= 0; i--) {
-    const line = buf.getLine(i);
-    if (line && line.translateToString(true).trim()) {
-      lastNonEmpty = i;
-      break;
-    }
-  }
-  for (let i = 0; i <= lastNonEmpty; i++) {
-    const line = buf.getLine(i);
-    lines.push(line ? line.translateToString(true) : "");
-  }
-  term.dispose();
-  return lines.join("\n");
-}
-
-async function writeOffloadMeta(
+/**
+ * Write local archive metadata for a session.
+ * This stores sidebar display info (cwd, gitRoot, intention) — NOT snapshots.
+ * claude-pool owns session data; this is only for displaying archived sessions.
+ */
+async function writeArchiveMeta(
   sessionId,
-  {
-    cwd,
-    gitRoot,
-    claudeSessionId,
-    snapshot,
-    externalClear,
-    origin,
-    archived,
-  } = {},
+  { cwd, gitRoot, claudeSessionId, origin } = {},
 ) {
   validateSessionId(sessionId);
   const offloadDir = path.join(OFFLOADED_DIR, sessionId);
   secureMkdirSync(offloadDir, { recursive: true });
-
-  if (snapshot) {
-    secureWriteFileSync(path.join(offloadDir, "snapshot.log"), snapshot);
-  }
 
   const { getIntentionHeading } = getSessionDiscovery();
   const intentionFile = path.join(INTENTIONS_DIR, `${sessionId}.md`);
@@ -263,14 +228,10 @@ async function writeOffloadMeta(
     gitRoot: gitRoot || null,
     intentionHeading,
     lastInteractionTs: Math.floor(Date.now() / 1000),
-    offloadedAt: new Date().toISOString(),
+    archivedAt: new Date().toISOString(),
+    archived: true,
   };
-  if (externalClear) meta.externalClear = true;
   if (origin) meta.origin = origin;
-  if (archived) {
-    meta.archived = true;
-    meta.archivedAt = new Date().toISOString();
-  }
 
   secureWriteFileSync(
     path.join(offloadDir, "meta.json"),
@@ -284,25 +245,37 @@ function readOffloadMeta(sessionId) {
   return readJsonSync(path.join(OFFLOADED_DIR, sessionId, "meta.json"));
 }
 
-async function readOffloadSnapshot(sessionId) {
+/**
+ * Read session output from claude-pool (JSONL transcript).
+ * Falls back to local snapshot.log for legacy offloaded sessions.
+ */
+async function readSessionSnapshot(sessionId) {
   validateSessionId(sessionId);
+
+  // Try claude-pool first (works for archived/offloaded sessions)
+  if (_poolRegistry) {
+    try {
+      const result = await _poolRegistry.findPoolForSession(sessionId);
+      if (result) {
+        const resp = await result.client.capture(sessionId, {
+          source: "jsonl",
+          turns: 0,
+          detail: "last",
+        });
+        return resp.content || null;
+      }
+    } catch {
+      // Session not in any pool — fall through to local
+    }
+  }
+
+  // Legacy fallback: local snapshot file
   const snapshotFile = path.join(OFFLOADED_DIR, sessionId, "snapshot.log");
-  let text;
   try {
-    text = fs.readFileSync(snapshotFile, "utf-8");
+    return fs.readFileSync(snapshotFile, "utf-8");
   } catch {
     return null;
   }
-  if (text.includes("\x1b[")) {
-    const rendered = await renderBufferToText(text);
-    if (rendered != null) {
-      try {
-        secureWriteFileSync(snapshotFile, rendered);
-      } catch {}
-      return rendered;
-    }
-  }
-  return text;
 }
 
 function removeOffloadData(sessionId) {
@@ -545,73 +518,46 @@ async function poolResume(sessionId) {
 }
 
 /**
- * Offload a session: capture snapshot from claude-pool, save locally, then archive.
+ * Archive a session and all its descendants via claude-pool.
+ * claude-pool handles offloading (PTY teardown, state persistence) internally.
+ * OC only writes local metadata for sidebar display.
  */
-async function offloadSession(
-  sessionId,
-  _termId,
-  claudeSessionId,
-  { cwd, gitRoot, pid } = {},
-) {
-  const client = await _requireRegistry().clientForSessionOrDefault(sessionId);
-  validateSessionId(sessionId);
-
-  // 1. Capture terminal buffer from claude-pool
-  let snapshot = null;
-  try {
-    const resp = await client.capture(sessionId, { source: "buffer" });
-    if (resp.content) snapshot = await renderBufferToText(resp.content);
-  } catch (err) {
-    console.error(
-      "[main] Failed to get terminal snapshot for offload of session",
-      sessionId,
-      err.message,
-    );
-  }
-
-  // 2. Write local offload metadata + snapshot
-  const meta = await writeOffloadMeta(sessionId, {
-    cwd,
-    gitRoot,
-    claudeSessionId,
-    snapshot,
-    origin: "pool",
-  });
-
-  return meta;
-}
-
-/**
- * Archive a session and all its descendants (cascade via claude-pool recursive).
- */
-async function archiveSession(sessionId) {
+async function archiveSession(sessionId, { cwd, gitRoot, origin } = {}) {
   const client = await _requireRegistry().clientForSessionOrDefault(sessionId);
   validateSessionId(sessionId);
   const { invalidateSessionsCache } = getSessionDiscovery();
 
-  // Delegate cascade to claude-pool (recursive: true archives all descendants)
+  // Delegate to claude-pool (recursive: true archives all descendants)
   try {
     await client.archive(sessionId, true);
   } catch (err) {
     _debugLog(
       "main",
-      `claude-pool recursive archive failed for ${sessionId}: ${err.message}`,
+      `claude-pool archive failed for ${sessionId}: ${err.message}`,
     );
   }
 
-  // Ensure local offload metadata is marked archived
-  await archiveSingleSession(sessionId);
+  // Write local archive metadata for sidebar display
+  await writeArchiveMeta(sessionId, {
+    cwd,
+    gitRoot,
+    claudeSessionId: sessionId,
+    origin: origin || "pool",
+  });
 
-  // Also mark local metadata for descendants
+  // Also write local metadata for descendants
   const graph = readSessionGraph();
   const descendants = getDescendantsFromGraph(sessionId, graph);
   for (const childId of descendants) {
     try {
-      await archiveSingleSession(childId);
+      await writeArchiveMeta(childId, {
+        claudeSessionId: childId,
+        origin: origin || "pool",
+      });
     } catch (err) {
       _debugLog(
         "main",
-        `Failed to mark local archive for child ${childId}: ${err.message}`,
+        `Failed to write archive meta for child ${childId}: ${err.message}`,
       );
     }
   }
@@ -620,44 +566,13 @@ async function archiveSession(sessionId) {
 }
 
 /**
- * Archive a single session locally (mark metadata as archived).
- * Does NOT call claude-pool — caller is responsible for pool-side archive.
- */
-async function archiveSingleSession(sessionId) {
-  validateSessionId(sessionId);
-  const meta = readOffloadMeta(sessionId);
-
-  if (meta) {
-    meta.archived = true;
-    meta.archivedAt = meta.archivedAt || new Date().toISOString();
-    secureWriteFileSync(
-      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
-      JSON.stringify(meta, null, 2),
-    );
-  } else {
-    await writeOffloadMeta(sessionId, {
-      claudeSessionId: sessionId,
-      archived: true,
-    });
-  }
-}
-
-/**
- * Unarchive a session: update local meta + tell claude-pool.
+ * Unarchive a session: tell claude-pool + clean local metadata.
  */
 async function unarchiveSession(sessionId) {
   validateSessionId(sessionId);
   const { invalidateSessionsCache } = getSessionDiscovery();
-  const meta = readOffloadMeta(sessionId);
-  if (!meta) return;
-  delete meta.archived;
-  delete meta.archivedAt;
-  secureWriteFileSync(
-    path.join(OFFLOADED_DIR, sessionId, "meta.json"),
-    JSON.stringify(meta, null, 2),
-  );
 
-  // Tell claude-pool to unarchive (restores to offloaded state)
+  // Tell claude-pool to unarchive first
   if (_poolRegistry) {
     try {
       const result = await _poolRegistry.findPoolForSession(sessionId);
@@ -670,6 +585,8 @@ async function unarchiveSession(sessionId) {
     }
   }
 
+  // Clean local archive metadata
+  removeOffloadData(sessionId);
   invalidateSessionsCache();
 }
 
@@ -691,12 +608,10 @@ async function poolClean(poolName) {
 
       for (const session of resp.sessions) {
         try {
-          await offloadSession(session.sessionId, null, null, {
+          await archiveSession(session.sessionId, {
             cwd: session.cwd,
             gitRoot: session.gitRoot,
-            pid: session.pid,
           });
-          await archiveSession(session.sessionId);
           cleaned++;
         } catch (err) {
           _debugLog(
@@ -795,12 +710,11 @@ module.exports = {
   enrichSessionsWithGraphData,
   getDescendantsFromGraph,
 
-  // Offload metadata
-  writeOffloadMeta,
+  // Archive metadata
+  writeArchiveMeta,
   readOffloadMeta,
-  readOffloadSnapshot,
+  readSessionSnapshot,
   removeOffloadData,
-  renderBufferToText,
   validateSessionId,
 
   // Pool operations (delegated to claude-pool)
@@ -809,7 +723,6 @@ module.exports = {
   poolDestroy,
   getPoolHealth,
   poolResume,
-  offloadSession,
   archiveSession,
   unarchiveSession,
   poolClean,

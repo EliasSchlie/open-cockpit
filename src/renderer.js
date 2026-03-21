@@ -299,7 +299,7 @@ async function acquireFreshSlot() {
     return null;
   }
 
-  // 2. Offload the longest-unused idle session (LRU)
+  // 2. Archive the longest-unused idle session (LRU) to free a slot
   const idleSessions = sessions
     .filter(
       (s) =>
@@ -315,35 +315,19 @@ async function acquireFreshSlot() {
   }
 
   const victim = idleSessions[0];
-  debugLog("acquire", `offloading LRU idle session=${victim.sessionId}`);
-
-  // Find the victim's terminal from pool data (need termId for offload)
-  const pool = await window.api.poolRead();
-  const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
-  if (!victimSlot) {
-    debugLog(
-      "acquire",
-      `victim slot not found in pool for session=${victim.sessionId}`,
-    );
-    return null;
-  }
+  debugLog("acquire", `archiving LRU idle session=${victim.sessionId}`);
 
   try {
-    await window.api.offloadSession(
-      victim.sessionId,
-      victimSlot.termId,
-      victim.sessionId, // Claude session UUID = our session ID (same value from hook)
-      { cwd: victim.cwd, gitRoot: victim.gitRoot, pid: victim.pid },
-    );
+    await window.api.archiveSession(victim.sessionId);
   } catch (err) {
-    debugLog("pool", `offload failed session=${victim.sessionId}`, err.message);
+    debugLog("pool", `archive failed session=${victim.sessionId}`, err.message);
     return null;
   }
 
   // Poll until the slot becomes fresh (idle signal changes after /clear)
   debugLog(
     "pool",
-    `polling for fresh slot after offload of ${victim.sessionId}`,
+    `polling for fresh slot after archive of ${victim.sessionId}`,
   );
   const fresh = await pollForFreshSlot(30000);
   if (fresh) {

@@ -580,7 +580,7 @@ async function showInlineSnapshot(session, gen) {
   let snapshotText = null;
   if (session.hasSnapshot) {
     try {
-      snapshotText = await window.api.readOffloadSnapshot(session.sessionId);
+      snapshotText = await window.api.readSessionSnapshot(session.sessionId);
     } catch (err) {
       debugLog("snapshot", `failed to read snapshot: ${err.message}`);
     }

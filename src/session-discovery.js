@@ -100,32 +100,6 @@ const jsonlSizeTracker = new Map();
 const terminalHasInputCache = new Map(); // sessionId -> input text string
 const TERMINAL_WRITE_DEBOUNCE_MS = 500;
 
-// Track consecutive empty-parse results per termId. A cached "has input" entry
-// is only cleared after MISS_THRESHOLD consecutive polls return empty. This
-// prevents transient parse failures (truncated buffer, mid-redraw, alt-screen
-// loss) from dropping typing status.
-const consecutiveMisses = new Map(); // termId -> miss count
-const MISS_THRESHOLD = 3;
-
-// Wrapper so external callers (pool-manager) keep consecutiveMisses in sync.
-// Exposes Map-like interface used by pool-manager: .get(), .delete(), .clear(), .has()
-const terminalInputApi = {
-  get: (termId) => terminalHasInputCache.get(termId),
-  has: (termId) => terminalHasInputCache.has(termId),
-  set: (termId, val) => {
-    consecutiveMisses.delete(termId);
-    terminalHasInputCache.set(termId, val);
-  },
-  delete: (termId) => {
-    consecutiveMisses.delete(termId);
-    return terminalHasInputCache.delete(termId);
-  },
-  clear: () => {
-    consecutiveMisses.clear();
-    terminalHasInputCache.clear();
-  },
-};
-
 // Cache transcriptContains results (key -> true, once true stays true)
 const transcriptCache = new Map();
 
@@ -181,17 +155,15 @@ async function pollTerminalInput() {
 
     let changed = false;
 
-    // Use pendingInput from claude-pool (go through terminalInputApi
-    // to keep consecutiveMisses tracking in sync)
     for (const s of sessions) {
-      const prev = terminalInputApi.get(s.sessionId) || "";
+      const prev = terminalHasInputCache.get(s.sessionId) || "";
       if (s.pendingInput) {
         if (s.pendingInput !== prev) {
-          terminalInputApi.set(s.sessionId, s.pendingInput);
+          terminalHasInputCache.set(s.sessionId, s.pendingInput);
           changed = true;
         }
       } else if (prev) {
-        terminalInputApi.delete(s.sessionId);
+        terminalHasInputCache.delete(s.sessionId);
         changed = true;
       }
     }
@@ -1104,6 +1076,6 @@ module.exports = {
   findGitRoot,
   pollTerminalInput,
   triggerPollOnWrite,
-  terminalHasInputCache: terminalInputApi,
+  terminalHasInputCache,
   getJsonlSize,
 };

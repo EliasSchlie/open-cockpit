@@ -805,21 +805,11 @@ app.whenReady().then(async () => {
     poolManager.closeExternalTerminal(pid),
   );
   ipcMain.handle("open-in-cursor", (_e, cwd) => poolManager.openInCursor(cwd));
-  ipcMain.handle(
-    "offload-session",
-    async (_e, sessionId, termId, claudeSessionId, sessionInfo) =>
-      poolManager.offloadSession(
-        sessionId,
-        termId,
-        claudeSessionId,
-        sessionInfo,
-      ),
-  );
   ipcMain.handle("remove-offload-data", (_e, sessionId) =>
     poolManager.removeOffloadData(sessionId),
   );
-  ipcMain.handle("read-offload-snapshot", (_e, sessionId) =>
-    poolManager.readOffloadSnapshot(sessionId),
+  ipcMain.handle("read-session-snapshot", (_e, sessionId) =>
+    poolManager.readSessionSnapshot(sessionId),
   );
   ipcMain.handle("read-offload-meta", (_e, sessionId) =>
     poolManager.readOffloadMeta(sessionId),
