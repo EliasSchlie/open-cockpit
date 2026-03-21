@@ -763,24 +763,10 @@ app.whenReady().then(async () => {
     });
   });
   // Pool registry IPC handlers
-  ipcMain.handle("list-pools", async () => {
-    const pools = poolRegistry.listPools();
-    const enriched = await Promise.all(
-      pools.map(async (pool) => {
-        const entry = { name: pool.name, connected: pool.connected };
-        if (pool.connected) {
-          const client = poolRegistry.getClient(pool.name);
-          try {
-            entry.health = await client.health();
-          } catch {
-            entry.health = null;
-          }
-        }
-        return entry;
-      }),
-    );
-    return { type: "pools", pools: enriched };
-  });
+  ipcMain.handle("list-pools", async () => ({
+    type: "pools",
+    pools: await poolRegistry.listPoolsWithHealth(),
+  }));
   ipcMain.handle("add-pool", async (_e, name, size, flags) => {
     await poolRegistry.addPool(name, { size, flags });
     sessionDiscovery.invalidateSessionsCache();

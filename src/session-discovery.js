@@ -806,7 +806,7 @@ async function getSessionsUncached() {
         JSON.stringify(meta, null, 2),
       );
     } else {
-      // Offload dir exists (session was offloaded before dying) — ensure archived
+      // Archive dir exists but not marked archived — ensure it is
       const existingMeta = readOffloadMeta(s.sessionId);
       if (existingMeta && !existingMeta.archived) {
         existingMeta.archived = true;

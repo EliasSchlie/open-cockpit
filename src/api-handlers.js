@@ -540,23 +540,7 @@ function buildApiHandlers() {
 
   handlers["list-pools"] = async () => {
     const reg = _requirePoolRegistry();
-    const pools = reg.listPools();
-    // Enrich with health data (parallel)
-    const enriched = await Promise.all(
-      pools.map(async (pool) => {
-        const entry = { name: pool.name, connected: pool.connected };
-        if (pool.connected) {
-          const client = reg.getClient(pool.name);
-          try {
-            entry.health = await client.health();
-          } catch {
-            entry.health = null;
-          }
-        }
-        return entry;
-      }),
-    );
-    return { type: "pools", pools: enriched };
+    return { type: "pools", pools: await reg.listPoolsWithHealth() };
   };
 
   handlers["add-pool"] = async (msg) => {

@@ -179,6 +179,27 @@ function listPools() {
 }
 
 /**
+ * List all pools enriched with health data (parallel).
+ */
+async function listPoolsWithHealth() {
+  const pools = listPools();
+  return Promise.all(
+    pools.map(async (pool) => {
+      const entry = { name: pool.name, connected: pool.connected };
+      if (pool.connected) {
+        const client = _clients.get(pool.name);
+        try {
+          entry.health = await client.health();
+        } catch {
+          entry.health = null;
+        }
+      }
+      return entry;
+    }),
+  );
+}
+
+/**
  * Get all connected clients.
  * @returns {Map<string, ClaudePoolClient>}
  */
@@ -271,6 +292,7 @@ module.exports = {
   requireConnectedClient,
   clientForSessionOrDefault,
   listPools,
+  listPoolsWithHealth,
   getConnectedClients,
   findPoolForSession,
   requireClientForSession,
