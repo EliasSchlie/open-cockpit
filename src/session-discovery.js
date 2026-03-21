@@ -168,14 +168,14 @@ async function pollTerminalInput() {
     const clients = _poolRegistry.getConnectedClients();
     if (clients.size === 0) return;
 
-    // Aggregate sessions from all connected pools
+    // Aggregate sessions from all connected pools (parallel)
+    const results = await Promise.allSettled(
+      [...clients.values()].map((client) => client.ls({ verbosity: "flat" })),
+    );
     const sessions = [];
-    for (const [, client] of clients) {
-      try {
-        const resp = await client.ls({ verbosity: "flat" });
-        if (resp.sessions) sessions.push(...resp.sessions);
-      } catch {
-        /* pool not responding */
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value.sessions) {
+        sessions.push(...r.value.sessions);
       }
     }
 
@@ -532,22 +532,24 @@ async function getSessionsUncached() {
   const sessionPoolNames = new Map();
   if (_poolRegistry) {
     const clients = _poolRegistry.getConnectedClients();
-    for (const [poolName, client] of clients) {
-      try {
+    const results = await Promise.allSettled(
+      [...clients.entries()].map(async ([poolName, client]) => {
         const resp = await client.ls({
           verbosity: "full",
           archived: true,
           parent: "none",
         });
-        const sessions = resp.sessions || [];
-        poolSessionsFull.push(...sessions);
-        for (const s of sessions) {
-          poolSessionIds.add(s.sessionId);
-          sessionPoolNames.set(s.sessionId, poolName);
-          if (s.pid) poolPids.add(String(s.pid));
-        }
-      } catch {
-        /* pool not running */
+        return { poolName, sessions: resp.sessions || [] };
+      }),
+    );
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      const { poolName, sessions: poolSess } = r.value;
+      poolSessionsFull.push(...poolSess);
+      for (const s of poolSess) {
+        poolSessionIds.add(s.sessionId);
+        sessionPoolNames.set(s.sessionId, poolName);
+        if (s.pid) poolPids.add(String(s.pid));
       }
     }
   }

@@ -4,9 +4,7 @@
  * Each pool has a name (e.g., "default", "fast-tasks") and its own
  * ClaudePoolClient. Sessions are tagged with pool name for routing.
  */
-const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const { ClaudePoolClient, CLAUDE_POOL_HOME } = require("./claude-pool-client");
 const { readJsonSync } = require("./secure-fs");
 
@@ -33,9 +31,7 @@ async function init({ debugLog, onEvent }) {
     `found ${names.length} pool(s): ${names.join(", ") || "(none)"}`,
   );
 
-  for (const name of names) {
-    await connectPool(name);
-  }
+  await Promise.allSettled(names.map((name) => connectPool(name)));
 }
 
 /**
@@ -119,14 +115,47 @@ function getClient(name) {
  * @returns {ClaudePoolClient | null}
  */
 function getDefaultClient() {
-  // Prefer "default" pool
-  const def = _clients.get("default");
+  const def = _clients.get(DEFAULT_POOL_NAME);
   if (def && def.isConnected()) return def;
   // Fall back to first connected
   for (const [, client] of _clients) {
     if (client.isConnected()) return client;
   }
   return def || null;
+}
+
+const DEFAULT_POOL_NAME = "default";
+
+/**
+ * Get a connected pool client by name, or the default if no name given.
+ * Throws if the pool isn't connected.
+ */
+function requireConnectedClient(poolName) {
+  if (poolName) {
+    const client = _clients.get(poolName);
+    if (!client || !client.isConnected()) {
+      throw new Error(`pool '${poolName}' not connected`);
+    }
+    return client;
+  }
+  const client = getDefaultClient();
+  if (!client || !client.isConnected()) {
+    throw new Error("no pool connected");
+  }
+  return client;
+}
+
+/**
+ * Get a connected client for a session, falling back to default if lookup fails.
+ */
+async function clientForSessionOrDefault(sessionId) {
+  try {
+    const result = await findPoolForSession(sessionId);
+    if (result) return result.client;
+  } catch {
+    // fall through
+  }
+  return requireConnectedClient();
 }
 
 /**
@@ -166,7 +195,17 @@ function getConnectedClients() {
  * Returns { poolName, client } or null.
  * Results are cached per session ID.
  */
+const SESSION_CACHE_MAX = 1000;
 const _sessionPoolCache = new Map();
+
+function _cacheSet(sessionId, poolName) {
+  // Evict oldest entries when cache exceeds limit
+  if (_sessionPoolCache.size >= SESSION_CACHE_MAX) {
+    const firstKey = _sessionPoolCache.keys().next().value;
+    _sessionPoolCache.delete(firstKey);
+  }
+  _sessionPoolCache.set(sessionId, poolName);
+}
 
 async function findPoolForSession(sessionId) {
   if (_sessionPoolCache.has(sessionId)) {
@@ -176,16 +215,19 @@ async function findPoolForSession(sessionId) {
     _sessionPoolCache.delete(sessionId);
   }
 
-  for (const [name, client] of _clients) {
-    if (!client.isConnected()) continue;
-    try {
+  // Query all connected pools in parallel
+  const entries = [..._clients.entries()].filter(([, c]) => c.isConnected());
+  const results = await Promise.allSettled(
+    entries.map(async ([name, client]) => {
       const resp = await client.info(sessionId);
-      if (resp && resp.sessionId) {
-        _sessionPoolCache.set(sessionId, name);
-        return { poolName: name, client };
-      }
-    } catch {
-      // Session not in this pool
+      if (resp && resp.sessionId) return { poolName: name, client };
+      throw new Error("not found");
+    }),
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      _cacheSet(sessionId, r.value.poolName);
+      return r.value;
     }
   }
   return null;
@@ -219,12 +261,15 @@ function destroyAll() {
 }
 
 module.exports = {
+  DEFAULT_POOL_NAME,
   init,
   connectPool,
   addPool,
   removePool,
   getClient,
   getDefaultClient,
+  requireConnectedClient,
+  clientForSessionOrDefault,
   listPools,
   getConnectedClients,
   findPoolForSession,
