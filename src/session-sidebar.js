@@ -101,7 +101,7 @@ function getDirColor(session) {
 
 // Build a fingerprint for a session to detect changes
 function sessionFingerprint(s) {
-  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}|${s.parentSessionId || ""}`;
+  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}|${s.poolName || ""}|${s.parentSessionId || ""}`;
 }
 
 // Track previous session fingerprints for diff-based update
@@ -377,8 +377,12 @@ function createSessionItem(s, depth = 0) {
     : "background: transparent";
   const showOrigin =
     s.origin && s.status !== STATUS.OFFLOADED && s.status !== STATUS.ARCHIVED;
+  const originLabel =
+    s.origin === "pool" && s.poolName && s.poolName !== "default"
+      ? s.poolName
+      : s.origin;
   const originTag = showOrigin
-    ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
+    ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(originLabel)}</span>`
     : "";
   const staleTag = s.staleIdle
     ? `<span class="session-origin-tag session-origin-stale">stale</span>`

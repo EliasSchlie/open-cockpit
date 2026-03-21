@@ -94,7 +94,7 @@ const {
   stopPluginVersionWatch,
 } = require("./first-run");
 const { PLUGIN_VERSION } = require("./session-statuses");
-const { ClaudePoolClient } = require("./claude-pool-client");
+const poolRegistry = require("./pool-registry");
 
 // --- Pool attach socket tracking ---
 // Maps pool session IDs (UUIDs) to their attach net.Sockets
@@ -221,8 +221,10 @@ const send = (channel, ...args) => {
 };
 
 // --- Pool session attach via claude-pool ---
-async function attachPoolSession(sessionId, poolClient) {
-  const { socket, cols, rows } = await poolClient.attachSession(sessionId);
+async function attachPoolSession(sessionId) {
+  const result = await poolRegistry.findPoolForSession(sessionId);
+  if (!result) throw new Error(`session ${sessionId} not found in any pool`);
+  const { socket, cols, rows } = await result.client.attachSession(sessionId);
   // Forward output to renderer
   socket.on("data", (chunk) => {
     send("pty-data", sessionId, chunk.toString());
@@ -475,7 +477,6 @@ function buildMenu() {
 // --- App startup ---
 
 let ownsApiSocket = false;
-let poolClient = null;
 
 app.whenReady().then(async () => {
   debugLog(
@@ -495,11 +496,11 @@ app.whenReady().then(async () => {
 
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
 
-  // Initialize claude-pool client
-  debugLog("main", "initializing claude-pool client...");
-  poolClient = new ClaudePoolClient({
+  // Initialize pool registry (connects to all known pools)
+  debugLog("main", "initializing pool registry...");
+  await poolRegistry.init({
     debugLog,
-    onEvent: (msg) => {
+    onEvent: (poolName, msg) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Any pool event (session created, status change, etc.) → refresh sidebar
       if (msg.event) {
@@ -526,18 +527,18 @@ app.whenReady().then(async () => {
   sessionDiscovery.init({
     debugLog,
     onSessionsChanged: () => send("sessions-changed"),
-    claudePoolClient: poolClient,
+    poolRegistry,
   });
 
   poolManager.init({
     debugLog,
     onIntentionChanged: (content) => send("intention-changed", content),
-    claudePoolClient: poolClient,
+    poolRegistry,
   });
 
   apiHandlersModule.init({
     getMainWindow: () => mainWindow,
-    claudePoolClient: poolClient,
+    poolRegistry,
     onSessionArchived: (sessionId) => {
       // Clean up attach socket for archived session
       const sock = poolAttachSockets.get(sessionId);
@@ -545,6 +546,7 @@ app.whenReady().then(async () => {
         sock.destroy();
         poolAttachSockets.delete(sessionId);
       }
+      poolRegistry.invalidateSessionCache(sessionId);
     },
   });
 
@@ -560,22 +562,15 @@ app.whenReady().then(async () => {
     );
   }
 
-  // Connect to claude-pool (non-fatal — pool may not be initialized yet)
-  debugLog("main", "connecting to claude-pool...");
-  try {
-    await poolClient.connect();
-    debugLog("main", "claude-pool connected");
-    // Subscribe to session events so sidebar refreshes on pool changes
-    poolClient.subscribe({
-      events: ["created", "status", "updated"],
-    });
-    debugLog("main", "subscribed to claude-pool events");
-  } catch (err) {
-    debugLog(
-      "main",
-      `claude-pool not running (expected if pool not initialized): ${err.message}`,
-    );
-  }
+  debugLog(
+    "main",
+    `pool registry ready: ${
+      poolRegistry
+        .listPools()
+        .map((p) => `${p.name}(${p.connected ? "connected" : "disconnected"})`)
+        .join(", ") || "no pools"
+    }`,
+  );
 
   // Clean up stale layout files (archived >7 days or session gone entirely)
   const LAYOUT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -717,7 +712,8 @@ app.whenReady().then(async () => {
     if (poolAttachSockets.has(termId)) {
       // Pool session — resize via claude-pool API
       try {
-        await poolClient.ptyResize(termId, cols, rows);
+        const found = await poolRegistry.findPoolForSession(termId);
+        if (found) await found.client.ptyResize(termId, cols, rows);
       } catch (err) {
         debugLog("main", `pool resize failed for ${termId}: ${err.message}`);
       }
@@ -730,7 +726,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("pty-attach", async (_e, termId) => {
     // Check if this is a pool session (UUID format) or shell tab (claude-term)
     if (isPoolSessionId(termId)) {
-      return attachPoolSession(termId, poolClient);
+      return attachPoolSession(termId);
     }
     // Shell tab — delegate to claude-term via daemon-client adapter
     const resp = await daemonClient.daemonRequest({
@@ -766,6 +762,29 @@ app.whenReady().then(async () => {
       sessionId,
     });
   });
+  // Pool registry IPC handlers
+  ipcMain.handle("list-pools", async () => {
+    const { buildApiHandlers } = apiHandlersModule;
+    const handlers = buildApiHandlers();
+    return handlers["list-pools"]({});
+  });
+  ipcMain.handle("add-pool", async (_e, name, size, flags) => {
+    await poolRegistry.addPool(name, { size, flags });
+    sessionDiscovery.invalidateSessionsCache();
+    send("sessions-changed");
+    return { poolName: name };
+  });
+  ipcMain.handle("remove-pool", async (_e, name) => {
+    await poolRegistry.removePool(name);
+    sessionDiscovery.invalidateSessionsCache();
+    send("sessions-changed");
+  });
+  ipcMain.handle("connect-pool", async (_e, name) => {
+    await poolRegistry.connectPool(name);
+    sessionDiscovery.invalidateSessionsCache();
+    send("sessions-changed");
+  });
+
   ipcMain.handle("focus-external-terminal", (_e, pid) =>
     poolManager.focusExternalTerminal(pid),
   );
@@ -1078,6 +1097,7 @@ app.on("before-quit", (e) => {
     }
   }
   poolAttachSockets.clear();
+  poolRegistry.destroyAll();
   for (const entry of pendingPolls) entry.cancel();
   pendingPolls.clear();
   // Clean up API socket — only if this instance created it

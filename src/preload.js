@@ -96,15 +96,25 @@ contextBridge.exposeInMainWorld("api", {
   // Pool management
   poolInit: (size) => ipcRenderer.invoke("pool-init", size),
   poolResize: (newSize) => ipcRenderer.invoke("pool-resize", newSize),
-  poolRead: () => ipcRenderer.invoke("pool-read"),
-  poolHealth: () => ipcRenderer.invoke("pool-health"),
-  poolDestroy: () => ipcRenderer.invoke("pool-destroy"),
+  poolRead: (poolName) => ipcRenderer.invoke("pool-read", poolName),
+  poolHealth: (poolName) => ipcRenderer.invoke("pool-health", poolName),
+  poolDestroy: (poolName) => ipcRenderer.invoke("pool-destroy", poolName),
   poolClean: () => ipcRenderer.invoke("pool-clean"),
-  poolGetFlags: () => ipcRenderer.invoke("pool-get-flags"),
-  poolSetFlags: (flags) => ipcRenderer.invoke("pool-set-flags", flags),
-  poolGetMinFresh: () => ipcRenderer.invoke("pool-get-min-fresh"),
-  poolSetMinFresh: (n) => ipcRenderer.invoke("pool-set-min-fresh", n),
+  poolGetFlags: (poolName) => ipcRenderer.invoke("pool-get-flags", poolName),
+  poolSetFlags: (flags, poolName) =>
+    ipcRenderer.invoke("pool-set-flags", flags, poolName),
+  poolGetMinFresh: (poolName) =>
+    ipcRenderer.invoke("pool-get-min-fresh", poolName),
+  poolSetMinFresh: (n, poolName) =>
+    ipcRenderer.invoke("pool-set-min-fresh", n, poolName),
   poolResume: (sessionId) => ipcRenderer.invoke("pool-resume", sessionId),
+
+  // Pool registry
+  listPools: () => ipcRenderer.invoke("list-pools"),
+  addPool: (name, size, flags) =>
+    ipcRenderer.invoke("add-pool", name, size, flags),
+  removePool: (name) => ipcRenderer.invoke("remove-pool", name),
+  connectPool: (name) => ipcRenderer.invoke("connect-pool", name),
 
   // Custom sessions
   spawnCustomSession: (cwd, flags) =>

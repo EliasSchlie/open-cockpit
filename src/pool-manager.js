@@ -16,8 +16,6 @@ const {
   SESSION_PIDS_DIR,
   DEFAULT_POOL_SIZE,
 } = require("./paths");
-const { ClaudePoolClient } = require("./claude-pool-client");
-
 // Lazy require to avoid circular dependency with session-discovery
 function getSessionDiscovery() {
   return require("./session-discovery");
@@ -27,19 +25,35 @@ function getSessionDiscovery() {
 let _debugLog = () => {};
 let _onIntentionChanged = null;
 
-/** @type {ClaudePoolClient | null} */
-let _client = null;
+/** @type {import('./pool-registry') | null} */
+let _poolRegistry = null;
 
-function init({ debugLog, onIntentionChanged, claudePoolClient }) {
+function init({ debugLog, onIntentionChanged, poolRegistry }) {
   if (debugLog) _debugLog = debugLog;
   _onIntentionChanged = onIntentionChanged;
-  if (claudePoolClient) _client = claudePoolClient;
+  if (poolRegistry) _poolRegistry = poolRegistry;
 }
 
-function _requireClient() {
-  if (!_client)
-    throw new Error("claude-pool client not initialized (call init first)");
-  return _client;
+function _requireClient(poolName) {
+  if (!_poolRegistry)
+    throw new Error("pool registry not initialized (call init first)");
+  if (poolName) {
+    const client = _poolRegistry.getClient(poolName);
+    if (!client || !client.isConnected()) {
+      throw new Error(`pool '${poolName}' not connected`);
+    }
+    return client;
+  }
+  const client = _poolRegistry.getDefaultClient();
+  if (!client) throw new Error("no pool connected");
+  return client;
+}
+
+async function _requireClientForSession(sessionId) {
+  if (!_poolRegistry) throw new Error("pool registry not initialized");
+  const result = await _poolRegistry.findPoolForSession(sessionId);
+  if (!result) throw new Error(`session ${sessionId} not found in any pool`);
+  return result.client;
 }
 
 // --- Module-level state ---
@@ -475,10 +489,10 @@ function stripAnsi(str) {
 /**
  * Initialize pool: start claude-pool daemon and create sessions.
  */
-async function poolInit(size) {
-  const client = _requireClient();
+async function poolInit(size, poolName) {
+  const client = _requireClient(poolName);
   size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
-  const flags = await getPoolFlags();
+  const flags = await getPoolFlags(poolName);
   const result = await client.init(size, flags);
   _debugLog("main", `poolInit: claude-pool initialized with ${size} slots`);
   return result;
@@ -487,8 +501,8 @@ async function poolInit(size) {
 /**
  * Resize pool to newSize slots.
  */
-async function poolResize(newSize) {
-  const client = _requireClient();
+async function poolResize(newSize, poolName) {
+  const client = _requireClient(poolName);
   newSize = Math.max(1, Math.min(20, newSize));
   const result = await client.resize(newSize);
   _debugLog("main", `poolResize: resized to ${newSize}`);
@@ -498,8 +512,8 @@ async function poolResize(newSize) {
 /**
  * Destroy pool: stop all sessions and daemon.
  */
-async function poolDestroy() {
-  const client = _requireClient();
+async function poolDestroy(poolName) {
+  const client = _requireClient(poolName);
   try {
     const result = await client.destroyPool();
     _debugLog("main", "poolDestroy: pool destroyed via claude-pool");
@@ -512,8 +526,8 @@ async function poolDestroy() {
 /**
  * Get pool health from claude-pool.
  */
-async function getPoolHealth() {
-  const client = _requireClient();
+async function getPoolHealth(poolName) {
+  const client = _requireClient(poolName);
   return client.health();
 }
 
@@ -521,7 +535,12 @@ async function getPoolHealth() {
  * Resume (unarchive) a session via claude-pool.
  */
 async function poolResume(sessionId) {
-  const client = _requireClient();
+  let client;
+  try {
+    client = await _requireClientForSession(sessionId);
+  } catch {
+    client = _requireClient();
+  }
   validateSessionId(sessionId);
 
   // Unarchive local offload meta if present
@@ -559,7 +578,12 @@ async function offloadSession(
   claudeSessionId,
   { cwd, gitRoot, pid } = {},
 ) {
-  const client = _requireClient();
+  let client;
+  try {
+    client = await _requireClientForSession(sessionId);
+  } catch {
+    client = _requireClient();
+  }
   validateSessionId(sessionId);
 
   // 1. Capture terminal buffer from claude-pool
@@ -598,41 +622,60 @@ async function offloadSession(
 }
 
 /**
- * Archive a session and all its descendants (cascade, depth-first).
+ * Archive a session and all its descendants (cascade via claude-pool recursive).
  */
 async function archiveSession(sessionId) {
-  const client = _requireClient();
+  let client;
+  try {
+    client = await _requireClientForSession(sessionId);
+  } catch {
+    client = _requireClient();
+  }
   validateSessionId(sessionId);
   const { invalidateSessionsCache } = getSessionDiscovery();
 
-  // Cascade: archive all descendants depth-first (deepest first)
+  // Delegate cascade to claude-pool (recursive: true archives all descendants)
+  try {
+    await client.archive(sessionId, true);
+  } catch (err) {
+    _debugLog(
+      "main",
+      `claude-pool recursive archive failed for ${sessionId}: ${err.message}`,
+    );
+  }
+
+  // Ensure local offload metadata is marked archived
+  await archiveSingleSession(sessionId);
+
+  // Also mark local metadata for descendants
   const graph = readSessionGraph();
   const descendants = getDescendantsFromGraph(sessionId, graph);
   for (const childId of descendants) {
     try {
-      await archiveSingleSession(childId);
+      markLocalArchived(childId);
     } catch (err) {
       _debugLog(
         "main",
-        `Failed to cascade-archive child ${childId}: ${err.message}`,
+        `Failed to mark local archive for child ${childId}: ${err.message}`,
       );
     }
   }
 
-  await archiveSingleSession(sessionId);
   invalidateSessionsCache();
 }
 
 /**
  * Archive a single session (no cascade).
  */
+/**
+ * Archive a single session locally (mark metadata as archived).
+ * Does NOT call claude-pool — caller is responsible for pool-side archive.
+ */
 async function archiveSingleSession(sessionId) {
-  const client = _requireClient();
   validateSessionId(sessionId);
   const meta = readOffloadMeta(sessionId);
 
   if (meta) {
-    // Already offloaded — just mark as archived locally
     meta.archived = true;
     meta.archivedAt = meta.archivedAt || new Date().toISOString();
     secureWriteFileSync(
@@ -640,28 +683,32 @@ async function archiveSingleSession(sessionId) {
       JSON.stringify(meta, null, 2),
     );
   } else {
-    // Not offloaded — create archive-only meta
     await writeOffloadMeta(sessionId, {
       claudeSessionId: sessionId,
       archived: true,
     });
   }
+}
 
-  // Tell claude-pool to archive
-  try {
-    await client.archive(sessionId);
-  } catch (err) {
-    _debugLog(
-      "main",
-      `claude-pool archive failed for ${sessionId}: ${err.message}`,
+/**
+ * Mark local offload metadata as archived (no pool call).
+ */
+function markLocalArchived(sessionId) {
+  const meta = readOffloadMeta(sessionId);
+  if (meta && !meta.archived) {
+    meta.archived = true;
+    meta.archivedAt = meta.archivedAt || new Date().toISOString();
+    secureWriteFileSync(
+      path.join(OFFLOADED_DIR, sessionId, "meta.json"),
+      JSON.stringify(meta, null, 2),
     );
   }
 }
 
 /**
- * Unarchive a session: remove archived flag from local meta.
+ * Unarchive a session: update local meta + tell claude-pool.
  */
-function unarchiveSession(sessionId) {
+async function unarchiveSession(sessionId) {
   validateSessionId(sessionId);
   const { invalidateSessionsCache } = getSessionDiscovery();
   const meta = readOffloadMeta(sessionId);
@@ -672,33 +719,57 @@ function unarchiveSession(sessionId) {
     path.join(OFFLOADED_DIR, sessionId, "meta.json"),
     JSON.stringify(meta, null, 2),
   );
+
+  // Tell claude-pool to unarchive (restores to offloaded state)
+  if (_poolRegistry) {
+    try {
+      const result = await _poolRegistry.findPoolForSession(sessionId);
+      if (result) await result.client.unarchive(sessionId);
+    } catch (err) {
+      _debugLog(
+        "main",
+        `claude-pool unarchive failed for ${sessionId}: ${err.message}`,
+      );
+    }
+  }
+
   invalidateSessionsCache();
 }
 
 /**
  * Clean pool: archive all idle sessions.
  */
-async function poolClean() {
-  const client = _requireClient();
-  // List idle sessions from claude-pool
-  const resp = await client.ls({ statuses: ["idle"] });
-  if (!resp.sessions || resp.sessions.length === 0) return 0;
+async function poolClean(poolName) {
+  if (!_poolRegistry) throw new Error("pool registry not initialized");
 
   let cleaned = 0;
-  for (const session of resp.sessions) {
+  const clients = poolName
+    ? [[poolName, _requireClient(poolName)]]
+    : [..._poolRegistry.getConnectedClients()];
+
+  for (const [, client] of clients) {
     try {
-      await offloadSession(session.sessionId, null, null, {
-        cwd: session.cwd,
-        gitRoot: session.gitRoot,
-        pid: session.pid,
-      });
-      await archiveSession(session.sessionId);
-      cleaned++;
+      const resp = await client.ls({ statuses: ["idle"] });
+      if (!resp.sessions || resp.sessions.length === 0) continue;
+
+      for (const session of resp.sessions) {
+        try {
+          await offloadSession(session.sessionId, null, null, {
+            cwd: session.cwd,
+            gitRoot: session.gitRoot,
+            pid: session.pid,
+          });
+          await archiveSession(session.sessionId);
+          cleaned++;
+        } catch (err) {
+          _debugLog(
+            "main",
+            `poolClean failed for ${session.sessionId}: ${err.message}`,
+          );
+        }
+      }
     } catch (err) {
-      _debugLog(
-        "main",
-        `poolClean failed for ${session.sessionId}: ${err.message}`,
-      );
+      _debugLog("main", `poolClean failed for pool: ${err.message}`);
     }
   }
   return cleaned;
@@ -708,9 +779,9 @@ async function poolClean() {
 // Pool settings — delegated to claude-pool config
 // ============================================================
 
-async function getPoolFlags() {
+async function getPoolFlags(poolName) {
   try {
-    const client = _requireClient();
+    const client = _requireClient(poolName);
     const resp = await client.config();
     return resp.config?.flags ?? "--dangerously-skip-permissions";
   } catch {
@@ -718,15 +789,15 @@ async function getPoolFlags() {
   }
 }
 
-async function setPoolFlags(flags) {
+async function setPoolFlags(flags, poolName) {
   if (typeof flags !== "string") throw new Error("flags must be a string");
-  const client = _requireClient();
+  const client = _requireClient(poolName);
   await client.config({ flags });
 }
 
-async function getMinFreshSlots() {
+async function getMinFreshSlots(poolName) {
   try {
-    const client = _requireClient();
+    const client = _requireClient(poolName);
     const resp = await client.config();
     const val = resp.config?.keepFresh;
     return typeof val === "number" && val >= 0 ? val : 1;
@@ -735,11 +806,11 @@ async function getMinFreshSlots() {
   }
 }
 
-async function setMinFreshSlots(n) {
+async function setMinFreshSlots(n, poolName) {
   if (typeof n !== "number" || !Number.isFinite(n) || n < 0) {
     throw new Error("minFreshSlots must be a non-negative number");
   }
-  const client = _requireClient();
+  const client = _requireClient(poolName);
   await client.config({ keepFresh: n });
 }
 

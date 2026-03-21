@@ -50,12 +50,12 @@ const {
 let _getMainWindow = () => null;
 let _onSessionArchived = null;
 
-/** @type {import('./claude-pool-client').ClaudePoolClient | null} */
-let _poolClient = null;
+/** @type {import('./pool-registry') | null} */
+let _poolRegistry = null;
 
-function init({ getMainWindow, claudePoolClient, onSessionArchived }) {
+function init({ getMainWindow, poolRegistry, onSessionArchived }) {
   _getMainWindow = getMainWindow;
-  if (claudePoolClient) _poolClient = claudePoolClient;
+  if (poolRegistry) _poolRegistry = poolRegistry;
   if (onSessionArchived) _onSessionArchived = onSessionArchived;
 }
 
@@ -66,12 +66,35 @@ function _requireMainWindow() {
   return win;
 }
 
-/** Require pool client or throw. */
-function _requirePoolClient() {
-  if (!_poolClient || !_poolClient.isConnected()) {
-    throw new Error("claude-pool not connected");
+/** Require pool registry. */
+function _requirePoolRegistry() {
+  if (!_poolRegistry) throw new Error("pool registry not initialized");
+  return _poolRegistry;
+}
+
+/** Get pool client for a specific pool name, or default pool. */
+function _getPoolClient(poolName) {
+  const reg = _requirePoolRegistry();
+  if (poolName) {
+    const client = reg.getClient(poolName);
+    if (!client || !client.isConnected()) {
+      throw new Error(`pool '${poolName}' not connected`);
+    }
+    return client;
   }
-  return _poolClient;
+  const client = reg.getDefaultClient();
+  if (!client || !client.isConnected()) {
+    throw new Error("no pool connected");
+  }
+  return client;
+}
+
+/** Find which pool a session belongs to and return its client. */
+async function _getClientForSession(sessionId) {
+  const reg = _requirePoolRegistry();
+  const result = await reg.findPoolForSession(sessionId);
+  if (!result) throw new Error(`session ${sessionId} not found in any pool`);
+  return result.client;
 }
 
 // --- Session terminal helpers (using claude-term via daemon-client) ---
@@ -108,21 +131,26 @@ const sharedHandlers = {
   "get-sessions": async () => {
     const sessions = await getSessions();
     // Pool status enrichment via claude-pool (if connected)
-    if (_poolClient && _poolClient.isConnected()) {
-      try {
-        const poolSessions = await _poolClient.ls({ verbosity: "flat" });
-        const poolMap = new Map(
-          (poolSessions.sessions || []).map((s) => [s.sessionId, s]),
-        );
-        for (const s of sessions) {
-          const ps = poolMap.get(s.sessionId);
-          if (ps) {
-            s.poolStatus = ps.status;
-            if (ps.pinned) s.pinnedUntil = ps.pinned;
+    // Enrich sessions with pool status from all connected pools
+    if (_poolRegistry) {
+      const clients = _poolRegistry.getConnectedClients();
+      for (const [poolName, client] of clients) {
+        try {
+          const poolSessions = await client.ls({ verbosity: "flat" });
+          const poolMap = new Map(
+            (poolSessions.sessions || []).map((s) => [s.sessionId, s]),
+          );
+          for (const s of sessions) {
+            const ps = poolMap.get(s.sessionId);
+            if (ps) {
+              s.poolStatus = ps.status;
+              s.poolName = poolName;
+              if (ps.pinned) s.pinnedUntil = ps.pinned;
+            }
           }
+        } catch {
+          /* pool not running */
         }
-      } catch {
-        /* pool not running */
       }
     }
     enrichSessionsWithGraphData(sessions);
@@ -160,39 +188,39 @@ const sharedHandlers = {
     validateTermId(termId);
     await daemonRequest({ type: "kill", termId });
   },
-  "pool-init": async ({ size }) => poolInit(size),
-  "pool-resize": async ({ size }) => poolResize(size),
-  "pool-read": async () => {
+  "pool-init": async ({ size, poolName }) => poolInit(size, poolName),
+  "pool-resize": async ({ size, poolName }) => poolResize(size, poolName),
+  "pool-read": async ({ poolName } = {}) => {
     // Return pool data compatible with the old pool.json structure.
     // Uses debug-slots for accurate per-slot data (index, pid, sessionId, state).
-    if (!_poolClient || !_poolClient.isConnected()) return null;
+    if (!_poolRegistry) return null;
     try {
-      const resp = await _poolClient.debugSlots();
+      const client = _getPoolClient(poolName);
+      const resp = await client.debugSlots();
       const rawSlots = resp.slots || [];
       const slots = rawSlots.map((s) => ({
         index: s.index,
         sessionId: s.sessionId || null,
         status: s.state || "unknown",
         pid: s.pid || null,
-        // In the new model, termId = sessionId for pool sessions
         termId: s.sessionId || null,
       }));
-      return { poolSize: slots.length, slots };
+      return { poolSize: slots.length, slots, poolName: poolName || "default" };
     } catch {
       return null;
     }
   },
-  "pool-health": async () => getPoolHealth(),
-  "pool-destroy": async () => poolDestroy(),
-  "pool-clean": async () => poolClean(),
-  "pool-get-flags": async () => getPoolFlags(),
-  "pool-set-flags": async ({ flags }) => {
-    await setPoolFlags(flags);
+  "pool-health": async ({ poolName } = {}) => getPoolHealth(poolName),
+  "pool-destroy": async ({ poolName } = {}) => poolDestroy(poolName),
+  "pool-clean": async ({ poolName } = {}) => poolClean(poolName),
+  "pool-get-flags": async ({ poolName } = {}) => getPoolFlags(poolName),
+  "pool-set-flags": async ({ flags, poolName }) => {
+    await setPoolFlags(flags, poolName);
     return flags;
   },
-  "pool-get-min-fresh": async () => getMinFreshSlots(),
-  "pool-set-min-fresh": async ({ minFreshSlots }) => {
-    await setMinFreshSlots(minFreshSlots);
+  "pool-get-min-fresh": async ({ poolName } = {}) => getMinFreshSlots(poolName),
+  "pool-set-min-fresh": async ({ minFreshSlots, poolName }) => {
+    await setMinFreshSlots(minFreshSlots, poolName);
     return minFreshSlots;
   },
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
@@ -200,7 +228,7 @@ const sharedHandlers = {
     await archiveSession(sessionId);
     if (_onSessionArchived) _onSessionArchived(sessionId);
   },
-  "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
+  "unarchive-session": async ({ sessionId }) => unarchiveSession(sessionId),
   "list-agents": async ({ cwd }) => {
     const agents = new Map(); // name -> { name, path, description, scope, args }
 
@@ -289,16 +317,19 @@ const ipcArgMap = {
   "pty-write": (termId, data) => ({ termId, data }),
   "pty-list": () => ({}),
   "pty-kill": (termId) => ({ termId }),
-  "pool-init": (size) => ({ size }),
-  "pool-resize": (size) => ({ size }),
-  "pool-read": () => ({}),
-  "pool-health": () => ({}),
-  "pool-destroy": () => ({}),
+  "pool-init": (size, poolName) => ({ size, poolName }),
+  "pool-resize": (size, poolName) => ({ size, poolName }),
+  "pool-read": (poolName) => ({ poolName }),
+  "pool-health": (poolName) => ({ poolName }),
+  "pool-destroy": (poolName) => ({ poolName }),
   "pool-clean": () => ({}),
-  "pool-get-flags": () => ({}),
-  "pool-set-flags": (flags) => ({ flags }),
-  "pool-get-min-fresh": () => ({}),
-  "pool-set-min-fresh": (minFreshSlots) => ({ minFreshSlots }),
+  "pool-get-flags": (poolName) => ({ poolName }),
+  "pool-set-flags": (flags, poolName) => ({ flags, poolName }),
+  "pool-get-min-fresh": (poolName) => ({ poolName }),
+  "pool-set-min-fresh": (minFreshSlots, poolName) => ({
+    minFreshSlots,
+    poolName,
+  }),
   "pool-resume": (sessionId) => ({ sessionId }),
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
@@ -428,7 +459,7 @@ function buildApiHandlers() {
 
   handlers["pool-start"] = async (msg) => {
     if (!msg.prompt) throw new Error("prompt required");
-    const client = _requirePoolClient();
+    const client = _getPoolClient(msg.poolName);
     const resp = await client.start({
       prompt: msg.prompt,
       parent: msg.parentSessionId,
@@ -444,7 +475,7 @@ function buildApiHandlers() {
   handlers["pool-followup"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
     if (!msg.prompt) throw new Error("prompt required");
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     await client.followup(msg.sessionId, msg.prompt);
     return { type: "started", sessionId: msg.sessionId };
   };
@@ -452,7 +483,7 @@ function buildApiHandlers() {
   handlers["pool-wait"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
     validateSessionId(msg.sessionId);
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     const timeout = msg.timeout || 300000;
     const resp = await client.wait(msg.sessionId, {
       timeout,
@@ -467,7 +498,7 @@ function buildApiHandlers() {
 
   handlers["pool-capture"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     const resp = await client.capture(msg.sessionId, { source: "buffer" });
     return {
       type: "buffer",
@@ -479,28 +510,28 @@ function buildApiHandlers() {
   handlers["pool-input"] = async (msg) => {
     if (msg.data === undefined) throw new Error("data required");
     if (!msg.sessionId) throw new Error("sessionId required");
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     await client.input(msg.sessionId, msg.data);
     return { type: "ok" };
   };
 
   handlers["pool-pin"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     await client.set(msg.sessionId, { pinned: msg.duration || 120 });
     return { type: "ok" };
   };
 
   handlers["pool-unpin"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     await client.set(msg.sessionId, { pinned: false });
     return { type: "ok" };
   };
 
   handlers["pool-stop-session"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    const client = _requirePoolClient();
+    const client = await _getClientForSession(msg.sessionId);
     await client.stop(msg.sessionId);
     return { type: "ok", sessionId: msg.sessionId };
   };
@@ -510,11 +541,58 @@ function buildApiHandlers() {
     graph: readSessionGraph(),
   });
 
+  // --- Pool registry ---
+
+  handlers["list-pools"] = async () => {
+    const reg = _requirePoolRegistry();
+    const pools = reg.listPools();
+    // Enrich with health data for connected pools
+    const result = [];
+    for (const pool of pools) {
+      const entry = { name: pool.name, connected: pool.connected };
+      if (pool.connected) {
+        const client = reg.getClient(pool.name);
+        try {
+          const health = await client.health();
+          entry.health = health;
+        } catch {
+          entry.health = null;
+        }
+      }
+      result.push(entry);
+    }
+    return { type: "pools", pools: result };
+  };
+
+  handlers["add-pool"] = async (msg) => {
+    if (!msg.name) throw new Error("pool name required");
+    const reg = _requirePoolRegistry();
+    await reg.addPool(msg.name, {
+      size: msg.size,
+      flags: msg.flags,
+    });
+    return { type: "ok", poolName: msg.name };
+  };
+
+  handlers["remove-pool"] = async (msg) => {
+    if (!msg.name) throw new Error("pool name required");
+    const reg = _requirePoolRegistry();
+    await reg.removePool(msg.name);
+    return { type: "ok" };
+  };
+
+  handlers["connect-pool"] = async (msg) => {
+    if (!msg.name) throw new Error("pool name required");
+    const reg = _requirePoolRegistry();
+    await reg.connectPool(msg.name);
+    return { type: "ok" };
+  };
+
   // --- Slot access (via claude-pool debug-slots) ---
 
   handlers["slot-status"] = async (msg) => {
     if (msg.slotIndex === undefined) throw new Error("slotIndex required");
-    const client = _requirePoolClient();
+    const client = _getPoolClient(msg.poolName);
     const resp = await client.debugSlots();
     const slot = (resp.slots || []).find((s) => s.index === msg.slotIndex);
     if (!slot) throw new Error(`No slot at index ${msg.slotIndex}`);
@@ -532,7 +610,7 @@ function buildApiHandlers() {
 
   handlers["slot-read"] = async (msg) => {
     if (msg.slotIndex === undefined) throw new Error("slotIndex required");
-    const client = _requirePoolClient();
+    const client = _getPoolClient(msg.poolName);
     const resp = await client.debugCapture(msg.slotIndex);
     return {
       type: "buffer",
@@ -544,7 +622,7 @@ function buildApiHandlers() {
   handlers["slot-write"] = async (msg) => {
     if (msg.slotIndex === undefined) throw new Error("slotIndex required");
     if (msg.data === undefined) throw new Error("data required");
-    const client = _requirePoolClient();
+    const client = _getPoolClient(msg.poolName);
     // Find the session in the slot to send input
     const slotsResp = await client.debugSlots();
     const slot = (slotsResp.slots || []).find((s) => s.index === msg.slotIndex);

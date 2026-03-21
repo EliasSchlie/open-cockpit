@@ -25,8 +25,33 @@ const CLAUDE_POOL_SOCKET = path.join(
   "api.sock",
 );
 
-const termAvailable = fs.existsSync(CLAUDE_TERM_SOCKET);
-const poolAvailable = fs.existsSync(CLAUDE_POOL_SOCKET);
+/**
+ * Probe whether a Unix socket is actually accepting connections (not just a stale file).
+ * Uses a short-lived connection attempt with a timeout.
+ */
+async function probeSocket(socketPath) {
+  if (!fs.existsSync(socketPath)) return false;
+  return new Promise((resolve) => {
+    const s = net.createConnection(socketPath);
+    const timer = setTimeout(() => {
+      s.destroy();
+      resolve(false);
+    }, 1000);
+    s.on("connect", () => {
+      clearTimeout(timer);
+      s.destroy();
+      resolve(true);
+    });
+    s.on("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+// Top-level await: probe sockets before any describe.skipIf is evaluated
+const termAvailable = await probeSocket(CLAUDE_TERM_SOCKET);
+const poolAvailable = await probeSocket(CLAUDE_POOL_SOCKET);
 
 /** Send a JSON message to a socket and receive the response */
 function socketRequest(socketPath, msg, timeoutMs = 5000) {

@@ -30,11 +30,12 @@ const {
 // --- Init pattern for injected dependencies ---
 let _debugLog = () => {};
 let _onSessionsChanged = null;
-let _claudePoolClient = null;
-function init({ debugLog, onSessionsChanged, claudePoolClient }) {
+/** @type {import('./pool-registry') | null} */
+let _poolRegistry = null;
+function init({ debugLog, onSessionsChanged, poolRegistry }) {
   if (debugLog) _debugLog = debugLog;
   _onSessionsChanged = onSessionsChanged;
-  if (claudePoolClient) _claudePoolClient = claudePoolClient;
+  if (poolRegistry) _poolRegistry = poolRegistry;
 }
 
 // --- Inline helpers (copied from main.js, not worth a separate module) ---
@@ -66,16 +67,6 @@ function removeOffloadData(sessionId) {
     fs.rmSync(path.join(OFFLOADED_DIR, sessionId), { recursive: true });
   } catch {
     /* ENOENT */
-  }
-}
-
-async function getPoolSessions() {
-  if (!_claudePoolClient || !_claudePoolClient.isConnected()) return null;
-  try {
-    const resp = await _claudePoolClient.ls({ verbosity: "flat" });
-    return resp.sessions || [];
-  } catch {
-    return null;
   }
 }
 
@@ -173,9 +164,20 @@ async function pollTerminalInput() {
   if (pollInFlight) return;
   pollInFlight = true;
   try {
-    if (!_claudePoolClient || !_claudePoolClient.isConnected()) return;
-    const resp = await _claudePoolClient.ls({ verbosity: "flat" });
-    const sessions = resp.sessions || [];
+    if (!_poolRegistry) return;
+    const clients = _poolRegistry.getConnectedClients();
+    if (clients.size === 0) return;
+
+    // Aggregate sessions from all connected pools
+    const sessions = [];
+    for (const [, client] of clients) {
+      try {
+        const resp = await client.ls({ verbosity: "flat" });
+        if (resp.sessions) sessions.push(...resp.sessions);
+      } catch {
+        /* pool not responding */
+      }
+    }
 
     let changed = false;
 
@@ -526,20 +528,27 @@ async function getSessionsUncached() {
   let poolSessionIds = new Set(); // pool internal IDs
   let poolPids = new Set(); // PIDs of pool session processes
   let poolSessionsFull = [];
-  if (_claudePoolClient && _claudePoolClient.isConnected()) {
-    try {
-      const resp = await _claudePoolClient.ls({
-        verbosity: "full",
-        archived: true,
-        parent: "none",
-      });
-      poolSessionsFull = resp.sessions || [];
-      for (const s of poolSessionsFull) {
-        poolSessionIds.add(s.sessionId);
-        if (s.pid) poolPids.add(String(s.pid));
+  // Maps sessionId → pool name for tagging
+  const sessionPoolNames = new Map();
+  if (_poolRegistry) {
+    const clients = _poolRegistry.getConnectedClients();
+    for (const [poolName, client] of clients) {
+      try {
+        const resp = await client.ls({
+          verbosity: "full",
+          archived: true,
+          parent: "none",
+        });
+        const sessions = resp.sessions || [];
+        poolSessionsFull.push(...sessions);
+        for (const s of sessions) {
+          poolSessionIds.add(s.sessionId);
+          sessionPoolNames.set(s.sessionId, poolName);
+          if (s.pid) poolPids.add(String(s.pid));
+        }
+      } catch {
+        /* pool not running */
       }
-    } catch {
-      /* pool not running */
     }
   }
 
@@ -929,6 +938,7 @@ async function getSessionsUncached() {
         idleTs: 0,
         staleIdle: false,
         origin: "pool",
+        poolName: sessionPoolNames.get(ps.sessionId) || null,
       });
     }
   }
@@ -945,6 +955,7 @@ async function getSessionsUncached() {
   for (const s of sessions) {
     if (isPoolSession(s)) {
       s.origin = "pool";
+      s.poolName = sessionPoolNames.get(s.sessionId) || null;
     } else if (s.alive) {
       s.origin = originMap.get(String(s.pid)) || "ext";
     } else {
