@@ -1,6 +1,6 @@
 {
   "name": "open-cockpit",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Session cockpit for Claude Code",
   "author": "Elias Schlie <elias@eliasschlie.com>",
   "license": "MIT",
