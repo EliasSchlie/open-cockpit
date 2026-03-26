@@ -448,22 +448,6 @@ async function openInCursor(target) {
   } catch {
     await openInApp("Cursor", target);
   }
-
-  // Switch to the Source Control (Git) tab via Ctrl+Shift+G keystroke
-  if (IS_MAC) {
-    try {
-      await execFileAsync(
-        "osascript",
-        [
-          "-e",
-          'tell application "System Events" to keystroke "g" using {control down, shift down}',
-        ],
-        { timeout: 5000 },
-      );
-    } catch {
-      /* best-effort */
-    }
-  }
 }
 
 // --- iTerm2 AppleScript interaction (macOS-only) ---
