@@ -438,7 +438,11 @@ async function openInApp(appName, target) {
 // which just activates the app without switching to the requested directory).
 async function openInCursor(target) {
   try {
-    await execFileAsync("cursor", [target], { timeout: 10000 });
+    const env = {
+      ...process.env,
+      PATH: joinPathEnv(getExtraPathDirs(), process.env.PATH),
+    };
+    await execFileAsync("cursor", [target], { timeout: 10000, env });
     // CLI opens the folder but doesn't activate — bring Cursor to front
     await activateApp("Cursor");
   } catch {

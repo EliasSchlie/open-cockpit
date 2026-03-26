@@ -108,8 +108,8 @@ describe("getExtraPathDirs", () => {
   it("returns an array of directory paths", () => {
     const dirs = platform.getExtraPathDirs();
     expect(Array.isArray(dirs)).toBe(true);
-    expect(dirs.length).toBeGreaterThan(0);
-
+    // May be empty when run from a terminal where PATH already includes
+    // all login shell dirs (extra dirs = login PATH minus current PATH).
     for (const dir of dirs) {
       expect(typeof dir).toBe("string");
       expect(path.isAbsolute(dir)).toBe(true);
