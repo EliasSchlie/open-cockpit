@@ -437,6 +437,10 @@ function stripAnsi(str) {
  * Initialize pool: start claude-pool daemon and create sessions.
  */
 async function poolInit(size, poolName) {
+  _debugLog(
+    "main",
+    `poolInit called: size=${size} poolName=${poolName || "(default)"}`,
+  );
   const reg = _requireRegistry();
   // Get or create client — pool may not be running yet (init starts it)
   let client = reg.getClient(poolName);
@@ -446,6 +450,7 @@ async function poolInit(size, poolName) {
   }
   size = Math.max(1, Math.min(20, size || DEFAULT_POOL_SIZE));
   const flags = await getPoolFlags(poolName);
+  _debugLog("main", `poolInit: calling client.init(${size}, "${flags}")`);
   const result = await client.init(size, flags);
   _debugLog("main", `poolInit: claude-pool initialized with ${size} slots`);
   return result;

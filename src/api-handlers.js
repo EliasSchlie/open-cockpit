@@ -167,19 +167,27 @@ const sharedHandlers = {
   "pool-init": async ({ size, poolName }) => poolInit(size, poolName),
   "pool-resize": async ({ size, poolName }) => poolResize(size, poolName),
   "pool-read": async ({ poolName } = {}) => {
-    // Return pool data compatible with the old pool.json structure.
-    // Uses debug-slots for accurate per-slot data (index, pid, sessionId, state).
+    // Return pool data with Claude UUIDs for matching against session list.
     if (!_poolRegistry) return null;
     try {
       const client = _requirePoolRegistry().requireConnectedClient(poolName);
-      const resp = await client.debugSlots();
-      const rawSlots = resp.slots || [];
+      const [slotsResp, lsResp] = await Promise.all([
+        client.debugSlots(),
+        client.ls({ verbosity: "full" }),
+      ]);
+      // Build pid→claudeUUID map from ls data
+      const pidToUUID = new Map();
+      for (const s of lsResp.sessions || []) {
+        if (s.pid && s.claudeUUID) pidToUUID.set(s.pid, s.claudeUUID);
+      }
+      const rawSlots = slotsResp.slots || [];
       const slots = rawSlots.map((s) => ({
         index: s.index,
-        sessionId: s.sessionId || null,
+        sessionId: pidToUUID.get(s.pid) || s.sessionId || null,
+        poolSessionId: s.sessionId || null,
         status: s.state || "unknown",
         pid: s.pid || null,
-        termId: s.sessionId || null,
+        termId: pidToUUID.get(s.pid) || s.sessionId || null,
       }));
       const { DEFAULT_POOL_NAME } = require("./pool-registry");
       return {

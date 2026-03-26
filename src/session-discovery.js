@@ -492,7 +492,9 @@ async function getSessionsUncached() {
       poolSessionsFull.push(...poolSess);
       for (const s of poolSess) {
         poolSessionIds.add(s.sessionId);
+        if (s.claudeUUID) poolSessionIds.add(s.claudeUUID);
         sessionPoolNames.set(s.sessionId, poolName);
+        if (s.claudeUUID) sessionPoolNames.set(s.claudeUUID, poolName);
         if (s.pid) poolPids.add(String(s.pid));
       }
     }
@@ -871,7 +873,8 @@ async function getSessionsUncached() {
       }
       sessions.push({
         pid: ps.pid || null,
-        sessionId: ps.sessionId,
+        sessionId: ps.claudeUUID || ps.sessionId,
+        poolSessionId: ps.sessionId,
         alive: !!ps.pid,
         cwd: ps.cwd || ps.spawnCwd || null,
         home: os.homedir(),

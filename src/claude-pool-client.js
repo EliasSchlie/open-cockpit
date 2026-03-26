@@ -282,6 +282,7 @@ class ClaudePoolClient {
   _findDaemonBinary() {
     const candidates = [
       process.env.CLAUDE_POOL_DAEMON,
+      path.join(os.homedir(), "go", "bin", "claude-pool"),
       path.join(os.homedir(), ".local", "bin", "claude-pool"),
       "/usr/local/bin/claude-pool",
       "/opt/homebrew/bin/claude-pool",

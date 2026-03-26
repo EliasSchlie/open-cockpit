@@ -236,19 +236,46 @@ async function findPoolForSession(sessionId) {
     _sessionPoolCache.delete(sessionId);
   }
 
-  // Query all connected pools in parallel
+  const isUUID = sessionId.includes("-");
   const entries = [..._clients.entries()].filter(([, c]) => c.isConnected());
-  const results = await Promise.allSettled(
-    entries.map(async ([name, client]) => {
-      const resp = await client.info(sessionId);
-      if (resp && resp.sessionId) return { poolName: name, client };
-      throw new Error("not found");
-    }),
-  );
-  for (const r of results) {
-    if (r.status === "fulfilled") {
-      _cacheSet(sessionId, r.value.poolName);
-      return r.value;
+
+  if (!isUUID) {
+    // Internal pool ID — use info() directly
+    const results = await Promise.allSettled(
+      entries.map(async ([name, client]) => {
+        const resp = await client.info(sessionId);
+        if (resp && resp.sessionId) return { poolName: name, client };
+        throw new Error("not found");
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        _cacheSet(sessionId, r.value.poolName);
+        return r.value;
+      }
+    }
+  } else {
+    // Claude UUID — search ls results for matching claudeUUID
+    const results = await Promise.allSettled(
+      entries.map(async ([name, client]) => {
+        const resp = await client.ls({ verbosity: "full", archived: true });
+        const match = (resp.sessions || []).find(
+          (s) => s.claudeUUID === sessionId,
+        );
+        if (match)
+          return { poolName: name, client, internalId: match.sessionId };
+        throw new Error("not found");
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        _cacheSet(sessionId, r.value.poolName);
+        // Also cache the internal ID mapping
+        if (r.value.internalId) {
+          _cacheSet(r.value.internalId, r.value.poolName);
+        }
+        return { poolName: r.value.poolName, client: r.value.client };
+      }
     }
   }
   return null;
