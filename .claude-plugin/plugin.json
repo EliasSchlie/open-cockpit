@@ -1,7 +1,7 @@
 {
   "name": "open-cockpit",
   "description": "Session intention tracking \u2014 PID mapping, intention file intro, and change notifications for the Open Cockpit app",
-  "version": "0.1.166",
+  "version": "0.1.167",
   "author": {
     "name": "Elias Schlie"
   },
