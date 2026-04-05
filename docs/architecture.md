@@ -43,7 +43,6 @@
 ### Plugin & CI
 
 - `bin/cockpit-cli` — CLI for observing and interacting with agents ([api.md](api.md))
-- `skills/cockpit-sessions/` — Skill docs for Claude Code (SKILL.md + sub-skills)
 - `hooks/` — Claude Code plugin hooks ([hooks.md](hooks.md))
 - `.claude-plugin/plugin.json` — Plugin manifest
 - `.github/workflows/auto-release.yml` — CI auto-bumps plugin version on push
