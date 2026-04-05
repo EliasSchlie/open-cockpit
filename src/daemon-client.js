@@ -1,218 +1,210 @@
-const net = require("net");
-const path = require("path");
-const fs = require("fs");
-const os = require("os");
-const { spawn: spawnChild } = require("child_process");
-const {
-  DAEMON_SOCKET,
-  DAEMON_SCRIPT,
-  DAEMON_PID_FILE,
-  OPEN_COCKPIT_DIR,
-  isPidAlive,
-} = require("./paths");
+/**
+ * Adapter that delegates to ClaudeTermClient, maintaining the same external
+ * API surface as the old pty-daemon client.
+ *
+ * Translates between old pty-daemon message format and claude-term format.
+ */
+const { ClaudeTermClient } = require("./claude-term-client");
 
-let daemonSocket = null;
-let daemonConnecting = null;
-let daemonReqId = 0;
-const pendingRequests = new Map();
-
-// Set by init() — called by main.js to forward pty push events
-let _onPtyEvent = null;
+let _client = null;
 let _debugLog = () => {};
 
+// Track shell-tab terminals (vs pool sessions)
+const knownTermIds = new Set();
+
 function init({ onPtyEvent, debugLog }) {
-  _onPtyEvent = onPtyEvent;
   if (debugLog) _debugLog = debugLog;
+
+  _client = new ClaudeTermClient({
+    onData: (termId, data) => {
+      if (onPtyEvent) onPtyEvent({ type: "data", termId, data });
+    },
+    onReplay: (termId, data) => {
+      if (onPtyEvent) onPtyEvent({ type: "replay", termId, data });
+    },
+    onExit: (termId, exitCode) => {
+      knownTermIds.delete(termId);
+      if (onPtyEvent) onPtyEvent({ type: "exit", termId, exitCode });
+    },
+    onLifecycle: (msg) => {
+      if (onPtyEvent) onPtyEvent(msg);
+    },
+    debugLog: _debugLog,
+  });
+}
+
+function getClient() {
+  return _client;
 }
 
 function isDaemonRunning() {
-  try {
-    const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim(), 10);
-    return isPidAlive(pid);
-  } catch {
-    return false;
-  }
-}
-
-function getDaemonExecPath() {
-  if (process.platform !== "darwin") return process.execPath;
-  const link = path.join(OPEN_COCKPIT_DIR, "electron-node");
-  try {
-    const target = fs.readlinkSync(link);
-    if (target === process.execPath) return link;
-    fs.unlinkSync(link);
-  } catch (e) {
-    if (e.code !== "ENOENT")
-      _debugLog("electron-node symlink issue:", e.message);
-  }
-  fs.symlinkSync(process.execPath, link);
-  return link;
-}
-
-function startDaemon() {
-  return new Promise((resolve, reject) => {
-    if (isDaemonRunning()) return resolve();
-    const child = spawnChild(getDaemonExecPath(), [DAEMON_SCRIPT], {
-      detached: true,
-      stdio: "ignore",
-      cwd: os.homedir(),
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: "1",
-        OPEN_COCKPIT_DAEMON_SOCKET: DAEMON_SOCKET,
-        OPEN_COCKPIT_DAEMON_PID: DAEMON_PID_FILE,
-        OPEN_COCKPIT_DIR: OPEN_COCKPIT_DIR,
-      },
-    });
-    child.unref();
-    let attempts = 0;
-    const check = () => {
-      if (fs.existsSync(DAEMON_SOCKET)) return resolve();
-      if (++attempts > 40) return reject(new Error("Daemon failed to start"));
-      setTimeout(check, 100);
-    };
-    setTimeout(check, 50);
-  });
-}
-
-function handleDaemonMessage(msg) {
-  if (msg.id && pendingRequests.has(msg.id)) {
-    const { resolve, reject } = pendingRequests.get(msg.id);
-    pendingRequests.delete(msg.id);
-    if (msg.type === "error") {
-      reject(new Error(msg.error || "Daemon error"));
-    } else {
-      resolve(msg);
-    }
-    return;
-  }
-  if (_onPtyEvent) _onPtyEvent(msg);
-}
-
-function connectToDaemon() {
-  if (daemonSocket && !daemonSocket.destroyed) return Promise.resolve();
-  if (daemonConnecting) return daemonConnecting;
-
-  daemonConnecting = new Promise((resolve, reject) => {
-    const sock = net.createConnection(DAEMON_SOCKET);
-    let buf = "";
-    let settled = false;
-
-    sock.on("connect", () => {
-      if (settled) return;
-      settled = true;
-      daemonSocket = sock;
-      daemonConnecting = null;
-      resolve();
-    });
-
-    sock.on("data", (chunk) => {
-      buf += chunk.toString();
-      let idx;
-      while ((idx = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, idx);
-        buf = buf.slice(idx + 1);
-        if (!line.trim()) continue;
-        try {
-          handleDaemonMessage(JSON.parse(line));
-        } catch (err) {
-          console.error("[main] Daemon parse error:", err.message);
-        }
-      }
-    });
-
-    sock.on("close", () => {
-      daemonSocket = null;
-      daemonConnecting = null;
-      for (const [, { reject: rej }] of pendingRequests) {
-        rej(new Error("Daemon disconnected"));
-      }
-      pendingRequests.clear();
-    });
-
-    sock.on("error", (err) => {
-      if (!settled) {
-        settled = true;
-        daemonConnecting = null;
-        reject(err);
-      }
-    });
-  });
-
-  return daemonConnecting;
+  if (!_client) return false;
+  return _client.isConnected();
 }
 
 async function ensureDaemon() {
-  if (daemonSocket && !daemonSocket.destroyed) return;
-  await startDaemon();
-  await connectToDaemon();
+  if (!_client) throw new Error("daemon-client not initialized (call init())");
+  await _client.ensureConnected();
 }
 
+/**
+ * Translate and send a message in the old pty-daemon format.
+ * Fire-and-forget — no response expected.
+ */
 function daemonSend(msg) {
-  if (!daemonSocket || daemonSocket.destroyed) {
-    throw new Error("Daemon socket is not connected");
-  }
-  daemonSocket.write(JSON.stringify(msg) + "\n");
+  if (!_client) throw new Error("daemon-client not initialized");
+  const translated = _translateMessage(msg);
+  _client.sendSafe(translated);
 }
 
 async function daemonSendSafe(msg) {
   try {
-    return await daemonSend(msg);
+    return daemonSend(msg);
   } catch (err) {
     console.error(
-      "daemonSend failed (daemon may be disconnected):",
+      "daemonSend failed (claude-term may be disconnected):",
       err.message,
     );
     return null;
   }
 }
 
+/**
+ * Send a request and wait for the translated response.
+ */
 async function daemonRequest(msg) {
+  if (!_client) throw new Error("daemon-client not initialized");
   await ensureDaemon();
-  return new Promise((resolve, reject) => {
-    const id = ++daemonReqId;
-    msg.id = id;
-    pendingRequests.set(id, { resolve, reject });
-    daemonSend(msg);
-    setTimeout(() => {
-      if (pendingRequests.has(id)) {
-        pendingRequests.delete(id);
-        reject(new Error("Daemon request timeout"));
-      }
-    }, 10000);
-  });
+
+  const handler = _getHandler(msg.type);
+  return handler(msg);
 }
 
-async function stopDaemon() {
-  try {
-    const pidStr = fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim();
-    const pid = parseInt(pidStr, 10);
-    if (isPidAlive(pid)) {
-      process.kill(pid, "SIGTERM");
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 100));
-        if (!isPidAlive(pid)) break;
-      }
-      // Escalate to SIGKILL if still alive
-      if (isPidAlive(pid)) {
-        _debugLog("daemon SIGTERM timed out, sending SIGKILL");
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          /* already dead */
-        }
-      }
-    }
-  } catch {
-    /* daemon may already be dead */
+// --- Message translation ---
+
+function _termId(msg) {
+  return msg.termId || msg.term_id;
+}
+
+function _translateMessage(msg) {
+  switch (msg.type) {
+    case "write":
+      return { type: "write", term_id: _termId(msg), data: msg.data };
+    case "resize":
+      return {
+        type: "resize",
+        term_id: _termId(msg),
+        cols: msg.cols,
+        rows: msg.rows,
+      };
+    default:
+      return msg;
   }
-  destroySocket();
+}
+
+function _getHandler(type) {
+  switch (type) {
+    case "spawn":
+      return _handleSpawn;
+    case "write":
+      return _handleWrite;
+    case "resize":
+      return _handleResize;
+    case "kill":
+      return _handleKill;
+    case "list":
+      return _handleList;
+    case "read-buffer":
+      return _handleReadBuffer;
+    case "attach":
+      return _handleAttach;
+    case "detach":
+      return _handleDetach;
+    case "set-session":
+      return _handleSetSession;
+    case "ping":
+      return _handlePing;
+    default:
+      return async (m) => _client.request(m);
+  }
+}
+
+async function _handleSpawn(msg) {
+  const opts = {};
+  if (msg.cmd) opts.cmd = msg.cmd;
+  if (msg.args) opts.args = msg.args;
+  if (msg.cwd) opts.cwd = msg.cwd;
+  if (msg.cols) opts.cols = msg.cols;
+  if (msg.rows) opts.rows = msg.rows;
+  if (msg.env) opts.env = msg.env;
+  if (msg.owner || msg.sessionId) opts.owner = msg.owner || msg.sessionId;
+
+  const { termId, pid } = await _client.spawn(opts);
+  knownTermIds.add(termId);
+  return { type: "spawned", termId, pid };
+}
+
+async function _handleWrite(msg) {
+  _client.write(_termId(msg), msg.data);
+  return { type: "ok" };
+}
+
+async function _handleResize(msg) {
+  await _client.resize(_termId(msg), msg.cols, msg.rows);
+  return { type: "ok" };
+}
+
+async function _handleKill(msg) {
+  const tid = _termId(msg);
+  knownTermIds.delete(tid);
+  await _client.kill(tid);
+  return { type: "ok" };
+}
+
+async function _handleList(_msg) {
+  // List all terminals (not filtered by owner) for OC compatibility.
+  // ClaudeTermClient.list() already normalizes field names.
+  const terminals = await _client.list(null);
+  return { type: "list-result", ptys: terminals };
+}
+
+async function _handleReadBuffer(msg) {
+  const buffer = await _client.read(_termId(msg));
+  return { type: "read-buffer-result", termId: _termId(msg), buffer };
+}
+
+async function _handleAttach(msg) {
+  await _client.attach(_termId(msg));
+  return { type: "attached", termId: _termId(msg) };
+}
+
+async function _handleDetach(msg) {
+  _client.detach(_termId(msg));
+  return { type: "ok" };
+}
+
+async function _handleSetSession(msg) {
+  await _client.setOwner(_termId(msg), msg.sessionId);
+  return { type: "session-set", termId: _termId(msg) };
+}
+
+async function _handlePing(_msg) {
+  await _client.ping();
+  return { type: "pong" };
+}
+
+// --- Lifecycle ---
+
+async function stopDaemon() {
+  // No-op — we don't own the claude-term daemon
+  _debugLog(
+    "daemon-client",
+    "stopDaemon() is a no-op (claude-term owned externally)",
+  );
 }
 
 function destroySocket() {
-  if (daemonSocket && !daemonSocket.destroyed) {
-    daemonSocket.destroy();
-  }
+  if (_client) _client.destroy();
 }
 
 module.exports = {
@@ -224,4 +216,6 @@ module.exports = {
   daemonSendSafe,
   daemonRequest,
   destroySocket,
+  getClient,
+  knownTermIds,
 };

@@ -101,7 +101,7 @@ function getDirColor(session) {
 
 // Build a fingerprint for a session to detect changes
 function sessionFingerprint(s) {
-  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}|${s.parentSessionId || ""}`;
+  return `${s.sessionId}|${s.status}|${s.staleIdle ? "stale" : ""}|${s.intentionHeading || ""}|${s.intentionPreview || ""}|${s.cwd || ""}|${s.origin || ""}|${s.poolName || ""}|${s.parentSessionId || ""}`;
 }
 
 // Track previous session fingerprints for diff-based update
@@ -377,8 +377,12 @@ function createSessionItem(s, depth = 0) {
     : "background: transparent";
   const showOrigin =
     s.origin && s.status !== STATUS.OFFLOADED && s.status !== STATUS.ARCHIVED;
+  const originLabel =
+    s.origin === "pool" && s.poolName && s.poolName !== "default"
+      ? s.poolName
+      : s.origin;
   const originTag = showOrigin
-    ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(s.origin)}</span>`
+    ? `<span class="session-origin-tag session-origin-${escapeHtml(s.origin)}">${escapeHtml(originLabel)}</span>`
     : "";
   const staleTag = s.staleIdle
     ? `<span class="session-origin-tag session-origin-stale">stale</span>`
@@ -552,57 +556,51 @@ function showSessionContextMenu(e, session) {
   });
 }
 
-// Show read-only snapshot viewer
-function showSnapshotViewer(session, snapshotText) {
+// Show read-only transcript viewer
+function showSnapshotViewer(session, transcriptText) {
   createOverlayDialog({
     id: "snapshot-viewer",
     html: `
       <div class="snapshot-dialog">
         <div class="snapshot-header">
-          <span>${escapeHtml(session.intentionHeading || "Snapshot")}</span>
+          <span>${escapeHtml(session.intentionHeading || "Transcript")}</span>
           <button class="snapshot-close">\u2715</button>
         </div>
-        <pre class="snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
+        <pre class="snapshot-content">${transcriptText ? escapeHtml(transcriptText) : "(no transcript available)"}</pre>
       </div>
     `,
   });
 }
 
-// Show snapshot content inline as a dock tab for offloaded/archived sessions
+// Show session transcript inline as a dock tab for archived sessions
 async function showInlineSnapshot(session, gen) {
-  const isArchived = session.status === STATUS.ARCHIVED;
-  const btnLabel = isArchived ? "Restart" : "Resume";
+  const btnLabel = "Resume";
 
-  let snapshotText = null;
-  if (session.hasSnapshot) {
-    try {
-      snapshotText = await window.api.readOffloadSnapshot(session.sessionId);
-    } catch (err) {
-      debugLog("snapshot", `failed to read snapshot: ${err.message}`);
-    }
-    if (gen !== state.sessionGeneration) return;
+  let transcriptText = null;
+  try {
+    transcriptText = await window.api.readSessionSnapshot(session.sessionId);
+  } catch (err) {
+    debugLog("session", `failed to read transcript: ${err.message}`);
   }
+  if (gen !== state.sessionGeneration) return;
 
-  // Create snapshot content element
   const container = document.createElement("div");
   container.className = "dock-snapshot-content";
   container.innerHTML = `
     <div class="inline-snapshot-header">
-      <span class="inline-snapshot-label">${isArchived ? "Archived" : "Offloaded"} Session</span>
+      <span class="inline-snapshot-label">Archived Session</span>
       <button class="inline-snapshot-restart">${btnLabel}</button>
     </div>
-    <pre class="snapshot-content inline-snapshot-content">${snapshotText ? escapeHtml(snapshotText) : "(no snapshot available)"}</pre>
+    <pre class="snapshot-content inline-snapshot-content">${transcriptText ? escapeHtml(transcriptText) : "(no transcript available)"}</pre>
   `;
 
   container
     .querySelector(".inline-snapshot-restart")
     .addEventListener("click", async () => {
-      if (isArchived) {
-        try {
-          await window.api.unarchiveSession(session.sessionId);
-        } catch (err) {
-          debugLog("snapshot", `unarchive failed: ${err.message}`);
-        }
+      try {
+        await window.api.unarchiveSession(session.sessionId);
+      } catch (err) {
+        debugLog("session", `unarchive failed: ${err.message}`);
       }
       await _actions.resumeOffloadedSession(session);
     });
@@ -612,7 +610,7 @@ async function showInlineSnapshot(session, gen) {
   _actions.ensureDock();
   state.dock.registerTab(TAB_SNAPSHOT, {
     type: TAB_SNAPSHOT,
-    label: isArchived ? "Archived" : "Snapshot",
+    label: "Archived",
     closable: false,
     contentEl: container,
   });

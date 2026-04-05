@@ -245,15 +245,17 @@ async function showSettings(initialTab = "general") {
     poolFlags,
     updateState,
     minFresh,
+    poolsList,
   ] = await Promise.all([
-    window.api.poolHealth(),
+    window.api.poolHealth().catch(() => ({ initialized: false })),
     window.api.getShortcuts(),
     window.api.getDefaultShortcuts(),
     window.api.getAppVersion(),
     window.api.getPluginVersion(),
-    window.api.poolGetFlags(),
+    window.api.poolGetFlags().catch(() => "--dangerously-skip-permissions"),
     window.api.getUpdateState(),
-    window.api.poolGetMinFresh(),
+    window.api.poolGetMinFresh().catch(() => 1),
+    window.api.listPools().catch(() => ({ pools: [] })),
   ]);
 
   let keyHandler = null;
@@ -280,7 +282,7 @@ async function showSettings(initialTab = "general") {
           <div class="settings-content">
             ${renderGeneralTab(version, pluginVersion, updateState)}
             ${renderShortcutsTab(shortcuts, defaults)}
-            ${renderPoolTab(health, poolFlags, minFresh)}
+            ${renderPoolTab(health, poolFlags, minFresh, poolsList)}
           </div>
         </div>
       </div>
@@ -934,11 +936,37 @@ function wireGeneralUpdates(overlay) {
 }
 
 // --- Pool tab ---
-function renderPoolTab(health, flags, minFresh) {
+function renderPoolTab(health, flags, minFresh, poolsList) {
+  const pools = poolsList?.pools || [];
   const slotsHtml = renderPoolSlotsHtml(health);
   const countsHtml = renderPoolCountsHtml(health);
   const escapedFlags = escapeHtml(flags || "");
   const minFreshVal = typeof minFresh === "number" ? minFresh : 1;
+
+  // Render pool list (all known pools from registry)
+  const poolListHtml =
+    pools.length > 0
+      ? pools
+          .map((p) => {
+            const statusClass = p.connected
+              ? "pool-connected"
+              : "pool-disconnected";
+            const statusLabel = p.connected ? "connected" : "stopped";
+            const healthInfo = p.health
+              ? ` — ${p.health.slots?.length || 0} slots`
+              : "";
+            return `
+          <div class="pool-list-item ${statusClass}" data-pool-name="${escapeHtml(p.name)}">
+            <span class="pool-list-name">${escapeHtml(p.name)}</span>
+            <span class="pool-list-status">${statusLabel}${healthInfo}</span>
+            <div class="pool-list-actions">
+              ${!p.connected ? `<button class="offload-menu-btn pool-connect-btn" data-pool="${escapeHtml(p.name)}">Connect</button>` : ""}
+              <button class="offload-menu-btn pool-remove-btn" data-pool="${escapeHtml(p.name)}">Remove</button>
+            </div>
+          </div>`;
+          })
+          .join("")
+      : '<div class="pool-list-empty">No pools configured</div>';
 
   const flagsHtml = `
     <div class="pool-flags-row">
@@ -951,6 +979,16 @@ function renderPoolTab(health, flags, minFresh) {
   return `
     <div class="settings-tab-panel" data-tab="pool">
       <div class="settings-section">
+        <h3 class="settings-section-title">Pools</h3>
+        <div class="pool-list">${poolListHtml}</div>
+        <div class="pool-add-row">
+          <input type="text" class="pool-add-name" placeholder="Pool name" spellcheck="false">
+          <input type="number" class="pool-add-size" value="5" min="1" max="20" title="Pool size">
+          <button class="offload-menu-btn offload-menu-load pool-add-btn">Add Pool</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3 class="settings-section-title">Default Pool</h3>
         <div class="pool-health-summary">${countsHtml}</div>
         ${
           health.initialized
@@ -1028,6 +1066,75 @@ function wirePoolTab(overlay, health, closeDialog, applyNavHighlight) {
         (s) => s.index === clickedSlotIndex,
       );
       if (slot) openSlotTerminalPopup(slot);
+    });
+  }
+
+  // Pool list: Add pool
+  const addPoolBtn = overlay.querySelector(".pool-add-btn");
+  if (addPoolBtn) {
+    addPoolBtn.addEventListener("click", async () => {
+      const nameInput = overlay.querySelector(".pool-add-name");
+      const sizeInput = overlay.querySelector(".pool-add-size");
+      const name = nameInput?.value?.trim();
+      const size = parseInt(sizeInput?.value, 10) || 5;
+      if (!name) {
+        showNotification("Pool name required");
+        return;
+      }
+      try {
+        await withButtonLoading(addPoolBtn, "Adding...", () =>
+          window.api.addPool(name, size),
+        );
+        showNotification(`Pool '${name}' added (${size} slots)`);
+        await _actions.loadSessions();
+        showSettings("pool");
+      } catch (err) {
+        showNotification(`Error: ${err.message}`);
+      }
+    });
+    // Allow Enter to submit
+    const nameInput = overlay.querySelector(".pool-add-name");
+    if (nameInput) {
+      nameInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          addPoolBtn.click();
+        }
+        e.stopPropagation();
+      });
+    }
+  }
+
+  // Pool list: Connect / Remove buttons (event delegation)
+  const poolListEl = overlay.querySelector(".pool-list");
+  if (poolListEl) {
+    poolListEl.addEventListener("click", async (e) => {
+      const connectBtn = e.target.closest(".pool-connect-btn");
+      if (connectBtn) {
+        const poolName = connectBtn.dataset.pool;
+        try {
+          await window.api.connectPool(poolName);
+          showNotification(`Connected to pool '${poolName}'`);
+          await _actions.loadSessions();
+          showSettings("pool");
+        } catch (err) {
+          showNotification(`Error: ${err.message}`);
+        }
+        return;
+      }
+
+      const removeBtn = e.target.closest(".pool-remove-btn");
+      if (removeBtn) {
+        const poolName = removeBtn.dataset.pool;
+        try {
+          await window.api.removePool(poolName);
+          showNotification(`Pool '${poolName}' removed`);
+          await _actions.loadSessions();
+          showSettings("pool");
+        } catch (err) {
+          showNotification(`Error: ${err.message}`);
+        }
+      }
     });
   }
 

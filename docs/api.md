@@ -1,6 +1,6 @@
 # Programmatic API
 
-Unix socket API at `~/.open-cockpit/api.sock` for external process control. Protocol: newline-delimited JSON (same as PTY daemon).
+Unix socket API at `~/.open-cockpit/api.sock` for external process control. Protocol: newline-delimited JSON.
 
 ## CLI Quick Reference
 
@@ -176,34 +176,28 @@ Send JSON with `type` and optional `id`. Response echoes `id` back.
 | `pool-read` | -- | `{ type: "pool", pool }` |
 | `pool-destroy` | -- | `{ type: "ok" }` |
 
-### Pool Interaction (sub-claude compatible)
+### Pool Interaction
+
+Pool operations are delegated to the claude-pool daemon. All commands use `sessionId` (not slot indices).
+
 | Command | Fields | Response |
 |---------|--------|----------|
-| `pool-start` | `prompt` | `{ type: "started", sessionId, termId, slotIndex }` |
-| `pool-resume` | `sessionId` | `{ type: "resumed", sessionId, termId, slotIndex }` |
-| `pool-followup` | `sessionId`, `prompt` | `{ type: "started", sessionId, termId, slotIndex }` |
-| `pool-wait` | `sessionId` or `slotIndex` (optional), `timeout` (optional, ms, default 300000) | `{ type: "result", sessionId, buffer }` |
-| `pool-capture` | `sessionId` or `slotIndex` | `{ type: "buffer", sessionId, slotIndex, buffer }` |
-| `pool-result` | `sessionId` or `slotIndex` | `{ type: "result", sessionId, slotIndex, buffer }` -- errors if still running |
-| `pool-input` | (`sessionId` or `slotIndex`), `data` | `{ type: "ok" }` |
+| `pool-start` | `prompt`, `parentSessionId` (optional) | `{ type: "started", sessionId }` |
+| `pool-resume` | `sessionId` | Result from claude-pool unarchive |
+| `pool-followup` | `sessionId`, `prompt` | `{ type: "started", sessionId }` |
+| `pool-wait` | `sessionId`, `timeout` (optional, ms, default 300000) | `{ type: "result", sessionId, buffer }` |
+| `pool-capture` | `sessionId` | `{ type: "buffer", sessionId, buffer }` |
+| `pool-input` | `sessionId`, `data` | `{ type: "ok" }` |
+| `pool-stop-session` | `sessionId` | `{ type: "ok", sessionId }` |
+| `pool-pin` | `sessionId`, `duration` (optional, seconds, default 120) | `{ type: "ok" }` |
+| `pool-unpin` | `sessionId` | `{ type: "ok" }` |
 | `pool-clean` | -- | `{ type: "cleaned", count }` |
 
-`pool-start` acquires a fresh slot (offloads LRU idle if none available), sends the prompt, and marks the slot busy.
-`pool-resume` resumes an offloaded/archived session into a fresh slot (offloads LRU idle if needed). Unarchives if needed.
-`pool-followup` sends a follow-up to an idle session (errors if not idle).
-`pool-wait` long-polls until the session (or any busy session if no ID) becomes idle. Accepts `slotIndex` as alternative to `sessionId` — useful for `resume` where the session ID changes.
-`pool-result` returns the buffer only if the session is not running.
-`pool-clean` offloads all idle sessions to free their slots.
-
-### Slot Access (by index)
-
-Direct slot access by pool index. Works even on error-status slots that have no sessionId -- useful for debugging stuck slots and external tooling.
-
-| Command | Fields | Response |
-|---------|--------|----------|
-| `slot-read` | `slotIndex` | `{ type: "buffer", slotIndex, sessionId, buffer }` |
-| `slot-write` | `slotIndex`, `data` | `{ type: "ok" }` |
-| `slot-status` | `slotIndex` | `{ type: "slot", slot: { index, termId, pid, status, sessionId, healthStatus, createdAt } }` |
+`pool-start` sends a prompt to a fresh session in claude-pool.
+`pool-resume` resumes an archived session via claude-pool.
+`pool-followup` sends a follow-up to an idle session via claude-pool.
+`pool-wait` long-polls until the session becomes idle.
+`pool-clean` archives all idle sessions.
 
 ### Sessions
 | Command | Fields | Response |
@@ -312,9 +306,9 @@ For external tooling, either use `pool-start`/`pool-followup`/`prompt` (which ha
 
 The app trusts idle signal files directly — there is no mtime comparison between the transcript and the signal. However, `pool-wait` polls session status at intervals, so there may be a brief delay (up to a few seconds) between a session completing and `pool-wait` returning.
 
-### Daemon write safety (`daemonSendSafe`)
+### Write safety (`daemonSendSafe`)
 
-Write operations routed through the PTY daemon (`pool-input`, `slot-write`, `session-term-write`, `pty-write`, trust prompt acceptance) use a safe wrapper that returns `null` instead of throwing when the daemon is disconnected. Callers should not assume these writes always succeed — the session may have exited or the daemon may have restarted.
+Write operations routed through claude-term (`pty-write`, `session-term-write`) or claude-pool (`pool-input`) use a safe wrapper that returns `null` instead of throwing when the backend is disconnected. Callers should not assume these writes always succeed — the session may have exited or the daemon may have restarted.
 
 ### Auto-archiving dead sessions
 

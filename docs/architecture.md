@@ -6,21 +6,19 @@
 
 - `src/main.js` — Orchestrator: window, IPC wiring, module init
 - `src/paths.js` — Shared path constants for all main-process modules
-- `src/pty-daemon.js` — **PTY daemon**: standalone process managing all terminals ([pty-daemon.md](pty-daemon.md))
+- `src/claude-term-client.js` — Node.js socket client for claude-term (shell terminals)
+- `src/claude-pool-client.js` — Node.js socket client for claude-pool (session pools)
+- `src/daemon-client.js` — claude-term adapter (legacy pty-daemon API surface)
 - `src/api-server.js` — **API server**: Unix socket API for external process control ([api.md](api.md))
-- `src/daemon-client.js` — PTY daemon socket communication (init pattern)
 - `src/session-discovery.js` — Session state detection, caching, origin tagging
-- `src/pool-manager.js` — Pool lifecycle, offload/archive, terminal helpers
+- `src/pool-manager.js` — Pool lifecycle (delegates to claude-pool), intentions, session graph, offload meta
 - `src/api-handlers.js` — Shared IPC/API handler registry + API-only handlers
 - `src/preload.js` — Context bridge (`api` object)
 - `src/shortcuts.js` — Configurable keyboard shortcuts (defaults, overrides, accelerator matching)
-- `src/pool.js` — Pure pool data structures (readPool, writePool, computePoolHealth)
-- `src/pool-lock.js` — Async mutex for pool.json read-modify-write cycles (`withPoolLock`)
 - `src/session-statuses.js` — Shared status string constants (STATUS enum)
 - `src/platform.js` — Cross-platform abstraction (process introspection, CWD detection, shell config)
 - `src/parse-origins.js` — Session origin detection from `ps eww` output (pool/sub-claude/ext)
 - `src/secure-fs.js` — File helpers: owner-only write (mode 0o600/0o700), `readJsonSync(path, fallback)`
-- `src/terminal-input.js` — Headless terminal emulator for detecting text in Claude's TUI input box
 - `src/sort-sessions.js` — Session display ordering (used by main.js)
 
 ### Renderer
@@ -54,10 +52,8 @@ All paths derive from `OPEN_COCKPIT_DIR` (defaults to `~/.open-cockpit/`). See [
 
 | Path | Purpose |
 |------|---------|
-| `pool.json` | Pool state |
 | `pool-settings.json` | Pool settings (session flags) |
 | `session-pids/<PID>` | Session ID mapping (written by hooks) |
-| `pool-spawned-pids/<PID>` | PIDs spawned by pool manager (for orphan cleanup) |
 | `intentions/<session_id>.md` | Intention files |
 | `idle-signals/<PID>` | Idle signal files |
 | `session-graph.json` | Parent-child relationships |
@@ -65,8 +61,6 @@ All paths derive from `OPEN_COCKPIT_DIR` (defaults to `~/.open-cockpit/`). See [
 | `shortcuts.json` | Keyboard shortcut overrides |
 | `setup-scripts/` | Setup scripts for Cmd+N |
 | `agents/` | Global agent scripts ([agents.md](agents.md)) |
-| `active-sessions.json` | Crash-recovery registry (continuously updated) |
 | `colors.json` | Directory color overrides |
 | `debug.log` | Debug log (rotates at 2 MB) |
 | `api.sock` | API socket |
-| `pty-daemon.sock` / `pty-daemon.pid` | PTY daemon |

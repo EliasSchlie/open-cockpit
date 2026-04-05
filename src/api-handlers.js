@@ -10,14 +10,8 @@ function splitArgs(str) {
     a.replace(/^["']|["']$/g, ""),
   );
 }
-const {
-  findSlotBySessionId: findSlotBySessionIdInPool,
-  findSlotByIndex: findSlotByIndexInPool,
-  resolveSlot: resolveSlotInPool,
-} = require("./pool");
+
 const { STATUS, POOL_STATUS, INITIATOR } = require("./session-statuses");
-const { IDLE_SIGNALS_DIR } = require("./paths");
-const { secureWriteFileSync } = require("./secure-fs");
 const {
   daemonRequest,
   daemonSendSafe,
@@ -30,19 +24,12 @@ const {
   triggerPollOnWrite,
 } = require("./session-discovery");
 const {
-  withPoolLock,
-  poll,
-  readTerminalBuffer,
   stripAnsi,
-  sendCommandToTerminal,
   validateSessionId,
   validateTermId,
   readSessionGraph,
   recordSessionRelation,
   enrichSessionsWithGraphData,
-  readPool,
-  writePool,
-  syncPoolStatuses,
   archiveSession,
   unarchiveSession,
   poolInit,
@@ -55,17 +42,21 @@ const {
   getMinFreshSlots,
   setMinFreshSlots,
   poolResume,
-  withFreshSlot,
   readIntention,
   writeIntention,
   getCachedClaudePath,
-  acceptTrustPrompt,
 } = require("./pool-manager");
 
 let _getMainWindow = () => null;
+let _onSessionArchived = null;
 
-function init({ getMainWindow }) {
+/** @type {import('./pool-registry') | null} */
+let _poolRegistry = null;
+
+function init({ getMainWindow, poolRegistry, onSessionArchived }) {
   _getMainWindow = getMainWindow;
+  if (poolRegistry) _poolRegistry = poolRegistry;
+  if (onSessionArchived) _onSessionArchived = onSessionArchived;
 }
 
 /** Get main window or throw if unavailable. */
@@ -75,84 +66,35 @@ function _requireMainWindow() {
   return win;
 }
 
-// --- Pool interaction helpers (used by API-only handlers) ---
-
-function findSlotBySessionId(sessionId) {
-  return findSlotBySessionIdInPool(readPool(), sessionId);
+/** Require pool registry or throw. */
+function _requirePoolRegistry() {
+  if (!_poolRegistry) throw new Error("pool registry not initialized");
+  return _poolRegistry;
 }
 
-function findSlotByIndex(slotIndex) {
-  return findSlotByIndexInPool(readPool(), slotIndex);
-}
-
-function resolveSlot(msg) {
-  return resolveSlotInPool(readPool(), msg);
-}
-
-async function getTerminalBuffer(termId) {
-  const resp = await daemonRequest({ type: "list" });
-  const pty = resp.ptys.find((p) => p.termId === termId);
-  return pty ? pty.buffer || "" : "";
-}
+// --- Session terminal helpers (using claude-term via daemon-client) ---
 
 async function getSessionTerminals(sessionId) {
   validateSessionId(sessionId);
   const resp = await daemonRequest({ type: "list" });
-  const pool = readPool();
-  const slot = pool?.slots.find((s) => s.sessionId === sessionId);
-  const tuiTermId = slot?.termId ?? null;
-
   const terms = resp.ptys
-    .filter((p) => p.sessionId === sessionId && !p.exited)
-    .sort((a, b) => a.termId - b.termId);
+    .filter((p) => p.owner === sessionId && p.alive !== false)
+    .sort((a, b) =>
+      String(a.termId || "").localeCompare(String(b.termId || "")),
+    );
 
   let shellCount = 0;
   return terms.map((p, i) => {
-    const isTui = p.termId === tuiTermId;
-    if (!isTui) shellCount++;
+    shellCount++;
+    const termId = p.term_id ?? p.termId;
     return {
-      termId: p.termId,
+      termId,
       index: i,
-      label: isTui ? "Claude" : `Shell ${shellCount}`,
-      isTui,
+      label: `Shell ${shellCount}`,
       pid: p.pid,
       cwd: p.cwd,
-      buffer: p.buffer || "",
     };
   });
-}
-
-async function sendPromptToTerminal(termId, prompt) {
-  await sendCommandToTerminal(termId, prompt);
-}
-
-async function getEffectiveSlotStatus(slot) {
-  const sessions = await getSessions();
-  const session = sessions.find((s) => s.sessionId === slot.sessionId);
-  if (!session) return slot.status;
-  if (session.status === STATUS.IDLE) return POOL_STATUS.IDLE;
-  if (session.status === STATUS.PROCESSING) return POOL_STATUS.BUSY;
-  if (session.status === STATUS.FRESH) return POOL_STATUS.FRESH;
-  if (session.status === STATUS.TYPING) return POOL_STATUS.TYPING;
-  return slot.status;
-}
-
-function waitForSessionIdle(sessionId, timeoutMs = 300000) {
-  return poll(
-    async () => {
-      const sessions = await getSessions();
-      const session = sessions.find((s) => s.sessionId === sessionId);
-      if (session && session.status === STATUS.IDLE) return true;
-      if (session && !session.alive) throw new Error("Session process died");
-      return null;
-    },
-    {
-      interval: 1000,
-      initialDelay: 1000,
-      timeout: timeoutMs,
-      label: "waiting for session to become idle",
-    },
-  );
 }
 
 // --- Shared handler registry (serves both IPC and API) ---
@@ -163,18 +105,27 @@ function waitForSessionIdle(sessionId, timeoutMs = 300000) {
 const sharedHandlers = {
   "get-sessions": async () => {
     const sessions = await getSessions();
-    // syncPoolStatuses returns the pool with up-to-date slot statuses.
-    // We annotate poolStatus here (not in getSessions) to avoid stale reads.
-    const pool = await syncPoolStatuses(sessions);
-    if (pool) {
-      const slotMap = new Map(
-        pool.slots.filter((s) => s.sessionId).map((s) => [s.sessionId, s]),
+    // Pool status enrichment via claude-pool (if connected)
+    // Enrich sessions with pool status from all connected pools (parallel)
+    if (_poolRegistry) {
+      const clients = _poolRegistry.getConnectedClients();
+      const results = await Promise.allSettled(
+        [...clients.entries()].map(async ([poolName, client]) => {
+          const poolSessions = await client.ls({ verbosity: "flat" });
+          return { poolName, sessions: poolSessions.sessions || [] };
+        }),
       );
-      for (const s of sessions) {
-        const slot = slotMap.get(s.sessionId);
-        if (slot) {
-          s.poolStatus = slot.status;
-          if (slot.pinnedUntil) s.pinnedUntil = slot.pinnedUntil;
+      for (const r of results) {
+        if (r.status !== "fulfilled") continue;
+        const { poolName, sessions: poolSess } = r.value;
+        const poolMap = new Map(poolSess.map((s) => [s.sessionId, s]));
+        for (const s of sessions) {
+          const ps = poolMap.get(s.sessionId);
+          if (ps) {
+            s.poolStatus = ps.status;
+            s.poolName = poolName;
+            if (ps.pinned) s.pinnedUntil = ps.pinned;
+          }
         }
       }
     }
@@ -197,7 +148,7 @@ const sharedHandlers = {
       args,
       sessionId,
     });
-    return { termId: resp.termId, pid: resp.pid };
+    return { termId: resp.termId ?? resp.term_id, pid: resp.pid };
   },
   "pty-write": async ({ termId, data }) => {
     validateTermId(termId);
@@ -213,25 +164,52 @@ const sharedHandlers = {
     validateTermId(termId);
     await daemonRequest({ type: "kill", termId });
   },
-  "pool-init": async ({ size }) => poolInit(size),
-  "pool-resize": async ({ size }) => poolResize(size),
-  "pool-health": async () => getPoolHealth(),
-  "pool-read": () => readPool(),
-  "pool-destroy": async () => poolDestroy(),
-  "pool-clean": async () => poolClean(),
-  "pool-get-flags": () => getPoolFlags(),
-  "pool-set-flags": ({ flags }) => {
-    setPoolFlags(flags);
+  "pool-init": async ({ size, poolName }) => poolInit(size, poolName),
+  "pool-resize": async ({ size, poolName }) => poolResize(size, poolName),
+  "pool-read": async ({ poolName } = {}) => {
+    // Return pool data compatible with the old pool.json structure.
+    // Uses debug-slots for accurate per-slot data (index, pid, sessionId, state).
+    if (!_poolRegistry) return null;
+    try {
+      const client = _requirePoolRegistry().requireConnectedClient(poolName);
+      const resp = await client.debugSlots();
+      const rawSlots = resp.slots || [];
+      const slots = rawSlots.map((s) => ({
+        index: s.index,
+        sessionId: s.sessionId || null,
+        status: s.state || "unknown",
+        pid: s.pid || null,
+        termId: s.sessionId || null,
+      }));
+      const { DEFAULT_POOL_NAME } = require("./pool-registry");
+      return {
+        poolSize: slots.length,
+        slots,
+        poolName: poolName || DEFAULT_POOL_NAME,
+      };
+    } catch {
+      return null;
+    }
+  },
+  "pool-health": async ({ poolName } = {}) => getPoolHealth(poolName),
+  "pool-destroy": async ({ poolName } = {}) => poolDestroy(poolName),
+  "pool-clean": async ({ poolName } = {}) => poolClean(poolName),
+  "pool-get-flags": async ({ poolName } = {}) => getPoolFlags(poolName),
+  "pool-set-flags": async ({ flags, poolName }) => {
+    await setPoolFlags(flags, poolName);
     return flags;
   },
-  "pool-get-min-fresh": () => getMinFreshSlots(),
-  "pool-set-min-fresh": ({ minFreshSlots }) => {
-    setMinFreshSlots(minFreshSlots);
+  "pool-get-min-fresh": async ({ poolName } = {}) => getMinFreshSlots(poolName),
+  "pool-set-min-fresh": async ({ minFreshSlots, poolName }) => {
+    await setMinFreshSlots(minFreshSlots, poolName);
     return minFreshSlots;
   },
   "pool-resume": async ({ sessionId }) => poolResume(sessionId),
-  "archive-session": async ({ sessionId }) => archiveSession(sessionId),
-  "unarchive-session": ({ sessionId }) => unarchiveSession(sessionId),
+  "archive-session": async ({ sessionId }) => {
+    await archiveSession(sessionId);
+    if (_onSessionArchived) _onSessionArchived(sessionId);
+  },
+  "unarchive-session": async ({ sessionId }) => unarchiveSession(sessionId),
   "list-agents": async ({ cwd }) => {
     const agents = new Map(); // name -> { name, path, description, scope, args }
 
@@ -307,9 +285,7 @@ const sharedHandlers = {
       args,
       env: { OPEN_COCKPIT_CUSTOM: "1" },
     });
-    // Accept trust prompt in background (non-blocking)
-    acceptTrustPrompt(resp.termId);
-    return { termId: resp.termId, pid: resp.pid };
+    return { termId: resp.termId ?? resp.term_id, pid: resp.pid };
   },
 };
 
@@ -322,16 +298,19 @@ const ipcArgMap = {
   "pty-write": (termId, data) => ({ termId, data }),
   "pty-list": () => ({}),
   "pty-kill": (termId) => ({ termId }),
-  "pool-init": (size) => ({ size }),
-  "pool-resize": (size) => ({ size }),
-  "pool-health": () => ({}),
-  "pool-read": () => ({}),
-  "pool-destroy": () => ({}),
+  "pool-init": (size, poolName) => ({ size, poolName }),
+  "pool-resize": (size, poolName) => ({ size, poolName }),
+  "pool-read": (poolName) => ({ poolName }),
+  "pool-health": (poolName) => ({ poolName }),
+  "pool-destroy": (poolName) => ({ poolName }),
   "pool-clean": () => ({}),
-  "pool-get-flags": () => ({}),
-  "pool-set-flags": (flags) => ({ flags }),
-  "pool-get-min-fresh": () => ({}),
-  "pool-set-min-fresh": (minFreshSlots) => ({ minFreshSlots }),
+  "pool-get-flags": (poolName) => ({ poolName }),
+  "pool-set-flags": (flags, poolName) => ({ flags, poolName }),
+  "pool-get-min-fresh": (poolName) => ({ poolName }),
+  "pool-set-min-fresh": (minFreshSlots, poolName) => ({
+    minFreshSlots,
+    poolName,
+  }),
   "pool-resume": (sessionId) => ({ sessionId }),
   "archive-session": (sessionId) => ({ sessionId }),
   "unarchive-session": (sessionId) => ({ sessionId }),
@@ -350,8 +329,8 @@ const apiResponseMap = {
   "pty-kill": () => ({ type: "ok" }),
   "pool-init": (pool) => ({ type: "pool", pool }),
   "pool-resize": (pool) => ({ type: "pool", pool }),
-  "pool-health": (health) => ({ type: "health", health }),
   "pool-read": (pool) => ({ type: "pool", pool }),
+  "pool-health": (health) => ({ type: "health", health }),
   "pool-destroy": () => ({ type: "ok" }),
   "pool-clean": (cleaned) => ({ type: "cleaned", count: cleaned }),
   "pool-get-flags": (flags) => ({ type: "flags", flags }),
@@ -432,8 +411,6 @@ function buildApiHandlers() {
 
   handlers["ui-state"] = async () => {
     const win = _requireMainWindow();
-    // executeJavaScript is the standard Electron pattern for main→renderer data retrieval.
-    // The global is set up in renderer.js and returns a plain object (safe to serialize).
     const uiState = await win.webContents.executeJavaScript(
       `window.__getUiState ? window.__getUiState() : null`,
     );
@@ -448,223 +425,109 @@ function buildApiHandlers() {
     return { type: "ok" };
   };
 
+  // --- PTY read (via claude-term) ---
+
   handlers["pty-read"] = async (msg) => {
     validateTermId(msg.termId);
-    const resp = await daemonRequest({ type: "list" });
-    const p = resp.ptys.find((p) => p.termId === msg.termId);
-    return { type: "buffer", buffer: p ? p.buffer : null };
+    const resp = await daemonRequest({
+      type: "read-buffer",
+      term_id: msg.termId,
+    });
+    return { type: "buffer", buffer: resp.buffer || "" };
   };
+
+  // --- Pool interaction (via claude-pool) ---
 
   handlers["pool-start"] = async (msg) => {
     if (!msg.prompt) throw new Error("prompt required");
-    const result = await withFreshSlot(async (pool, slot) => {
-      await sendPromptToTerminal(slot.termId, msg.prompt);
-      slot.status = POOL_STATUS.BUSY;
-      writePool(pool);
-      return {
-        type: "started",
-        sessionId: slot.sessionId,
-        termId: slot.termId,
-        slotIndex: slot.index,
-      };
+    const client = _requirePoolRegistry().requireConnectedClient(msg.poolName);
+    const resp = await client.start({
+      prompt: msg.prompt,
+      parent: msg.parentSessionId,
     });
     recordSessionRelation(
-      result.sessionId,
+      resp.sessionId,
       msg.parentSessionId || null,
       msg.parentSessionId ? INITIATOR.MODEL : INITIATOR.USER,
     );
-    return result;
+    return { type: "started", sessionId: resp.sessionId };
   };
 
   handlers["pool-followup"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
     if (!msg.prompt) throw new Error("prompt required");
-
-    // Check if session is not live — auto-resume it first.
-    // poolResume no longer requires offload metadata (just the session ID),
-    // so any session known to the graph can be resumed.
-    // Read outside withPoolLock intentionally: poolResume is idempotent
-    // (throws if already live/restoring), so a stale read is safe.
-    const pool = readPool();
-    const liveSlot = pool?.slots?.find((s) => s.sessionId === msg.sessionId);
-    if (!liveSlot) {
-      await poolResume(msg.sessionId);
-      // Wait for the resumed session to become idle before sending prompt
-      await waitForSessionIdle(msg.sessionId, 60000);
-    }
-
-    return withPoolLock(async () => {
-      const { pool: p, slot } = findSlotBySessionId(msg.sessionId);
-      const status = await getEffectiveSlotStatus(slot);
-      if (status !== POOL_STATUS.IDLE && !msg.force)
-        throw new Error(
-          `Session is ${status}, expected idle (use force to override)`,
-        );
-      await sendPromptToTerminal(slot.termId, msg.prompt);
-      slot.status = POOL_STATUS.BUSY;
-      writePool(p);
-      return {
-        type: "started",
-        sessionId: slot.sessionId,
-        termId: slot.termId,
-        slotIndex: slot.index,
-      };
-    });
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
+    );
+    await client.followup(msg.sessionId, msg.prompt);
+    return { type: "started", sessionId: msg.sessionId };
   };
 
   handlers["pool-wait"] = async (msg) => {
-    const timeout = msg.timeout || 300000;
-    if (msg.sessionId) {
-      validateSessionId(msg.sessionId);
-      try {
-        const { slot } = findSlotBySessionId(msg.sessionId);
-        await waitForSessionIdle(msg.sessionId, timeout);
-        const buffer = await getTerminalBuffer(slot.termId);
-        return { type: "result", sessionId: msg.sessionId, buffer };
-      } catch (err) {
-        return { type: "error", error: err.message, id: msg.id };
-      }
-    }
-    // Wait by slot index (used by resume --block where session ID changes)
-    if (msg.slotIndex !== undefined) {
-      findSlotByIndex(msg.slotIndex);
-      try {
-        const result = await poll(
-          async () => {
-            const pool = readPool();
-            const slot = pool?.slots?.find((s) => s.index === msg.slotIndex);
-            if (!slot?.sessionId) return null;
-            const sessions = await getSessions();
-            const session = sessions.find(
-              (s) => s.sessionId === slot.sessionId,
-            );
-            if (session && session.status === STATUS.IDLE) return slot;
-            if (session && !session.alive)
-              throw new Error("Session process died");
-            return null;
-          },
-          {
-            interval: 1000,
-            initialDelay: 1000,
-            timeout,
-            label: "waiting for slot to become idle",
-          },
-        );
-        const buffer = await getTerminalBuffer(result.termId);
-        return { type: "result", sessionId: result.sessionId, buffer };
-      } catch (err) {
-        return { type: "error", error: err.message, id: msg.id };
-      }
-    }
-    // No sessionId or slotIndex: wait for any busy session to become idle
-    const pool = readPool();
-    if (!pool) throw new Error("Pool not initialized");
-    const busySlots = pool.slots.filter((s) => s.status === POOL_STATUS.BUSY);
-    if (busySlots.length === 0) throw new Error("No busy sessions to wait for");
-    const finished = await poll(
-      async () => {
-        const sessions = await getSessions();
-        for (const s of busySlots) {
-          const session = sessions.find(
-            (sess) => sess.sessionId === s.sessionId,
-          );
-          if (session && session.status === STATUS.IDLE) return s;
-        }
-        return null;
-      },
-      {
-        interval: 1000,
-        initialDelay: 1000,
-        timeout,
-        label: "waiting for session to become idle",
-      },
+    if (!msg.sessionId) throw new Error("sessionId required");
+    validateSessionId(msg.sessionId);
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
     );
-    const buffer = await getTerminalBuffer(finished.termId);
-    return { type: "result", sessionId: finished.sessionId, buffer };
-  };
-
-  handlers["pool-capture"] = async (msg) => {
-    const { slot } = resolveSlot(msg);
-    const buffer = await getTerminalBuffer(slot.termId);
+    const timeout = msg.timeout || 300000;
+    const resp = await client.wait(msg.sessionId, {
+      timeout,
+      source: "buffer",
+    });
     return {
-      type: "buffer",
-      sessionId: slot.sessionId,
-      slotIndex: slot.index,
-      buffer,
+      type: "result",
+      sessionId: msg.sessionId,
+      buffer: resp.content || "",
     };
   };
 
-  handlers["pool-result"] = async (msg) => {
-    const { slot } = resolveSlot(msg);
-    const status = await getEffectiveSlotStatus(slot);
-    if (status === POOL_STATUS.BUSY) {
-      throw new Error("Session is still running");
-    }
-    const buffer = await getTerminalBuffer(slot.termId);
+  handlers["pool-capture"] = async (msg) => {
+    if (!msg.sessionId) throw new Error("sessionId required");
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
+    );
+    const resp = await client.capture(msg.sessionId, { source: "buffer" });
     return {
-      type: "result",
-      sessionId: slot.sessionId,
-      slotIndex: slot.index,
-      buffer,
+      type: "buffer",
+      sessionId: msg.sessionId,
+      buffer: resp.content || "",
     };
   };
 
   handlers["pool-input"] = async (msg) => {
     if (msg.data === undefined) throw new Error("data required");
-    const { slot } = resolveSlot(msg);
-    daemonSendSafe({ type: "write", termId: slot.termId, data: msg.data });
+    if (!msg.sessionId) throw new Error("sessionId required");
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
+    );
+    await client.input(msg.sessionId, msg.data);
     return { type: "ok" };
   };
 
   handlers["pool-pin"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    const duration = msg.duration || 120;
-    return withPoolLock(async () => {
-      const { pool, slot } = findSlotBySessionId(msg.sessionId);
-      slot.pinnedUntil = new Date(Date.now() + duration * 1000).toISOString();
-      writePool(pool);
-      return { type: "ok", pinnedUntil: slot.pinnedUntil };
-    });
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
+    );
+    await client.set(msg.sessionId, { pinned: msg.duration || 120 });
+    return { type: "ok" };
   };
 
   handlers["pool-unpin"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    return withPoolLock(async () => {
-      const { pool, slot } = findSlotBySessionId(msg.sessionId);
-      delete slot.pinnedUntil;
-      writePool(pool);
-      return { type: "ok" };
-    });
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
+    );
+    await client.set(msg.sessionId, { pinned: false });
+    return { type: "ok" };
   };
 
   handlers["pool-stop-session"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
-    const { slot } = findSlotBySessionId(msg.sessionId);
-    daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
-    await new Promise((r) => setTimeout(r, 200));
-    daemonSendSafe({ type: "write", termId: slot.termId, data: "\x1b" });
-    const stopPid = slot.pid;
-    const stopSessionId = msg.sessionId;
-    if (stopPid) {
-      setTimeout(async () => {
-        const sigFile = path.join(IDLE_SIGNALS_DIR, String(stopPid));
-        if (fs.existsSync(sigFile)) return;
-        const transcript = (await findJsonlPath(stopSessionId)) || "";
-        const cwd = (await getCwdFromJsonl(stopSessionId)) || "";
-        const signal = JSON.stringify({
-          cwd,
-          session_id: stopSessionId,
-          transcript,
-          ts: Math.floor(Date.now() / 1000),
-          trigger: "api-stop",
-        });
-        try {
-          secureWriteFileSync(sigFile, signal + "\n");
-        } catch {
-          /* ignore -- session may be dead */
-        }
-      }, 6000);
-    }
+    const client = await _requirePoolRegistry().clientForSessionOrDefault(
+      msg.sessionId,
+    );
+    await client.stop(msg.sessionId);
     return { type: "ok", sessionId: msg.sessionId };
   };
 
@@ -673,50 +536,87 @@ function buildApiHandlers() {
     graph: readSessionGraph(),
   });
 
-  handlers["slot-read"] = async (msg) => {
-    const { slot } = findSlotByIndex(msg.slotIndex);
-    const buffer = await getTerminalBuffer(slot.termId);
-    return {
-      type: "buffer",
-      slotIndex: slot.index,
-      sessionId: slot.sessionId,
-      buffer,
-    };
+  // --- Pool registry ---
+
+  handlers["list-pools"] = async () => {
+    const reg = _requirePoolRegistry();
+    return { type: "pools", pools: await reg.listPoolsWithHealth() };
   };
 
-  handlers["slot-write"] = async (msg) => {
-    if (msg.data === undefined) throw new Error("data required");
-    const { slot } = findSlotByIndex(msg.slotIndex);
-    daemonSendSafe({ type: "write", termId: slot.termId, data: msg.data });
+  handlers["add-pool"] = async (msg) => {
+    if (!msg.name) throw new Error("pool name required");
+    const reg = _requirePoolRegistry();
+    await reg.addPool(msg.name, {
+      size: msg.size,
+      flags: msg.flags,
+    });
+    return { type: "ok", poolName: msg.name };
+  };
+
+  handlers["remove-pool"] = async (msg) => {
+    if (!msg.name) throw new Error("pool name required");
+    const reg = _requirePoolRegistry();
+    await reg.removePool(msg.name);
     return { type: "ok" };
   };
 
+  handlers["connect-pool"] = async (msg) => {
+    if (!msg.name) throw new Error("pool name required");
+    const reg = _requirePoolRegistry();
+    await reg.connectPool(msg.name);
+    return { type: "ok" };
+  };
+
+  // --- Slot access (via claude-pool debug-slots) ---
+
   handlers["slot-status"] = async (msg) => {
-    const { slot } = findSlotByIndex(msg.slotIndex);
-    const healthStatus = slot.sessionId
-      ? await getEffectiveSlotStatus(slot)
-      : slot.status;
+    if (msg.slotIndex === undefined) throw new Error("slotIndex required");
+    const client = _requirePoolRegistry().requireConnectedClient(msg.poolName);
+    const resp = await client.debugSlots();
+    const slot = (resp.slots || []).find((s) => s.index === msg.slotIndex);
+    if (!slot) throw new Error(`No slot at index ${msg.slotIndex}`);
     return {
       type: "slot",
       slot: {
         index: slot.index,
-        termId: slot.termId,
         pid: slot.pid,
-        status: slot.status,
-        sessionId: slot.sessionId,
-        healthStatus,
-        createdAt: slot.createdAt,
+        status: slot.state,
+        sessionId: slot.sessionId || null,
+        healthStatus: slot.state,
       },
     };
   };
 
+  handlers["slot-read"] = async (msg) => {
+    if (msg.slotIndex === undefined) throw new Error("slotIndex required");
+    const client = _requirePoolRegistry().requireConnectedClient(msg.poolName);
+    const resp = await client.debugCapture(msg.slotIndex);
+    return {
+      type: "buffer",
+      slotIndex: msg.slotIndex,
+      buffer: resp.content || "",
+    };
+  };
+
+  handlers["slot-write"] = async (msg) => {
+    if (msg.slotIndex === undefined) throw new Error("slotIndex required");
+    if (msg.data === undefined) throw new Error("data required");
+    const client = _requirePoolRegistry().requireConnectedClient(msg.poolName);
+    // Find the session in the slot to send input
+    const slotsResp = await client.debugSlots();
+    const slot = (slotsResp.slots || []).find((s) => s.index === msg.slotIndex);
+    if (!slot?.sessionId)
+      throw new Error(`Slot ${msg.slotIndex} has no session`);
+    await client.input(slot.sessionId, msg.data);
+    return { type: "ok" };
+  };
+
+  // --- Session terminals (via claude-term) ---
+
   handlers["session-terminals"] = async (msg) => {
     if (!msg.sessionId) throw new Error("sessionId required");
     const terminals = await getSessionTerminals(msg.sessionId);
-    return {
-      type: "terminals",
-      terminals: terminals.map(({ buffer, ...rest }) => rest),
-    };
+    return { type: "terminals", terminals };
   };
 
   handlers["session-term-read"] = async (msg) => {
@@ -725,7 +625,11 @@ function buildApiHandlers() {
     const terminals = await getSessionTerminals(msg.sessionId);
     const tab = terminals[msg.tabIndex];
     if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
-    return { type: "buffer", termId: tab.termId, buffer: tab.buffer };
+    const resp = await daemonRequest({
+      type: "read-buffer",
+      term_id: tab.termId,
+    });
+    return { type: "buffer", termId: tab.termId, buffer: resp.buffer || "" };
   };
 
   handlers["session-term-write"] = async (msg) => {
@@ -735,7 +639,7 @@ function buildApiHandlers() {
     const terminals = await getSessionTerminals(msg.sessionId);
     const tab = terminals[msg.tabIndex];
     if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
-    daemonSendSafe({ type: "write", termId: tab.termId, data: msg.data });
+    daemonSendSafe({ type: "write", term_id: tab.termId, data: msg.data });
     return { type: "ok" };
   };
 
@@ -750,21 +654,18 @@ function buildApiHandlers() {
     const resp = await daemonRequest({
       type: "spawn",
       cwd: cwd || os.homedir(),
-      sessionId: msg.sessionId,
+      owner: msg.sessionId,
     });
+    const termId = resp.termId ?? resp.term_id;
     const terminals = await getSessionTerminals(msg.sessionId);
-    const newTab = terminals.find((t) => t.termId === resp.termId);
+    const newTab = terminals.find((t) => t.termId === termId);
     const mainWindow = _getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(
-        "api-term-opened",
-        msg.sessionId,
-        resp.termId,
-      );
+      mainWindow.webContents.send("api-term-opened", msg.sessionId, termId);
     }
     return {
       type: "spawned",
-      termId: resp.termId,
+      termId,
       tabIndex: newTab ? newTab.index : terminals.length - 1,
     };
   };
@@ -777,18 +678,26 @@ function buildApiHandlers() {
     const terminals = await getSessionTerminals(msg.sessionId);
     const tab = terminals[msg.tabIndex];
     if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
-    if (tab.isTui) throw new Error("Cannot run commands in the Claude TUI tab");
-    const beforeBuffer = tab.buffer;
+    // Read current buffer before sending command
+    const beforeResp = await daemonRequest({
+      type: "read-buffer",
+      term_id: tab.termId,
+    });
+    const beforeBuffer = beforeResp.buffer || "";
     daemonSendSafe({
       type: "write",
-      termId: tab.termId,
+      term_id: tab.termId,
       data: msg.command + "\r",
     });
     const promptRe = /[\$\u276F%#>] *$/;
     const deadline = Date.now() + timeoutMs;
     await new Promise((r) => setTimeout(r, 300));
     while (Date.now() < deadline) {
-      const buf = await readTerminalBuffer(tab.termId);
+      const bufResp = await daemonRequest({
+        type: "read-buffer",
+        term_id: tab.termId,
+      });
+      const buf = bufResp.buffer || "";
       if (buf.length > beforeBuffer.length) {
         const newContent = buf.slice(beforeBuffer.length);
         const clean = stripAnsi(newContent);
@@ -807,8 +716,11 @@ function buildApiHandlers() {
       }
       await new Promise((r) => setTimeout(r, 200));
     }
-    const finalBuf = await readTerminalBuffer(tab.termId);
-    const delta = finalBuf.slice(beforeBuffer.length);
+    const finalResp = await daemonRequest({
+      type: "read-buffer",
+      term_id: tab.termId,
+    });
+    const delta = (finalResp.buffer || "").slice(beforeBuffer.length);
     throw new Error(
       `Command timed out after ${timeoutMs}ms. Partial output: ${stripAnsi(delta).trim()}`,
     );
@@ -820,10 +732,7 @@ function buildApiHandlers() {
     const terminals = await getSessionTerminals(msg.sessionId);
     const tab = terminals[msg.tabIndex];
     if (!tab) throw new Error(`No terminal at tab index ${msg.tabIndex}`);
-    if (tab.isTui) {
-      throw new Error("Cannot close the Claude TUI tab");
-    }
-    await daemonRequest({ type: "kill", termId: tab.termId });
+    await daemonRequest({ type: "kill", term_id: tab.termId });
     const mainWindow = _getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("api-term-closed", msg.sessionId, tab.termId);

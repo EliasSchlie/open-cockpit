@@ -74,7 +74,6 @@ const {
   SETUP_SCRIPTS_DIR,
   LAYOUTS_DIR,
   API_SOCKET,
-  DAEMON_PID_FILE,
   DEBUG_LOG_FILE,
   DEBUG_LOG_MAX_SIZE,
   isPidAlive,
@@ -95,6 +94,17 @@ const {
   stopPluginVersionWatch,
 } = require("./first-run");
 const { PLUGIN_VERSION } = require("./session-statuses");
+const poolRegistry = require("./pool-registry");
+
+// --- Pool attach socket tracking ---
+// Maps pool session IDs (UUIDs) to their attach net.Sockets
+const poolAttachSockets = new Map();
+
+// --- UUID detection helper ---
+// claude-term IDs are short like "t1", pool sessions are UUIDs
+function isPoolSessionId(id) {
+  return typeof id === "string" && /^[a-f0-9]{8}-/.test(id);
+}
 
 // --- Debug logging ---
 // Append timestamped lines to ~/.open-cockpit/debug.log.
@@ -209,6 +219,22 @@ const send = (channel, ...args) => {
     mainWindow.webContents.send(channel, ...args);
   }
 };
+
+// --- Pool session attach via claude-pool ---
+async function attachPoolSession(sessionId) {
+  const result = await poolRegistry.findPoolForSession(sessionId);
+  if (!result) throw new Error(`session ${sessionId} not found in any pool`);
+  const { socket, cols, rows } = await result.client.attachSession(sessionId);
+  // Forward output to renderer
+  socket.on("data", (chunk) => {
+    send("pty-data", sessionId, chunk.toString());
+  });
+  // Store socket for writing
+  poolAttachSockets.set(sessionId, socket);
+  socket.on("close", () => poolAttachSockets.delete(sessionId));
+  // Send initial replay as first data event (the socket sends buffer on connect)
+  return { type: "attached", termId: sessionId };
+}
 
 // Build menu with keyboard shortcuts (dynamic from config)
 function buildMenu() {
@@ -427,15 +453,6 @@ function buildMenu() {
           accelerator: accel("relaunch-app"),
           click: () => buildAndRelaunch(),
         },
-        {
-          label: "Restart Daemon",
-          accelerator: accel("restart-daemon"),
-          click: async () => {
-            await daemonClient.stopDaemon();
-            await daemonClient.ensureDaemon();
-            debugLog("main", "daemon restarted via menu");
-          },
-        },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
@@ -473,9 +490,25 @@ app.whenReady().then(async () => {
   startPluginVersionWatch();
 
   // First-run checks: claude binary, plugin, ~/.open-cockpit/ directory
+  debugLog("main", "running first-run checks...");
   await checkFirstRun();
+  debugLog("main", "first-run checks complete");
 
   secureMkdirSync(SETUP_SCRIPTS_DIR, { recursive: true });
+
+  // Initialize pool registry (connects to all known pools)
+  debugLog("main", "initializing pool registry...");
+  await poolRegistry.init({
+    debugLog,
+    onEvent: (poolName, msg) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      // Any pool event (session created, status change, etc.) → refresh sidebar
+      if (msg.event) {
+        sessionDiscovery.invalidateSessionsCache();
+        send("sessions-changed");
+      }
+    },
+  });
 
   // Initialize modules
   daemonClient.init({
@@ -494,30 +527,50 @@ app.whenReady().then(async () => {
   sessionDiscovery.init({
     debugLog,
     onSessionsChanged: () => send("sessions-changed"),
+    poolRegistry,
   });
 
   poolManager.init({
     debugLog,
     onIntentionChanged: (content) => send("intention-changed", content),
-    onPoolSlotsRecovered: (recovered) =>
-      send("pool-slots-recovered", recovered),
+    poolRegistry,
   });
 
-  apiHandlersModule.init({ getMainWindow: () => mainWindow });
+  apiHandlersModule.init({
+    getMainWindow: () => mainWindow,
+    poolRegistry,
+    onSessionArchived: (sessionId) => {
+      // Clean up attach socket for archived session
+      const sock = poolAttachSockets.get(sessionId);
+      if (sock) {
+        sock.destroy();
+        poolAttachSockets.delete(sessionId);
+      }
+      poolRegistry.invalidateSessionCache(sessionId);
+    },
+  });
 
-  // Start daemon connection early
+  // Start claude-term connection (don't crash if it fails — it auto-starts)
+  debugLog("main", "connecting to claude-term...");
   try {
     await daemonClient.ensureDaemon();
+    debugLog("main", "claude-term connected");
   } catch (err) {
-    console.error("[main] Failed to start daemon:", err.message);
+    debugLog(
+      "main",
+      `claude-term connection failed (non-fatal): ${err.message}`,
+    );
   }
 
-  // Clean up stale idle signal files before reconciling pool
-  try {
-    poolManager.cleanupStaleIdleSignals();
-  } catch (err) {
-    console.error("[main] Idle signal cleanup failed:", err.message);
-  }
+  debugLog(
+    "main",
+    `pool registry ready: ${
+      poolRegistry
+        .listPools()
+        .map((p) => `${p.name}(${p.connected ? "connected" : "disconnected"})`)
+        .join(", ") || "no pools"
+    }`,
+  );
 
   // Clean up stale layout files (archived >7 days or session gone entirely)
   const LAYOUT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -563,30 +616,6 @@ app.whenReady().then(async () => {
   } catch {
     /* non-fatal */
   }
-
-  // Reconcile pool state with surviving daemon terminals (startup + periodic)
-  try {
-    await poolManager.reconcilePool();
-  } catch (err) {
-    console.error("[main] Pool reconciliation failed:", err.message);
-  }
-  setInterval(async () => {
-    try {
-      await poolManager.reconcilePool();
-    } catch {
-      /* logged inside reconcilePool */
-    }
-    try {
-      await poolManager.preWarmPool();
-    } catch {
-      /* logged inside preWarmPool */
-    }
-    try {
-      await poolManager.reapOrphanedTerminals();
-    } catch {
-      /* logged inside reapOrphanedTerminals */
-    }
-  }, 30000);
 
   // Watch session-pids and idle-signals dirs for changes -> push updates to renderer.
   // Debounced: fs.watch fires multiple events per operation.
@@ -651,14 +680,17 @@ app.whenReady().then(async () => {
   });
 
   // Terminal dimensions: renderer reports actual cols/rows so pool spawns
-  // can use them instead of the 80×24 daemon default.
+  // can use them instead of the 80×24 default.
   ipcMain.on("report-terminal-dims", (_e, cols, rows) => {
     poolManager.setTerminalDims(cols, rows);
   });
 
   // --- Register shared IPC handlers ---
+  // Skip handlers that main.js overrides with pool-routing logic
+  const overriddenHandlers = new Set(["pty-write", "pty-resize"]);
   const { sharedHandlers, ipcArgMap } = apiHandlersModule;
   for (const [name, argMapper] of Object.entries(ipcArgMap)) {
+    if (overriddenHandlers.has(name)) continue;
     ipcMain.handle(name, (_e, ...args) =>
       sharedHandlers[name](argMapper(...args)),
     );
@@ -677,10 +709,26 @@ app.whenReady().then(async () => {
     return poolManager.watchIntention(sessionId);
   });
   ipcMain.handle("pty-resize", async (_e, termId, cols, rows) => {
+    if (poolAttachSockets.has(termId)) {
+      // Pool session — resize via claude-pool API
+      try {
+        const found = await poolRegistry.findPoolForSession(termId);
+        if (found) await found.client.ptyResize(termId, cols, rows);
+      } catch (err) {
+        debugLog("main", `pool resize failed for ${termId}: ${err.message}`);
+      }
+      return;
+    }
+    // Shell tab — resize via claude-term
     await daemonClient.ensureDaemon();
     daemonClient.daemonSendSafe({ type: "resize", termId, cols, rows });
   });
   ipcMain.handle("pty-attach", async (_e, termId) => {
+    // Check if this is a pool session (UUID format) or shell tab (claude-term)
+    if (isPoolSessionId(termId)) {
+      return attachPoolSession(termId);
+    }
+    // Shell tab — delegate to claude-term via daemon-client adapter
     const resp = await daemonClient.daemonRequest({
       type: "attach",
       termId,
@@ -688,8 +736,24 @@ app.whenReady().then(async () => {
     return resp;
   });
   ipcMain.handle("pty-detach", async (_e, termId) => {
+    if (poolAttachSockets.has(termId)) {
+      // Pool session — close the attach socket
+      const socket = poolAttachSockets.get(termId);
+      poolAttachSockets.delete(termId);
+      socket.destroy();
+      return;
+    }
+    // Shell tab — detach via claude-term
     await daemonClient.ensureDaemon();
     daemonClient.daemonSendSafe({ type: "detach", termId });
+  });
+  ipcMain.handle("pty-write", async (_e, termId, data) => {
+    if (poolAttachSockets.has(termId)) {
+      poolAttachSockets.get(termId).write(data);
+      return;
+    }
+    // Shell tab — write via claude-term
+    daemonClient.daemonSendSafe({ type: "write", termId, data });
   });
   ipcMain.handle("pty-set-session", async (_e, termId, sessionId) => {
     await daemonClient.daemonRequest({
@@ -698,6 +762,28 @@ app.whenReady().then(async () => {
       sessionId,
     });
   });
+  // Pool registry IPC handlers
+  ipcMain.handle("list-pools", async () => ({
+    type: "pools",
+    pools: await poolRegistry.listPoolsWithHealth(),
+  }));
+  ipcMain.handle("add-pool", async (_e, name, size, flags) => {
+    await poolRegistry.addPool(name, { size, flags });
+    sessionDiscovery.invalidateSessionsCache();
+    send("sessions-changed");
+    return { poolName: name };
+  });
+  ipcMain.handle("remove-pool", async (_e, name) => {
+    await poolRegistry.removePool(name);
+    sessionDiscovery.invalidateSessionsCache();
+    send("sessions-changed");
+  });
+  ipcMain.handle("connect-pool", async (_e, name) => {
+    await poolRegistry.connectPool(name);
+    sessionDiscovery.invalidateSessionsCache();
+    send("sessions-changed");
+  });
+
   ipcMain.handle("focus-external-terminal", (_e, pid) =>
     poolManager.focusExternalTerminal(pid),
   );
@@ -705,21 +791,11 @@ app.whenReady().then(async () => {
     poolManager.closeExternalTerminal(pid),
   );
   ipcMain.handle("open-in-cursor", (_e, cwd) => poolManager.openInCursor(cwd));
-  ipcMain.handle(
-    "offload-session",
-    async (_e, sessionId, termId, claudeSessionId, sessionInfo) =>
-      poolManager.offloadSession(
-        sessionId,
-        termId,
-        claudeSessionId,
-        sessionInfo,
-      ),
-  );
   ipcMain.handle("remove-offload-data", (_e, sessionId) =>
     poolManager.removeOffloadData(sessionId),
   );
-  ipcMain.handle("read-offload-snapshot", (_e, sessionId) =>
-    poolManager.readOffloadSnapshot(sessionId),
+  ipcMain.handle("read-session-snapshot", (_e, sessionId) =>
+    poolManager.readSessionSnapshot(sessionId),
   );
   ipcMain.handle("read-offload-meta", (_e, sessionId) =>
     poolManager.readOffloadMeta(sessionId),
@@ -900,7 +976,7 @@ app.whenReady().then(async () => {
 
   // --- Build output polling (dev instances only) ---
   // When a file watcher rebuilds dist/renderer.js, this detects the mtime
-  // change and relaunches the app. Sessions survive via the daemon.
+  // change and relaunches the app. Sessions survive via claude-pool/claude-term.
   if (INSTANCE_NAME) {
     const buildOutput = path.join(__dirname, "..", "dist", "renderer.js");
     let lastBuildMtime = 0;
@@ -925,53 +1001,8 @@ app.whenReady().then(async () => {
     }, 2000);
   }
 
-  // --- Daemon stale detection ---
-  // Compare daemon source file mtimes with daemon process start time.
-  // If daemon code is newer, notify renderer to show a restart banner.
-  async function checkDaemonStale() {
-    try {
-      if (!daemonClient.isDaemonRunning()) return;
-      const pidStr = fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim();
-      const { execFileSync } = require("child_process");
-      const lstart = execFileSync("ps", ["-o", "lstart=", "-p", pidStr], {
-        encoding: "utf-8",
-        timeout: 2000,
-      }).trim();
-      if (!lstart) return;
-      const daemonStartMs = new Date(lstart).getTime();
-      const daemonSources = [
-        "pty-daemon.js",
-        "platform.js",
-        "secure-fs.js",
-      ].map((f) => path.join(__dirname, f));
-      for (const src of daemonSources) {
-        try {
-          const mtime = fs.statSync(src).mtimeMs;
-          if (mtime > daemonStartMs) {
-            send("daemon-stale");
-            return;
-          }
-        } catch {
-          /* file may not exist */
-        }
-      }
-    } catch {
-      /* ps failed or daemon not running — skip */
-    }
-  }
-  // Check after daemon is connected and on each relaunch
-  setTimeout(checkDaemonStale, 3000);
-
   // --- Relaunch app handler (rebuild + restart main process) ---
   ipcMain.handle("relaunch-app", () => buildAndRelaunch());
-
-  // --- Daemon restart handler ---
-  ipcMain.handle("restart-daemon", async () => {
-    await daemonClient.stopDaemon();
-    await daemonClient.ensureDaemon();
-    debugLog("main", "daemon restarted");
-    return true;
-  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -989,10 +1020,11 @@ app.whenReady().then(async () => {
           "main",
           `parent PID ${parentPid} is dead — cleaning up dev instance`,
         );
-        await Promise.all([
-          poolManager.poolDestroy().catch(() => {}),
-          daemonClient.stopDaemon().catch(() => {}),
-        ]);
+        try {
+          await poolManager.poolDestroy();
+        } catch {
+          /* best-effort */
+        }
         instancePoolDestroyed = true;
         app.quit();
       }
@@ -1007,7 +1039,7 @@ let relaunchingForBuild = false;
 let quitting = false;
 
 // Shared build+relaunch: rebuilds from source, then restarts the app.
-// Throws on build failure. Sessions survive via the daemon.
+// Throws on build failure. Sessions survive via claude-pool/claude-term.
 function buildAndRelaunch() {
   debugLog("main", "buildAndRelaunch: rebuilding and relaunching");
   const { execSync } = require("child_process");
@@ -1022,19 +1054,16 @@ function buildAndRelaunch() {
 }
 app.on("before-quit", (e) => {
   quitting = true;
-  // Dev instances auto-destroy their pool on quit.
-  // The base instance intentionally leaves the daemon and pool alive —
-  // terminals persist across app restarts so users don't lose sessions.
+  // Dev instances auto-destroy their pool on quit (via claude-pool destroy).
+  // The base instance intentionally leaves claude-pool and claude-term alive —
+  // sessions persist across app restarts so users don't lose them.
   if (INSTANCE_NAME && !instancePoolDestroyed && !relaunchingForBuild) {
     e.preventDefault();
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("timeout")), 5000),
     );
-    Promise.race([
-      Promise.all([poolManager.poolDestroy(), daemonClient.stopDaemon()]),
-      timeout,
-    ])
-      .then(() => debugLog("main", "instance pool + daemon destroyed on quit"))
+    Promise.race([poolManager.poolDestroy(), timeout])
+      .then(() => debugLog("main", "instance pool destroyed on quit"))
       .catch((err) =>
         debugLog("main", "instance cleanup failed on quit:", err.message),
       )
@@ -1048,6 +1077,16 @@ app.on("before-quit", (e) => {
   stopPluginVersionWatch();
   closeDebugLog();
   daemonClient.destroySocket();
+  // Clean up pool attach sockets
+  for (const socket of poolAttachSockets.values()) {
+    try {
+      socket.destroy();
+    } catch {
+      /* best-effort */
+    }
+  }
+  poolAttachSockets.clear();
+  poolRegistry.destroyAll();
   for (const entry of pendingPolls) entry.cancel();
   pendingPolls.clear();
   // Clean up API socket — only if this instance created it

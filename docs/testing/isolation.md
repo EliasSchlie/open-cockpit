@@ -12,7 +12,7 @@ const OPEN_COCKPIT_DIR = process.env.OPEN_COCKPIT_TEST_DIR
   || path.join(os.homedir(), ".open-cockpit");
 ```
 
-All derived paths (`POOL_FILE`, `SESSION_PIDS_DIR`, `IDLE_SIGNALS_DIR`, etc.) automatically point to the test directory. Same for `pty-daemon.js` which has its own path definitions.
+All derived paths (`SESSION_PIDS_DIR`, `IDLE_SIGNALS_DIR`, etc.) automatically point to the test directory.
 
 ## Test Harness: `test/helpers/test-env.js`
 
@@ -25,7 +25,7 @@ Creates a temp directory with the required structure:
 ├── idle-signals/
 ├── intentions/
 ├── offloaded/
-└── (pool.json, etc. created by tests as needed)
+└── (other files created by tests as needed)
 ```
 
 Returns an object with:
@@ -45,11 +45,6 @@ For E2E tests that spawn real Claude Code:
 - This is necessary because the Open Cockpit plugin hooks hardcode `~/.open-cockpit/` in shell scripts
 - The Claude Code process itself is real — only the discovery metadata is managed by the test
 
-## Daemon Isolation
+## Backend Isolation
 
-Tests that need the PTY daemon start a separate instance:
-- Different socket path (`<test-dir>/pty-daemon.sock`)
-- Different PID file (`<test-dir>/pty-daemon.pid`)
-- Torn down in `afterAll`
-
-The production daemon (if running) is unaffected.
+Tests that need terminal or pool backends mock the claude-term/claude-pool socket clients. No local daemon processes are spawned by the test harness.
