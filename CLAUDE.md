@@ -16,6 +16,26 @@ Key modules — full file index in [docs/architecture.md](docs/architecture.md).
 
 Runtime paths: `~/.open-cockpit/` (see [docs/architecture.md](docs/architecture.md#key-runtime-paths)).
 
+## Starting the main instance from source
+
+```bash
+cd ~/projects/open-cockpit
+npm install          # first time or after dependency changes
+npm run build        # build renderer bundle
+nohup npx electron . > /dev/null 2>&1 & disown
+```
+
+Two things to get right:
+
+1. **Detach from the calling shell.** `nohup ... & disown` ensures the app (and its pool sessions, PTY daemon) survive if the launching terminal exits. Running `npm start` directly makes everything a child of that shell -- killing it kills all sessions.
+
+2. **Strip Claude session env vars when launching from a Claude session.** If you launch from inside a Claude Code session, the app inherits `CLAUDE_SESSION_ID` and registers all pool sessions as children of that session in `session-graph.json`. Prefix the command with `env -u CLAUDE_SESSION_ID -u CLAUDE_CONVERSATION_ID`:
+   ```bash
+   env -u CLAUDE_SESSION_ID -u CLAUDE_CONVERSATION_ID nohup npx electron . > /dev/null 2>&1 & disown
+   ```
+
+If sessions end up incorrectly parented, fix `session-graph.json` (set `parentSessionId: null`) and write the affected session IDs into `active-sessions.json` so `restoreFromActiveRegistry` resumes them on next app restart.
+
 ## Dev instances
 
 See [docs/dev-instances.md](docs/dev-instances.md) for full details.
