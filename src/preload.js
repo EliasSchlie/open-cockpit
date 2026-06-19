@@ -45,7 +45,6 @@ const channels = [
   "run-agent",
   "pool-slots-recovered",
   "update-status-changed",
-  "daemon-stale",
   "api-session-select",
 ];
 for (const ch of channels) ipcRenderer.removeAllListeners(ch);
@@ -74,19 +73,11 @@ contextBridge.exposeInMainWorld("api", {
   closeExternalTerminal: (pid) =>
     ipcRenderer.invoke("close-external-terminal", pid),
 
-  // Pool / offload
-  offloadSession: (sessionId, termId, claudeSessionId, sessionInfo) =>
-    ipcRenderer.invoke(
-      "offload-session",
-      sessionId,
-      termId,
-      claudeSessionId,
-      sessionInfo,
-    ),
+  // Session data
   removeOffloadData: (sessionId) =>
     ipcRenderer.invoke("remove-offload-data", sessionId),
-  readOffloadSnapshot: (sessionId) =>
-    ipcRenderer.invoke("read-offload-snapshot", sessionId),
+  readSessionSnapshot: (sessionId) =>
+    ipcRenderer.invoke("read-session-snapshot", sessionId),
   readOffloadMeta: (sessionId) =>
     ipcRenderer.invoke("read-offload-meta", sessionId),
   archiveSession: (sessionId) =>
@@ -97,15 +88,25 @@ contextBridge.exposeInMainWorld("api", {
   // Pool management
   poolInit: (size) => ipcRenderer.invoke("pool-init", size),
   poolResize: (newSize) => ipcRenderer.invoke("pool-resize", newSize),
-  poolHealth: () => ipcRenderer.invoke("pool-health"),
-  poolRead: () => ipcRenderer.invoke("pool-read"),
-  poolDestroy: () => ipcRenderer.invoke("pool-destroy"),
+  poolRead: (poolName) => ipcRenderer.invoke("pool-read", poolName),
+  poolHealth: (poolName) => ipcRenderer.invoke("pool-health", poolName),
+  poolDestroy: (poolName) => ipcRenderer.invoke("pool-destroy", poolName),
   poolClean: () => ipcRenderer.invoke("pool-clean"),
-  poolGetFlags: () => ipcRenderer.invoke("pool-get-flags"),
-  poolSetFlags: (flags) => ipcRenderer.invoke("pool-set-flags", flags),
-  poolGetMinFresh: () => ipcRenderer.invoke("pool-get-min-fresh"),
-  poolSetMinFresh: (n) => ipcRenderer.invoke("pool-set-min-fresh", n),
+  poolGetFlags: (poolName) => ipcRenderer.invoke("pool-get-flags", poolName),
+  poolSetFlags: (flags, poolName) =>
+    ipcRenderer.invoke("pool-set-flags", flags, poolName),
+  poolGetMinFresh: (poolName) =>
+    ipcRenderer.invoke("pool-get-min-fresh", poolName),
+  poolSetMinFresh: (n, poolName) =>
+    ipcRenderer.invoke("pool-set-min-fresh", n, poolName),
   poolResume: (sessionId) => ipcRenderer.invoke("pool-resume", sessionId),
+
+  // Pool registry
+  listPools: () => ipcRenderer.invoke("list-pools"),
+  addPool: (name, size, flags) =>
+    ipcRenderer.invoke("add-pool", name, size, flags),
+  removePool: (name) => ipcRenderer.invoke("remove-pool", name),
+  connectPool: (name) => ipcRenderer.invoke("connect-pool", name),
 
   // Custom sessions
   spawnCustomSession: (cwd, flags) =>
@@ -271,10 +272,6 @@ contextBridge.exposeInMainWorld("api", {
 
   onPoolSlotsRecovered: (callback) =>
     ipcRenderer.on("pool-slots-recovered", (_e, slots) => callback(slots)),
-
-  // Daemon stale notification
-  onDaemonStale: (callback) => ipcRenderer.on("daemon-stale", () => callback()),
-  restartDaemon: () => ipcRenderer.invoke("restart-daemon"),
 
   // Relaunch app (rebuild + restart main process)
   relaunchApp: () => ipcRenderer.invoke("relaunch-app"),

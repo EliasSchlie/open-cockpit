@@ -1340,6 +1340,96 @@ body.dock-resizing-v {
   border-color: var(--accent);
 }
 
+/* Pool list (multi-pool settings) */
+.pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.pool-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.pool-list-item.pool-connected {
+  border-left: 3px solid var(--idle);
+}
+
+.pool-list-item.pool-disconnected {
+  border-left: 3px solid var(--border);
+  opacity: 0.7;
+}
+
+.pool-list-name {
+  font-weight: 600;
+  font-family: "SF Mono", Menlo, monospace;
+  color: var(--text);
+}
+
+.pool-list-status {
+  color: var(--text-dim);
+  font-size: 12px;
+  flex: 1;
+}
+
+.pool-list-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.pool-list-empty {
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.pool-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pool-add-name {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.pool-add-name:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pool-add-size {
+  width: 56px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  text-align: center;
+}
+
+.pool-add-size:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .pool-flags-row {
   display: flex;
   flex-direction: column;

@@ -1391,10 +1391,10 @@ case "$CMD" in
   read-intention)  json="{\"type\":\"read-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\"}"; send_api "$json" ;;
   write-intention) json="{\"type\":\"write-intention\",\"id\":1,\"sessionId\":\"${1:?sessionId required}\",\"content\":$(printf '%s' "${2:?content required}" | jq -Rs .)}"; send_api "$json" ;;
   pty-list)     json="{\"type\":\"pty-list\",\"id\":1}"; send_api "$json" ;;
-  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":${1:?termId required},\"data\":$(printf '%b' "${2:?data required}" | jq -Rs .)}"; send_api "$json" ;;
-  pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
+  pty-write)    json="{\"type\":\"pty-write\",\"id\":1,\"termId\":\"${1:?termId required}\",\"data\":$(printf '%b' "${2:?data required}" | jq -Rs .)}"; send_api "$json" ;;
+  pty-read)     json="{\"type\":\"pty-read\",\"id\":1,\"termId\":\"${1:?termId required}\"}"; send_api "$json" ;;
   pty-spawn)    json="{\"type\":\"pty-spawn\",\"id\":1,\"cwd\":$(printf '%s' "${1:?cwd required}" | jq -Rs .),\"cmd\":$(printf '%s' "${2:?cmd required}" | jq -Rs .),\"args\":[$(printf '%s' "${3:-}" | jq -Rs .)]}"; send_api "$json" ;;
-  pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":${1:?termId required}}"; send_api "$json" ;;
+  pty-kill)     json="{\"type\":\"pty-kill\",\"id\":1,\"termId\":\"${1:?termId required}\"}"; send_api "$json" ;;
   ping)         json="{\"type\":\"ping\",\"id\":1}"; send_api "$json" ;;
   relaunch)     json="{\"type\":\"relaunch\",\"id\":1}"; send_api "$json" ;;
   show)         json="{\"type\":\"show\",\"id\":1}"; send_api "$json" ;;

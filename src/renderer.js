@@ -143,11 +143,8 @@ async function selectSession(session) {
     dom.sessionView.classList.remove("colored");
   }
 
-  // Offloaded/archived: show snapshot inline instead of a terminal
-  if (
-    session.status === STATUS.OFFLOADED ||
-    session.status === STATUS.ARCHIVED
-  ) {
+  // Archived: show transcript inline instead of a terminal
+  if (session.status === STATUS.ARCHIVED) {
     showInlineSnapshot(session, gen);
   } else if (!restoreSessionTerminals(session.sessionId)) {
     // No cached terminals — set up fresh dock + terminals
@@ -181,7 +178,7 @@ async function selectSession(session) {
         return;
       }
       const pty = allPtys.find(
-        (p) => p.sessionId === session.sessionId && !p.exited,
+        (p) => p.owner === session.sessionId && p.alive !== false,
       );
       daemonTermId = pty?.termId || null;
       debugLog(
@@ -299,7 +296,7 @@ async function acquireFreshSlot() {
     return null;
   }
 
-  // 2. Offload the longest-unused idle session (LRU)
+  // 2. Archive the longest-unused idle session (LRU) to free a slot
   const idleSessions = sessions
     .filter(
       (s) =>
@@ -315,35 +312,19 @@ async function acquireFreshSlot() {
   }
 
   const victim = idleSessions[0];
-  debugLog("acquire", `offloading LRU idle session=${victim.sessionId}`);
-
-  // Find the victim's terminal from pool data (need termId for offload)
-  const pool = await window.api.poolRead();
-  const victimSlot = pool?.slots.find((s) => s.sessionId === victim.sessionId);
-  if (!victimSlot) {
-    debugLog(
-      "acquire",
-      `victim slot not found in pool for session=${victim.sessionId}`,
-    );
-    return null;
-  }
+  debugLog("acquire", `archiving LRU idle session=${victim.sessionId}`);
 
   try {
-    await window.api.offloadSession(
-      victim.sessionId,
-      victimSlot.termId,
-      victim.sessionId, // Claude session UUID = our session ID (same value from hook)
-      { cwd: victim.cwd, gitRoot: victim.gitRoot, pid: victim.pid },
-    );
+    await window.api.archiveSession(victim.sessionId);
   } catch (err) {
-    debugLog("pool", `offload failed session=${victim.sessionId}`, err.message);
+    debugLog("pool", `archive failed session=${victim.sessionId}`, err.message);
     return null;
   }
 
   // Poll until the slot becomes fresh (idle signal changes after /clear)
   debugLog(
     "pool",
-    `polling for fresh slot after offload of ${victim.sessionId}`,
+    `polling for fresh slot after archive of ${victim.sessionId}`,
   );
   const fresh = await pollForFreshSlot(30000);
   if (fresh) {
@@ -423,8 +404,8 @@ async function resumeOffloadedSession(session) {
       const allPtys = await window.api.ptyList();
       const extraPtys = allPtys.filter(
         (p) =>
-          p.sessionId === newSession.sessionId &&
-          !p.exited &&
+          p.owner === newSession.sessionId &&
+          p.alive !== false &&
           p.termId !== result.termId,
       );
       for (const p of extraPtys) {
@@ -724,7 +705,7 @@ async function archiveCurrentSession() {
     // Custom session: kill the daemon PTY (fully kill, not offload)
     const allPtys = await window.api.ptyList();
     const pty = allPtys.find(
-      (p) => p.sessionId === session.sessionId && !p.exited,
+      (p) => p.owner === session.sessionId && p.alive !== false,
     );
     if (pty) window.api.ptyKill(pty.termId).catch(() => {});
     destroySessionTerminals(session.sessionId);
@@ -1229,35 +1210,6 @@ window.api.onPoolSlotsRecovered((slots) => {
     // Non-critical — skip silently
   }
 })();
-
-// Daemon stale notification — persistent banner with restart button
-window.api.onDaemonStale(() => {
-  if (document.getElementById("daemon-stale-banner")) return;
-  const banner = document.createElement("div");
-  banner.id = "daemon-stale-banner";
-  banner.className = "daemon-stale-banner";
-  const span = document.createElement("span");
-  span.textContent = "Daemon code updated. Restart to apply?";
-  const restartBtn = document.createElement("button");
-  restartBtn.textContent = "Restart daemon";
-  const dismissBtn = document.createElement("button");
-  dismissBtn.textContent = "Dismiss";
-  banner.append(span, restartBtn, dismissBtn);
-  document.body.appendChild(banner);
-  restartBtn.addEventListener("click", async () => {
-    banner.textContent = "Restarting daemon...";
-    try {
-      await window.api.restartDaemon();
-      banner.remove();
-      showToast("Daemon restarted.", "info");
-    } catch (err) {
-      banner.textContent = `Restart failed: ${err.message}`;
-    }
-  });
-  dismissBtn.addEventListener("click", () => {
-    banner.remove();
-  });
-});
 
 // Handle external file changes
 window.api.onIntentionChanged((content) => {

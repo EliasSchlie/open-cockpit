@@ -132,7 +132,7 @@ describe("session-discovery integration", () => {
     fs.unlinkSync(env.resolve(`session-pids/${ALIVE_PID}`));
   });
 
-  it("returns offloaded session from meta.json", async () => {
+  it("returns archived session from meta.json", async () => {
     const sessionId = "ffff-6666-offloaded";
     const meta = {
       sessionId,
@@ -143,14 +143,12 @@ describe("session-discovery integration", () => {
       lastInteractionTs: Math.floor(Date.now() / 1000),
     };
     env.writeJson(`offloaded/${sessionId}/meta.json`, meta);
-    // Need a snapshot for it to not be auto-archived/deleted
-    env.writeFile(`offloaded/${sessionId}/snapshot.log`, "some snapshot data");
 
     const sessions = await discovery.getSessions();
     const found = sessions.find((s) => s.sessionId === sessionId);
 
     expect(found).toBeDefined();
-    expect(found.status).toBe(STATUS.OFFLOADED);
+    expect(found.status).toBe(STATUS.ARCHIVED);
     expect(found.alive).toBe(false);
     expect(found.intentionHeading).toBe("Test Offloaded");
 
@@ -171,7 +169,6 @@ describe("session-discovery integration", () => {
       archivedAt: new Date().toISOString(),
     };
     env.writeJson(`offloaded/${sessionId}/meta.json`, meta);
-    env.writeFile(`offloaded/${sessionId}/snapshot.log`, "snapshot");
 
     const sessions = await discovery.getSessions();
     const found = sessions.find((s) => s.sessionId === sessionId);

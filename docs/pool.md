@@ -1,15 +1,20 @@
 # Pool Management
 
-The app manages a pool of pre-started Claude sessions. Pool state lives in `~/.open-cockpit/pool.json`.
+OC delegates pool management to the **claude-pool** daemon (`~/.claude-pool/<name>/api.sock`). Pool state is owned by claude-pool — OC has no local `pool.json`.
 
-## Operations
+## Delegation Model
 
-- **Init**: via UI or API (`pool-init` with size). Spawns Claude sessions via the PTY daemon using `resolveClaudePath()` (finds `claude` binary via `which` + fallback paths). Trust prompt is accepted via buffer polling (not hardcoded delay).
-- **Dead/error slots**: `reconcilePool()` auto-restarts dead and error slots. Runs on startup and every 30s. Orphaned processes are killed via `killSlotProcess()` (daemon + PID fallback) before respawn.
-- **Offloading**: Idle sessions get offloaded (snapshot + `/clear`). External `/clear` is also detected and saved as offloaded.
-- **Archiving**: All dead sessions are auto-archived (`archived: true` in meta.json). Any session can be manually archived via right-click. Pool sessions auto-offload before archiving.
-- **Destroy**: `pool-destroy` kills all slots and removes `pool.json`. Uses `killSlotProcess()` (daemon + PID fallback) to prevent orphans.
-- **Write locking**: All pool.json read-modify-write cycles use `withPoolLock()` to prevent concurrent write races.
+OC's `pool-manager.js` calls claude-pool via `claude-pool-client.js` for all pool operations:
+
+- **init / resize / destroy** — pool lifecycle
+- **start / followup** — send prompts to pool sessions
+- **wait / capture** — observe session state
+- **archive / health** — maintenance
+
+OC still manages locally:
+- **Offload metadata** (`offloaded/<sessionId>/`) — snapshots, meta.json, archived flag
+- **Intentions** (`intentions/<session_id>.md`) — intention files
+- **Session graph** (`session-graph.json`) — parent-child relationships
 - **Settings UI**: Auto-refreshes every 3s. Clicking a slot row opens an interactive terminal popup attached to the live PTY.
 
 ## Plugin update → pool reinit

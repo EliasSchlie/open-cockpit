@@ -324,7 +324,7 @@ export async function attachPoolTerminal(poolTermId) {
   } else {
     debugLog(
       "attach",
-      `termId=${poolTermId} found: pid=${ptyInfo.pid} exited=${ptyInfo.exited} cols=${ptyInfo.cols} rows=${ptyInfo.rows} buffer=${ptyInfo.buffer ? ptyInfo.buffer.length + " chars" : "empty"} clients=${ptyInfo.clientCount}`,
+      `termId=${poolTermId} found: pid=${ptyInfo.pid} alive=${ptyInfo.alive} cols=${ptyInfo.cols} rows=${ptyInfo.rows}`,
     );
   }
 
@@ -340,11 +340,8 @@ export async function attachPoolTerminal(poolTermId) {
   term.loadAddon(fitAddon);
   term.open(container);
 
-  // Write the buffer directly at matching dimensions (no reflow).
-  // Then skip the daemon's replay event to avoid writing it twice.
-  if (ptyInfo?.buffer) {
-    term.write(ptyInfo.buffer);
-  }
+  // Buffer replay happens via the daemon's pty-replay event (claude-term
+  // pushes the buffer on attach, not in the list response).
 
   const entry = {
     termId: poolTermId,
@@ -608,11 +605,6 @@ export async function reconnectTerminal(ptyInfo) {
     _resizeHandler: null,
   };
 
-  if (ptyInfo.buffer) {
-    term.write(ptyInfo.buffer);
-    entry.skipReplay = true;
-  }
-
   pendingTerminals.set(ptyInfo.termId, entry);
 
   try {
@@ -626,7 +618,7 @@ export async function reconnectTerminal(ptyInfo) {
 
   pendingTerminals.delete(ptyInfo.termId);
 
-  if (ptyInfo.exited) term.write("\r\n[Process exited]\r\n");
+  if (ptyInfo.alive === false) term.write("\r\n[Process exited]\r\n");
 
   wireTerminalInput(term, ptyInfo.termId);
   setupTerminalResize(entry);
@@ -653,7 +645,7 @@ export async function reconnectAllPtys() {
   const bySession = new Map();
   for (const p of ptys) {
     p.isPoolTui = poolTermIds.has(p.termId);
-    const sid = p.sessionId || "__none__";
+    const sid = p.owner || "__none__";
     if (!bySession.has(sid)) bySession.set(sid, []);
     bySession.get(sid).push(p);
   }

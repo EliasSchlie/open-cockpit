@@ -254,12 +254,6 @@ export function initCommandPalette(actions) {
       shortcutAction: "relaunch-app",
       action: () => window.api.relaunchApp(),
     },
-    {
-      id: "restart-daemon",
-      label: "Restart Daemon (Kills All Terminals)",
-      shortcutAction: "restart-daemon",
-      action: () => window.api.restartDaemon(),
-    },
   ];
 
   // Also add Tab 1-9 commands
