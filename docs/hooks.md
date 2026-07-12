@@ -22,6 +22,15 @@ On every user prompt, diffs the intention file against its last known snapshot. 
 
 Resolves the session ID via the PID mapping written by `session-pid-map.sh`.
 
+### Disabling intention prompts
+
+Both intention hooks exit silently when `~/.open-cockpit/.intentions-off` exists:
+
+```bash
+touch ~/.open-cockpit/.intentions-off   # disable
+rm ~/.open-cockpit/.intentions-off      # re-enable
+```
+
 ## Idle signal hooks → `idle-signal.sh`
 
 Detects when sessions become idle (waiting for user input) or start processing. Writes signal files to `~/.open-cockpit/idle-signals/<PID>`.

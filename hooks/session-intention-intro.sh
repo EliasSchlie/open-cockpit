@@ -8,6 +8,9 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
+# Toggle: `touch ~/.open-cockpit/.intentions-off` disables intention prompts, `rm` re-enables
+[ -f "$OC_DIR/.intentions-off" ] && exit 0
+
 # Resolve session_id via PID mapping (written by session-pid-map.sh at SessionStart)
 resolve_session_id
 
