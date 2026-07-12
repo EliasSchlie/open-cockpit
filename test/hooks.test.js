@@ -124,6 +124,12 @@ describe("session-intention-intro.sh", () => {
     const { stdout } = runHook("session-intention-intro.sh");
     expect(stdout).toBe("");
   });
+
+  it("outputs nothing when .intentions-off toggle exists", () => {
+    fs.writeFileSync(path.join(tmpHome, ".open-cockpit/.intentions-off"), "");
+    const { stdout } = runHook("session-intention-intro.sh");
+    expect(stdout).toBe("");
+  });
 });
 
 describe("intention-change-notify.sh", () => {
@@ -167,6 +173,12 @@ describe("intention-change-notify.sh", () => {
 
   it("exits cleanly when no PID mapping exists", () => {
     fs.unlinkSync(path.join(tmpHome, ".open-cockpit/session-pids", hookPid()));
+    const { stdout } = runHook("intention-change-notify.sh");
+    expect(stdout).toBe("");
+  });
+
+  it("outputs nothing when .intentions-off toggle exists", () => {
+    fs.writeFileSync(path.join(tmpHome, ".open-cockpit/.intentions-off"), "");
     const { stdout } = runHook("intention-change-notify.sh");
     expect(stdout).toBe("");
   });
