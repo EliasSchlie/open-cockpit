@@ -8,6 +8,9 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
+# Toggle: `touch ~/.open-cockpit/.intentions-off` disables intention prompts, `rm` re-enables
+[ -f "$OC_DIR/.intentions-off" ] && exit 0
+
 # Skip if session-intention-intro.sh just fired (avoid redundant output on first prompt)
 JUST_FIRED="$MARKER_DIR/.just-fired"
 if [ -f "$JUST_FIRED" ]; then
