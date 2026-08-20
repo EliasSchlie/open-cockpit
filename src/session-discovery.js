@@ -792,6 +792,10 @@ async function getSessionsUncached() {
         }
         const jsonlPath = jsonlPathCache.get(sessionId);
         if (isActivated) {
+          _debugLog(
+            "main",
+            `Session ${sessionId.slice(0, 8)} no-idle-signal: isActivated=true → PROCESSING (pool=${!!poolSlot} intentContent=${hasIntentionContent} termInput=${hasTermInput})`,
+          );
           status = STATUS.PROCESSING;
         } else if (poolSlot) {
           // Pool sessions always have idle signals when idle (pool-init,

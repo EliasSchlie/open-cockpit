@@ -179,6 +179,9 @@ function syncStatuses(pool, sessions) {
     }
 
     if (newStatus !== slot.status) {
+      console.log(
+        `[pool] slot ${slot.index} (${(slot.sessionId || "?").slice(0, 8)}) ${slot.status} → ${newStatus} (session.status=${session.status} idleTs=${session.idleTs || 0} intentContent=${session.intentionHasContent || false} termInput=${session.terminalHasInput || false})`,
+      );
       slot.status = newStatus;
       changed = true;
     }
